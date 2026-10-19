@@ -103,6 +103,13 @@ für KI-Werkzeuge.
   auf ihre Existenz.
 - `TCMS_DEMO_TODAY` wirkt nur über die Demo-Uhr in `apps/web`; Audit-
   Zeitstempel und Sicherheitsfristen (Codes) sind immer echte Zeit.
+- Objekt-IDs aus Pfad oder Body gehören nur dann zur Anfrage, wenn das Objekt
+  zum Programm des Mandanten der Anfrage gehört (RLS trennt nur Tenants);
+  sonst „nicht gefunden". Prüfung und Änderung laufen unter Zeilensperre in
+  derselben Transaktion, Änderungen als bedingtes Update (TS-05).
+- Nachweise sind Verweise der kanzleikonsole (Dokument-ID als UUID, SHA-256):
+  eine Dokument-ID gehört zu genau einem Mandanten und einem Inhalt; Entfernen
+  löscht nur den Verweis, der vollständige Verweis bleibt im Audit.
 
 ## Dienst und Authentifizierung (verbindlich, ADR 0001 §3)
 

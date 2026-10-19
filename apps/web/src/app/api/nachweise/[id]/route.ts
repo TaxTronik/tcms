@@ -1,19 +1,17 @@
-import { kannLesen } from '@tcms/service';
-import { akteurFuer, handelnde, lies } from '@/server/demo';
-import {
-  darfPortalLesen,
-  ladeNachweisFuerDownload,
-  leseNachweisdatei,
-} from '@/server/durchfuehrung-daten';
-import { aktuellePerson } from '@/server/sitzung';
-import { ladeKontaktRollen } from '@tcms/service';
+import { DienstFehler } from '@tcms/contract';
+import { ladeNachweis } from '@tcms/service';
+import { imDemoDienst, leseNachweisdatei } from '@/server/durchfuehrung-daten';
+import { demoAkteur } from '@/server/sitzung';
 
 // =============================================================================
 // Download eines Nachweises (nur Demo; im Dienst laufen Downloads über die
-// kanzleikonsole, ADR 0001 §6). Zugriff: Kanzleipersonen mit Bezug zum
-// Mandanten (kannLesen) sowie Portal-Personen desselben Mandanten mit aktiver
-// Rolle und Leserecht auf die Kontrollaufgabe (Partei Mandant). Vor der
-// Auslieferung prüft die Ablage den SHA-256 gegen Ablagepfad und Nachweis (TS-09).
+// kanzleikonsole, ADR 0001 §6). Die Rechte prüft der Service (`ladeNachweis`,
+// TS-03): Kanzleipersonen mit Bezug zum Mandanten (`kannLesen`), Portal-
+// Personen nur für Aufgaben ihrer Seite, die ihnen offenstehen. Der Mandant
+// kommt aus der Anfrage (`?mandant=`, wie `cli` der kanzleikonsole); der
+// Nachweis muss zu diesem Mandanten gehören. Nicht sichtbar → 404 ohne
+// Hinweis auf die Existenz. Vor der Auslieferung prüft die Ablage den
+// SHA-256 des Inhalts (TS-09).
 // =============================================================================
 
 export const dynamic = 'force-dynamic';
@@ -27,34 +25,26 @@ const AKTIVE_TYPEN =
   /^(text\/html|application\/xhtml\+xml|image\/svg\+xml|text\/xml|application\/xml|application\/javascript|text\/javascript)$/i;
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  const person = await aktuellePerson();
   const kopf = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' };
-  if (!person) return new Response('Nicht angemeldet.', { status: 401, headers: kopf });
+  const nichtGefunden = () => new Response('Nicht gefunden.', { status: 404, headers: kopf });
+  const mandantId = new URL(req.url).searchParams.get('mandant') ?? '';
+  const akteur = await demoAkteur(mandantId);
+  if (!akteur) return new Response('Nicht angemeldet.', { status: 401, headers: kopf });
   const { id } = await params;
-  const n = await ladeNachweisFuerDownload(id);
-  if (!n) return new Response('Nicht gefunden.', { status: 404, headers: kopf });
 
-  const ks = n.durchfuehrung.kontrolleStand;
-  const mandantId = n.durchfuehrung.kontrolle.programm.mandantId;
-  const akteur = akteurFuer(person, mandantId);
-  const rollen = await lies((tx) => ladeKontaktRollen(tx, akteur));
-  const erlaubt =
-    akteur.art === 'KANZLEI'
-      ? kannLesen(akteur, mandantId)
-      : darfPortalLesen(handelnde(akteur, rollen), {
-          mandantId,
-          kontrolle: {
-            partei: ks.partei,
-            durchfuehrendId: ks.durchfuehrendId,
-            vertretungId: ks.vertretungId,
-            gegenzeichnerId: ks.gegenzeichnerId,
-          },
-        });
-  // Kein Hinweis auf die Existenz fremder Dateien.
-  if (!erlaubt) return new Response('Nicht gefunden.', { status: 404, headers: kopf });
+  let n;
+  try {
+    ({ nachweis: n } = await imDemoDienst(akteur, (ctx) =>
+      ladeNachweis(ctx, { mandantId, nachweisId: id }),
+    ));
+  } catch (e) {
+    // Fremder oder unbekannter Mandant/Nachweis, ungültige Eingabe: immer 404.
+    if (e instanceof DienstFehler) return nichtGefunden();
+    throw e;
+  }
 
   let inhalt: Buffer;
   try {
