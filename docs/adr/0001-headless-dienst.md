@@ -74,9 +74,15 @@ Payload (alle Felder Pflicht, wo nicht anders genannt; unbekannte Felder → abw
 | `cli` | `{ id: UUID, bt: boolean, hb: boolean }`                     | optional bei `KANZLEI`, Pflicht bei `MANDANT`: Mandant, auf den sich die Anfrage bezieht. Die kanzleikonsole setzt `cli` nur, wenn die Person Zugriff auf den Mandanten hat. `bt`: zuständige:r Berufsträger:in, `hb`: Hauptbearbeitung (bei `MANDANT` beide `false`) |
 | `req` | `{ m: Methode, p: Pfad+Query, b: base64url(SHA-256(Body)) }` | bindet die Bestätigung an genau diese Anfrage; leerer Body → Hash des leeren Strings                                                                                                                                                                                  |
 
-Prüfreihenfolge im Dienst: Größe (≤ 4 KiB) → Struktur → `kid` bekannt →
-Signatur → Claims (zod, strikt) → Zeitfenster → `req` gegen die tatsächliche
-Anfrage → `jti` einmalig. Erst danach wird der Body geparst.
+Prüfreihenfolge im Dienst je Anfrage: Request-ID → Methode und Pfad bekannt
+(rohes Target, sonst `404`/`405`) → `Content-Length` vorab gegen die
+Body-Grenze (`413`, ohne zu lesen) → Dienst-Token (vor dem ersten Body-Byte:
+ohne gültiges Token puffert der Dienst nichts, die Verbindung wird
+geschlossen) → Body roh lesen mit gestreamter Grenze (`413`) →
+Akteursbestätigung: Größe (≤ 4 KiB) → Struktur → `kid` bekannt → Signatur →
+Claims (zod, strikt) → Zeitfenster → `req` gegen die tatsächliche Anfrage
+(Hash des rohen Bodys) → `jti` einmalig → Mandantenbindung (3.3). Erst danach
+wird der Body geparst.
 
 ### 3.3 Mandantenbindung
 

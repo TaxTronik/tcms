@@ -1,18 +1,22 @@
 // =============================================================================
 // HTTP-Dienst des Tax-CMS (ADR 0001, Abschnitte 3 und 7).
 //
-// Reihenfolge je Anfrage (Aufgabe tcms-auth, Punkt 2):
+// Reihenfolge je Anfrage (ADR 0001 §3.2):
 //   1. Request-ID
 //   2. Methode und Pfad bekannt (rohes, kanonisches Target) – sonst 404/405
-//   3. Body roh lesen, hartes Limit (Content-Length und gestreamt) – sonst 413
-//   4. Dienst-Token (konstante Zeit, jeder Listeneintrag)
-//   5. Akteursbestätigung gegen tatsächliche Methode, rohes Target, Body-Hash
-//   6. jti einmalig
-//   7. Mandantenbindung (ADR §3.3) – sonst 404
-//   8. erst jetzt Query und JSON lesen und validieren
-//   9. Route in genau einer Tenant-Transaktion (`mitTenant`)
-// Jeder Authentifizierungsfehler (4–6) ergibt dieselbe Antwort
-// `401 NICHT_AUTHENTIFIZIERT`; der Grund steht nur im Log.
+//   3. Content-Length vorab gegen MAX_BODY_BYTES – sonst 413, ohne zu lesen
+//   4. Dienst-Token (konstante Zeit, jeder Listeneintrag) – vor dem ersten
+//      Body-Byte: Ohne Token lässt sich der Dienst nichts puffern
+//   5. Body roh lesen, gestreamtes hartes Limit – sonst 413
+//   6. Akteursbestätigung gegen tatsächliche Methode, rohes Target, Body-Hash
+//   7. jti einmalig
+//   8. Mandantenbindung (ADR §3.3) – sonst 404
+//   9. erst jetzt Query und JSON lesen und validieren
+//  10. Route in genau einer Tenant-Transaktion (`mitTenant`)
+// Jeder Authentifizierungsfehler (4, 6, 7) ergibt dieselbe Antwort
+// `401 NICHT_AUTHENTIFIZIERT` mit `Connection: close`; der Grund steht nur im
+// Log. Jede Antwort, bevor ein angekündigter Body gelesen wurde, schließt die
+// Verbindung, damit der Rest nicht gelesen wird.
 // =============================================================================
 
 import { performance } from 'node:perf_hooks';
@@ -31,7 +35,7 @@ import {
 } from '@tcms/contract';
 import { Hono, type Context } from 'hono';
 import { ZodError } from 'zod';
-import { leseBodyRoh } from './body';
+import { kuendigtBodyAn, leseBodyRoh, pruefeContentLength } from './body';
 import { erzeugeTokenPruefung } from './dienst-token';
 import type { JtiSpeicher } from './jti';
 import { jsonLogger, type Logger, type LogWert } from './log';
@@ -137,6 +141,7 @@ export function erzeugeApp<Tx = unknown>(deps: AppDeps<Tx>): Hono<{ Bindings: Bi
     c: Context<{ Bindings: Bindings }>,
     requestId: string,
     felder: Record<string, LogWert>,
+    zustand: { bodyGelesen: boolean },
   ): Promise<Response> {
     // 2. Methode und Pfad bekannt – ausschließlich auf der rohen Anfrage.
     const roh = roheAnfrage(c.env);
@@ -151,18 +156,22 @@ export function erzeugeApp<Tx = unknown>(deps: AppDeps<Tx>): Hono<{ Bindings: Bi
     const route = treffer.eintrag;
     felder.route = route.pfad;
 
-    // 3. Body roh mit hartem Limit, bevor irgendetwas anderes ihn ansieht.
-    const body = await leseBodyRoh(c.req.raw, MAX_BODY_BYTES);
+    // 3. Content-Length vorab: zu groß → 413, ohne ein Body-Byte zu lesen.
+    pruefeContentLength(c.req.raw, MAX_BODY_BYTES);
 
-    // 4. Dienst-Token.
+    // 4. Dienst-Token vor dem ersten Body-Byte.
     if (!tokenGueltig(c.req.raw.headers.get('authorization'))) throw new AuthFehler('DIENST_TOKEN');
+
+    // 5. Body roh mit gestreamtem hartem Limit, bevor irgendetwas anderes ihn ansieht.
+    const body = await leseBodyRoh(c.req.raw, MAX_BODY_BYTES);
+    zustand.bodyGelesen = true;
 
     if (!route.akteur) {
       if (body.byteLength > 0 || ziel.query !== null) throw new DienstFehler('UNGUELTIG');
       return antwort(route.status, { ok: true, daten: await route.ohneAkteur!() }, requestId);
     }
 
-    // 5. Akteursbestätigung gegen die tatsächlich empfangene Anfrage.
+    // 6. Akteursbestätigung gegen die tatsächlich empfangene Anfrage.
     const token = c.req.raw.headers.get(AKTEUR_HEADER);
     if (token === null) throw new AuthFehler('AKTEUR_FEHLT');
     const geprueft = pruefeAkteur(token, {
@@ -172,7 +181,7 @@ export function erzeugeApp<Tx = unknown>(deps: AppDeps<Tx>): Hono<{ Bindings: Bi
     });
     if (!geprueft.ok) throw new AuthFehler(geprueft.grund);
 
-    // 6. jti einmalig (atomar im Speicher; Fehler des Speichers → 500, nie durchlassen).
+    // 7. jti einmalig (atomar im Speicher; Fehler des Speichers → 500, nie durchlassen).
     const { claims } = geprueft;
     if (!(await deps.jti.einmalig(claims.jti, new Date(claims.exp * 1000)))) {
       throw new AuthFehler('JTI_WIEDERHOLT');
@@ -182,16 +191,16 @@ export function erzeugeApp<Tx = unknown>(deps: AppDeps<Tx>): Hono<{ Bindings: Bi
     felder.akteurId = akteur.id;
     felder.akteurArt = akteur.art;
 
-    // 7. Mandantenbindung vor jeder Auswertung der Eingaben (404 statt 400).
+    // 8. Mandantenbindung vor jeder Auswertung der Eingaben (404 statt 400).
     const mandantId = route.mandantGebunden ? (treffer.params[MANDANT_PARAM] ?? '') : null;
     bindeMandant(akteur, mandantId, route.portal);
     if (mandantId !== null) felder.mandantId = mandantId;
 
-    // 8. Erst jetzt Query und JSON.
+    // 9. Erst jetzt Query und JSON.
     const query = leseQuery(route, ziel.query);
     const eingabe = leseJson(route, body, c.req.raw.headers.get('content-type'));
 
-    // 9. Route in genau einer Tenant-Transaktion.
+    // 10. Route in genau einer Tenant-Transaktion.
     const jetzt = deps.uhr.jetzt();
     const daten = await deps.daten.mitTenant(akteur.tenantId, (tx) =>
       route.handler({ tx, akteur, params: treffer.params, body: eingabe, query, requestId, jetzt }),
@@ -205,11 +214,13 @@ export function erzeugeApp<Tx = unknown>(deps: AppDeps<Tx>): Hono<{ Bindings: Bi
     const requestId = randomUUID();
     const beginn = performance.now();
     const felder: Record<string, LogWert> = { requestId };
+    const zustand = { bodyGelesen: false };
     let res: Response;
     try {
-      res = await verarbeite(c, requestId, felder);
+      res = await verarbeite(c, requestId, felder, zustand);
     } catch (e) {
-      res = fehlerAntwort(e, requestId, felder);
+      const schliessen = !zustand.bodyGelesen && kuendigtBodyAn(c.req.raw);
+      res = fehlerAntwort(e, requestId, felder, schliessen);
     }
     felder.status = res.status;
     felder.dauerMs = Math.round(performance.now() - beginn);
@@ -236,36 +247,54 @@ function antwort(
   return new Response(JSON.stringify(body), { status, headers });
 }
 
-function fehler(status: number, f: Fehler, requestId: string, zusatz?: Record<string, string>) {
+function fehler(
+  status: number,
+  f: Fehler,
+  requestId: string,
+  zusatz?: Readonly<Record<string, string>>,
+) {
   return antwort(status, { ok: false, fehler: f }, requestId, zusatz);
 }
 
-/** Übersetzt jeden Fehler in den Umschlag; Details nur ins Log. */
-function fehlerAntwort(e: unknown, requestId: string, felder: Record<string, LogWert>): Response {
+const SCHLIESSEN: Readonly<Record<string, string>> = { connection: 'close' };
+
+/**
+ * Übersetzt jeden Fehler in den Umschlag; Details nur ins Log. `schliessen`:
+ * Ein angekündigter Body wurde nicht (ganz) gelesen – Verbindung schließen,
+ * damit der Rest nicht gelesen wird.
+ */
+function fehlerAntwort(
+  e: unknown,
+  requestId: string,
+  felder: Record<string, LogWert>,
+  schliessen: boolean,
+): Response {
+  const zusatz = schliessen ? SCHLIESSEN : {};
   if (e instanceof AuthFehler) {
     felder.grund = e.grund;
-    return fehler(401, { code: 'NICHT_AUTHENTIFIZIERT' }, requestId);
+    // Immer `Connection: close`: sonst verriete der Header, ob das Token
+    // (Body ungelesen) oder erst die Bestätigung (Body gelesen) scheiterte.
+    return fehler(401, { code: 'NICHT_AUTHENTIFIZIERT' }, requestId, SCHLIESSEN);
   }
   if (e instanceof MethodeNichtErlaubt) {
-    return fehler(405, { code: e.code }, requestId, { allow: e.erlaubt.join(', ') });
+    return fehler(405, { code: e.code }, requestId, { ...zusatz, allow: e.erlaubt.join(', ') });
   }
   if (e instanceof DienstFehler) {
     const f: Fehler = { code: e.code };
     if (e.message !== e.code) f.meldung = e.message.slice(0, MAX_MELDUNG);
     if (e.felder) f.felder = begrenzeFelder(Object.entries(e.felder));
     felder.fehler = e.code;
-    // Nach 413 die Verbindung schließen, damit der Rest des Bodys nicht gelesen wird.
-    const zusatz: Record<string, string> = e.code === 'ZU_GROSS' ? { connection: 'close' } : {};
-    return fehler(FEHLER_STATUS[e.code], f, requestId, zusatz);
+    // Nach 413 immer schließen, auch ohne angekündigte Länge (gestreamter Body).
+    return fehler(FEHLER_STATUS[e.code], f, requestId, e.code === 'ZU_GROSS' ? SCHLIESSEN : zusatz);
   }
   if (e instanceof ZodError) {
     felder.fehler = 'UNGUELTIG';
-    return fehler(400, { code: 'UNGUELTIG', felder: felderAusZod(e) }, requestId);
+    return fehler(400, { code: 'UNGUELTIG', felder: felderAusZod(e) }, requestId, zusatz);
   }
   felder.fehler = 'INTERN';
   felder.ausnahme = e instanceof Error ? e.name : typeof e;
   felder.stack = e instanceof Error && e.stack ? e.stack : null;
-  return fehler(500, { code: 'INTERN' }, requestId);
+  return fehler(500, { code: 'INTERN' }, requestId, zusatz);
 }
 
 function felderAusZod(e: ZodError): Record<string, string[]> {

@@ -92,6 +92,11 @@ Akteursbestätigung (`X-TCMS-Akteur`), die an Methode, Pfad samt Query und Body-
 Signieren und Prüfen liegen in `packages/contract` (`signiereAkteur`, `pruefeAkteur`), damit beide
 Seiten denselben Code nutzen.
 
+Reihenfolge je Anfrage (ADR 0001 §3.2): Methode und Pfad bekannt (sonst `404`/`405`) →
+`Content-Length` vorab (`413`) → Dienst-Token → Body lesen mit gestreamter Grenze von 256 KiB
+(`413`) → Akteursbestätigung → `jti` einmalig → Mandantenbindung → erst dann Query und JSON. Ohne
+gültiges Dienst-Token liest der Dienst kein Body-Byte und schließt die Verbindung.
+
 ```bash
 pnpm akteur:schluessel                 # Schlüsselpaar für die Akteursbestätigung (schreibt nichts)
 pnpm api                               # Dienst auf HOST:PORT, Standard 0.0.0.0:3200
@@ -156,9 +161,9 @@ await fetch(`<interne-url>${pfad}`, {
 ```
 
 Antworten: `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder? } }`. Jeder
-Fehler bei Token, Bestätigung oder `jti` ergibt dieselbe Antwort `401 NICHT_AUTHENTIFIZIERT`; der
-Grund steht nur im Log (JSON-Zeilen auf stdout, mit Request-ID, ohne Header-Werte und Bodys). Fremde
-Mandanten und nicht kanonische Pfade ergeben `404`. `GET /v1/health` braucht nur das Dienst-Token,
+Fehler bei Token, Bestätigung oder `jti` ergibt dieselbe Antwort `401 NICHT_AUTHENTIFIZIERT` (mit
+`Connection: close`); der Grund steht nur im Log (JSON-Zeilen auf stdout, mit Request-ID, ohne
+Header-Werte und Bodys). Fremde Mandanten und nicht kanonische Pfade ergeben `404`. `GET /v1/health` braucht nur das Dienst-Token,
 `GET /v1/ich` liefert den abgeleiteten Akteur (Vertragstest).
 
 Tests: `pnpm --filter @tcms/api test`. Mit `TCMS_API_TEST_DATABASE_URL` (Superuser einer

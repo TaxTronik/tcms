@@ -156,6 +156,23 @@ describe('Schritt 2: Methode und Pfad bekannt (vor Body und Authentifizierung)',
     }
   });
 
+  it('schließt die Verbindung, wenn ein angekündigter Body ungelesen bleibt', async () => {
+    const t = routenAufbau();
+    const ziele = [
+      { methode: 'POST', ziel: '/v1/gibt-es-nicht' },
+      { methode: 'PUT', ziel: '/v1/ich' },
+    ];
+    for (const s of ziele) {
+      const { strom, zaehler } = zaehlStrom(4, 1024);
+      const mit = await senden(t.app, { ...s, body: strom, headers: { 'content-length': '4096' } });
+      expect([404, 405]).toContain(mit.status);
+      expect(mit.headers.get('connection'), s.ziel).toBe('close');
+      expect(zaehler.gelesen).toBe(0);
+      const ohne = await senden(t.app, { ...s });
+      expect(ohne.headers.get('connection'), s.ziel).toBeNull();
+    }
+  });
+
   it('unterscheidet Groß-/Kleinschreibung und abschließenden Schrägstrich nicht weg', async () => {
     const t = routenAufbau();
     for (const ziel of ['/V1/ICH', '/v1/ich/', '/v1/Ich', '/v1', '/']) {
@@ -242,31 +259,67 @@ describe('Schritt 2: Methode und Pfad bekannt (vor Body und Authentifizierung)',
   });
 });
 
-describe('Schritt 3: Body-Limit (Content-Length und gestreamt)', () => {
-  it('413 bei zu großem Body vor der Authentifizierung, mit Connection: close', async () => {
-    const t = routenAufbau();
-    const r = await senden(t.app, {
-      methode: 'POST',
-      ziel: `/v1/mandanten/${MANDANT}/test`,
-      body: new Uint8Array(MAX_BODY_BYTES + 1),
-    });
-    expect(r.status).toBe(413);
-    expect(r.headers.get('connection')).toBe('close');
-    expect(await json(r)).toEqual({ ok: false, fehler: { code: 'ZU_GROSS' } });
-    expect(t.jtiAufrufe).toEqual([]);
-  });
+describe('Schritte 3–5: Content-Length vorab, Dienst-Token vor dem Body, gestreamtes Limit', () => {
+  const ziel = `/v1/mandanten/${MANDANT}/test`;
+  const nurToken = { authorization: `Bearer ${TOKEN_ALT}` };
 
-  it('413 allein aus Content-Length, ohne den Strom zu lesen', async () => {
+  it('413 allein aus Content-Length, vor dem Token und ohne den Strom zu lesen', async () => {
     const t = routenAufbau();
     const { strom, zaehler } = zaehlStrom(1, 10);
     const r = await senden(t.app, {
       methode: 'POST',
-      ziel: `/v1/mandanten/${MANDANT}/test`,
+      ziel,
       body: strom,
       headers: { 'content-length': String(MAX_BODY_BYTES + 1) },
     });
     expect(r.status).toBe(413);
+    expect(r.headers.get('connection')).toBe('close');
+    expect(await json(r)).toEqual({ ok: false, fehler: { code: 'ZU_GROSS' } });
     expect(zaehler.gelesen).toBe(0);
+  });
+
+  it('400 bei ungültiger Content-Length, vor dem Token und ohne zu lesen', async () => {
+    const t = routenAufbau();
+    for (const cl of ['+20', '20, 20', '-1', '0x14', '']) {
+      const { strom, zaehler } = zaehlStrom(1, 20);
+      const r = await senden(t.app, {
+        methode: 'POST',
+        ziel,
+        body: strom,
+        headers: { 'content-length': cl },
+      });
+      expect(r.status, cl).toBe(400);
+      expect(zaehler.gelesen, cl).toBe(0);
+    }
+  });
+
+  it('401 ohne oder mit falschem Token, ohne ein Body-Byte zu lesen', async () => {
+    const t = routenAufbau();
+    const varianten: Record<string, string>[] = [
+      {},
+      { authorization: `Bearer ${TOKEN_ALT}x` },
+      { 'content-length': '10240' },
+      { authorization: `Bearer ${TOKEN_ALT}x`, 'content-length': String(MAX_BODY_BYTES) },
+    ];
+    for (const headers of varianten) {
+      const { strom, zaehler } = zaehlStrom(10, 1024);
+      const r = await senden(t.app, { methode: 'POST', ziel, body: strom, headers });
+      expect(r.status).toBe(401);
+      expect(r.headers.get('connection')).toBe('close');
+      expect(await json(r)).toEqual(AUTH_401);
+      expect(zaehler.gelesen).toBe(0);
+    }
+    expect(t.log.every((z) => z.grund === 'DIENST_TOKEN')).toBe(true);
+  });
+
+  it('413 bei zu großem gestreamtem Body mit gültigem Token, mit Connection: close', async () => {
+    const t = routenAufbau();
+    const { strom, zaehler } = zaehlStrom(1000, 1024);
+    const r = await senden(t.app, { methode: 'POST', ziel, body: strom, headers: nurToken });
+    expect(r.status).toBe(413);
+    expect(r.headers.get('connection')).toBe('close');
+    expect(zaehler.gelesen).toBeLessThan(1000);
+    expect(t.jtiAufrufe).toEqual([]);
   });
 
   it('413 bei gelogener (zu kleiner) Content-Length; Rest wird nicht gelesen', async () => {
@@ -274,49 +327,58 @@ describe('Schritt 3: Body-Limit (Content-Length und gestreamt)', () => {
     const { strom, zaehler } = zaehlStrom(1000, 1024);
     const r = await senden(t.app, {
       methode: 'POST',
-      ziel: `/v1/mandanten/${MANDANT}/test`,
+      ziel,
       body: strom,
-      headers: { 'content-length': '10' },
+      headers: { ...nurToken, 'content-length': '10' },
     });
     expect(r.status).toBe(413);
     expect(zaehler.gelesen).toBeLessThanOrEqual(MAX_BODY_BYTES / 1024 + 2);
     expect(zaehler.abgebrochen).toBe(true);
   });
 
-  it('413 bei gestreamtem Body ohne Content-Length', async () => {
+  it('400 bei Content-Length, die nicht zur gelesenen Länge passt', async () => {
     const t = routenAufbau();
-    const { strom, zaehler } = zaehlStrom(1000, 1024);
+    const { strom } = zaehlStrom(1, 20);
     const r = await senden(t.app, {
       methode: 'POST',
-      ziel: `/v1/mandanten/${MANDANT}/test`,
+      ziel,
       body: strom,
+      headers: { ...nurToken, 'content-length': '5' },
     });
-    expect(r.status).toBe(413);
-    expect(zaehler.gelesen).toBeLessThan(1000);
+    expect(r.status).toBe(400);
   });
 
-  it('400 bei Content-Length, die nicht zur gelesenen Länge passt oder ungültig ist', async () => {
-    const t = routenAufbau();
-    for (const cl of ['5', '+20', '20, 20', '-1', '0x14', '']) {
-      const { strom } = zaehlStrom(1, 20);
-      const r = await senden(t.app, {
-        methode: 'POST',
-        ziel: `/v1/mandanten/${MANDANT}/test`,
-        body: strom,
-        headers: { 'content-length': cl },
-      });
-      expect(r.status, cl).toBe(400);
-    }
-  });
-
-  it('nimmt genau MAX_BODY_BYTES an (dann scheitert erst die Authentifizierung)', async () => {
+  it('nimmt genau MAX_BODY_BYTES an (dann scheitert erst die Akteursbestätigung)', async () => {
     const t = routenAufbau();
     const r = await senden(t.app, {
       methode: 'POST',
-      ziel: `/v1/mandanten/${MANDANT}/test`,
+      ziel,
       body: new Uint8Array(MAX_BODY_BYTES),
+      headers: nurToken,
     });
     expect(r.status).toBe(401);
+    expect(t.log.at(-1)?.grund).toBe('AKTEUR_FEHLT');
+  });
+
+  it('401 ist byte- und headergleich, ob das Token oder erst die Bestätigung scheitert', async () => {
+    const t = routenAufbau();
+    const { headers } = bestaetigung({ methode: 'POST', ziel, body: '{"titel":"A"}' });
+    const tokenFalsch = await senden(t.app, {
+      methode: 'POST',
+      ziel,
+      body: '{"titel":"A"}',
+      headers: { ...headers, authorization: `Bearer ${TOKEN_ALT}x` },
+    });
+    const bodyFalsch = await senden(t.app, {
+      methode: 'POST',
+      ziel,
+      body: '{"titel":"B"}',
+      headers,
+    });
+    expect(t.log.map((z) => z.grund)).toEqual(['DIENST_TOKEN', 'REQ_BODY']);
+    const kopf = (r: Response) => [...r.headers].filter(([n]) => n !== 'x-request-id').sort();
+    expect(kopf(tokenFalsch)).toEqual(kopf(bodyFalsch));
+    expect(await tokenFalsch.text()).toBe(await bodyFalsch.text());
   });
 });
 
