@@ -87,7 +87,7 @@ schreibgeschützt ansehen.
 | `pnpm db:deploy`      | Migrationen einspielen                                                    |
 | `pnpm db:seed`        | Datenbank leeren und Demodaten laden                                      |
 | `pnpm image:pruefen`  | Dockerfile und Build-Kontext statisch prüfen                              |
-| `pnpm vertrag:export` | Commit und SHA-256 der Vertragsdateien (Format `VENDOR.json`)             |
+| `pnpm vertrag:export` | Commit und SHA-256 der Vertrags- bzw. Domain-Dateien (`VENDOR.json`)      |
 
 ## Datenbank
 
@@ -440,7 +440,10 @@ Tags `v*` (gleich der Version von `apps/api`) Trivy-Gate, SBOM und Push nach
 Variable `REGISTRY`, Secrets `REGISTRY_USER` und `REGISTRY_TOKEN`.
 
 `pnpm vertrag:export` gibt bei sauberem Baum Commit und SHA-256 je Datei von `packages/contract/src`
-(ohne Tests) im Format von `packages/tcms-contract/VENDOR.json` der kanzleikonsole aus.
+(ohne Tests) im Format von `packages/tcms-contract/VENDOR.json` der kanzleikonsole aus;
+`pnpm vertrag:export --paket domain` dasselbe für `packages/domain/src` ohne Tests und ohne
+`audit.ts` (`packages/tcms-domain/VENDOR.json`, Oberflächen der kanzleikonsole ab Stufe 3). Alle
+Dateien eines vendorten Pakets müssen normale Dateien sein (Modus 100644).
 
 ## Grenzen dieses Stands
 

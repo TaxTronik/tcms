@@ -1,6 +1,7 @@
 // scripts/vertrag-export.mjs: Format wie VENDOR.json der kanzleikonsole
 // (Regeln aus deren scripts/tcms/vendor-lib.mjs, hier nachgebildet), nur bei
-// sauberem Baum, ohne Testdateien, SHA-256 je Datei, sortiert.
+// sauberem Baum, ohne Testdateien, SHA-256 je Datei, sortiert; je Paket
+// (`--paket contract|domain`) mit dessen Quellpfad und Ausschlüssen.
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -36,13 +37,16 @@ function exportiere(wurzel: string, ...extra: string[]) {
 }
 
 /** Regeln von pruefeVendorDaten (kanzleikonsole, scripts/tcms/vendor-lib.mjs). */
-function vendorBefunde(daten: Record<string, unknown>): string[] {
+function vendorBefunde(
+  daten: Record<string, unknown>,
+  quellPfad = 'packages/contract/src',
+): string[] {
   const befunde: string[] = [];
   if (Object.keys(daten).sort().join(',') !== 'beschreibung,dateien,quelle') befunde.push('felder');
   const q = daten['quelle'] as Record<string, string>;
   if (Object.keys(q).sort().join(',') !== 'commit,pfad,repo') befunde.push('quelle');
   if (!/^[A-Za-z0-9._-]{1,100}$/.test(q['repo']!)) befunde.push('repo');
-  if (q['pfad'] !== 'packages/contract/src') befunde.push('pfad');
+  if (q['pfad'] !== quellPfad) befunde.push('pfad');
   if (!/^[0-9a-f]{40}$/.test(q['commit']!)) befunde.push('commit');
   let vorher = '';
   for (const e of daten['dateien'] as Record<string, string>[]) {
@@ -129,6 +133,47 @@ describe('vertrag-export.mjs', () => {
       const r = exportiere(wurzel);
       expect(r.code, art).toBe(1);
       expect(r.stderr).toMatch(/keine normale Datei/);
+      expect(r.stdout).toBe('');
+    }
+  });
+
+  it('exportiert mit --paket domain das Domain-Paket ohne Tests und ohne audit.ts', () => {
+    const domain = {
+      'packages/domain/src/index.ts': "export * from './format';\n",
+      'packages/domain/src/format.ts': 'export const F = 1;\n',
+      'packages/domain/src/katalog/risiken.ts': 'export const R = 2;\n',
+      'packages/domain/src/audit.ts': "import { createHash } from 'node:crypto';\n",
+      'packages/domain/src/__tests__/format.test.ts': 'test\n',
+    };
+    const wurzel = repo({ ...DATEIEN, ...domain });
+    const r = exportiere(wurzel, '--paket', 'domain');
+    expect(r.code, r.stderr).toBe(0);
+    const daten = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(vendorBefunde(daten, 'packages/domain/src')).toEqual([]);
+    expect((daten['quelle'] as { pfad: string }).pfad).toBe('packages/domain/src');
+    const sha = (s: string) => createHash('sha256').update(s).digest('hex');
+    expect(daten['dateien']).toEqual([
+      { pfad: 'format.ts', sha256: sha(domain['packages/domain/src/format.ts']) },
+      { pfad: 'index.ts', sha256: sha(domain['packages/domain/src/index.ts']) },
+      {
+        pfad: 'katalog/risiken.ts',
+        sha256: sha(domain['packages/domain/src/katalog/risiken.ts']),
+      },
+    ]);
+    expect(String(daten['beschreibung'])).toMatch(
+      /^Exakte Kopie von packages\/domain\/src des TCMS-Repos ohne Tests und ohne audit\.ts\./,
+    );
+    // Ohne --paket bleibt es beim Vertrag (Format und Inhalt wie in Stufe 2).
+    const vertrag = JSON.parse(exportiere(wurzel).stdout) as { quelle: { pfad: string } };
+    expect(vertrag.quelle.pfad).toBe('packages/contract/src');
+  });
+
+  it('weist unbekannte Pakete ab', () => {
+    const wurzel = repo(DATEIEN);
+    for (const paket of ['web', '__proto__', 'toString', '']) {
+      const r = exportiere(wurzel, '--paket', paket);
+      expect(r.code, paket).toBe(1);
+      expect(r.stderr).toMatch(/--paket muss einer von contract, domain sein/);
       expect(r.stdout).toBe('');
     }
   });

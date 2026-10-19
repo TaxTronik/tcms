@@ -321,7 +321,9 @@ Images, gitleaks, `pnpm audit --prod`, Build beider Ziele; nur auf Tags
 Trivy-Gate, SBOM, Push nach `${REGISTRY}/taxtronik/tcms-{api,migrate}` und
 Ausgabe der Digests für das signierte Release-Manifest der kanzleikonsole.
 `scripts/vertrag-export.mjs` liefert Commit und SHA-256 je Vertragsdatei im
-Format von `VENDOR.json` der kanzleikonsole.
+Format von `VENDOR.json` der kanzleikonsole, mit `--paket domain` ebenso für
+`packages/domain/src` ohne `audit.ts` (Labels, Formatierung und Katalog für die
+Oberflächen der kanzleikonsole, Stufe 3).
 
 Bekannte Grenzen der Images: Das Migrations-Image erbt vom PostgreSQL-Image
 dessen Server-Programme und dessen `VOLUME` (eine anonyme Volume je Container,
