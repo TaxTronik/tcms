@@ -613,4 +613,30 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
     const fremd = kontakt(randomUUID());
     expect((await senden('GET', P(did), fremd)).status).toBe(404);
   });
+
+  it('Portal-Aufgabe: berechnete Abweichung je Kennzahl in `pruefung` (wie die Einreichprüfung)', async () => {
+    const did = await durchfuehrung(k2);
+    const z = { mandantId: mandant, durchfuehrungId: did };
+    await dienst(C.ma, (ctx) =>
+      speichereDurchfuehrung(ctx, {
+        ...z,
+        ...SPEICHERN,
+        werte: [{ key: 'saldo', wert: 3.456, bemerkung: '', erklaert: false }],
+      } as never),
+    );
+    const r = await senden('GET', P(did), C.ma);
+    expect(r.status).toBe(200);
+    const a = KontrollaufgabeSchema.parse((await json(r))['daten']);
+    expect(a.pruefung.kennzahlen).toEqual([
+      {
+        key: 'saldo',
+        label: 'Saldo',
+        wert: 3.46, // beim Speichern auf Cent gerundet
+        abweichung: 3.46,
+        lage: 'AUSSERHALB',
+        berechnet: false,
+      },
+    ]);
+    expect(a.pruefung.ausserhalb).toEqual(['Saldo']);
+  });
 });

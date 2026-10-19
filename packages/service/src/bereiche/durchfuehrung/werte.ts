@@ -108,23 +108,47 @@ function lage(
   return e.erklaert && e.bemerkung.trim().length > 0 ? 'ERKLAERT' : 'AUSSERHALB';
 }
 
-/** Toleranzlage je Kennzahl inkl. berechneter Differenzen. */
+/** Kennzahl mit berechneten Werten (Differenz, Abweichung) und Toleranzlage. */
+export interface KennzahlLage {
+  def: KennzahlDef;
+  /** Erfasster Wert bzw. berechnete Differenz (a − b, auf Cent gerundet). */
+  wert: number | null;
+  /** Abweichung gegen das Soll bzw. die Differenz selbst; null = keine Toleranzprüfung. */
+  abweichung: number | null;
+  lage: Toleranzlage | null;
+  /** Differenzkennzahl (berechnet, nicht erfasst). */
+  berechnet: boolean;
+}
+
+/** Toleranzlage je Kennzahl inkl. berechneter Differenzen (einzige Rechnung, auch für die Anzeige). */
 export function toleranzLagen(
   defs: readonly KennzahlDef[],
   werte: Werte,
   toleranzEur: number | null,
-): { def: KennzahlDef; lage: Toleranzlage | null }[] {
+): KennzahlLage[] {
   return defs.map((def) => {
     const e = werte[def.key] ?? leer();
     if (def.differenzAus) {
       const a = werte[def.differenzAus[0]]?.wert ?? null;
       const b = werte[def.differenzAus[1]]?.wert ?? null;
       const diff = a != null && b != null ? Math.round((a - b) * 100) / 100 : null;
-      return { def, lage: lage(diff, toleranzEur, e) };
+      return {
+        def,
+        wert: diff,
+        abweichung: diff,
+        lage: lage(diff, toleranzEur, e),
+        berechnet: true,
+      };
     }
     const abw =
       def.sollEur != null && e.wert != null ? Math.round((e.wert - def.sollEur) * 100) / 100 : null;
-    return { def, lage: lage(abw, toleranzEur, e) };
+    return {
+      def,
+      wert: e.wert,
+      abweichung: abw,
+      lage: lage(abw, toleranzEur, e),
+      berechnet: false,
+    };
   });
 }
 
@@ -140,6 +164,15 @@ export interface EinreichPruefung {
   schritteGesamt: number;
   werteFehlend: string[];
   ausserhalb: string[];
+  /** Je Kennzahl die berechneten Werte und die Toleranzlage (Grundlage von `ausserhalb`). */
+  kennzahlen: {
+    key: string;
+    label: string;
+    wert: number | null;
+    abweichung: number | null;
+    lage: Toleranzlage | null;
+    berechnet: boolean;
+  }[];
   nachweise: number;
   mindestNachweise: number;
   ergebnis: 'OHNE_BEFUND' | 'MIT_BEFUND' | null;
@@ -160,9 +193,8 @@ export function pruefeEinreichung(x: {
 }): EinreichPruefung {
   const erledigt = x.schritte.filter((s) => s.erledigt).length;
   const werteFehlend = fehlendeWerte(x.kennzahlen, x.werte);
-  const ausserhalb = toleranzLagen(x.kennzahlen, x.werte, x.toleranzEur)
-    .filter((z) => z.lage === 'AUSSERHALB')
-    .map((z) => z.def.label);
+  const lagen = toleranzLagen(x.kennzahlen, x.werte, x.toleranzEur);
+  const ausserhalb = lagen.filter((z) => z.lage === 'AUSSERHALB').map((z) => z.def.label);
   const kommentarFehlt =
     x.ergebnis === 'MIT_BEFUND' &&
     (x.ergebnisKommentar ?? '').trim().length < DF_MIN_BEFUND_KOMMENTAR;
@@ -182,6 +214,14 @@ export function pruefeEinreichung(x: {
     schritteGesamt: x.schritte.length,
     werteFehlend,
     ausserhalb,
+    kennzahlen: lagen.map((z) => ({
+      key: z.def.key,
+      label: z.def.label,
+      wert: z.wert,
+      abweichung: z.abweichung,
+      lage: z.lage,
+      berechnet: z.berechnet,
+    })),
     nachweise: x.nachweise,
     mindestNachweise: x.mindestNachweise,
     ergebnis: x.ergebnis,

@@ -18,6 +18,7 @@ import {
   FolgenAnlegenSchema,
   FolgeVerwerfenSchema,
   nichtBerechtigt,
+  type Akteur,
   type EreignisAktion,
   type EreignisErfassen,
   type EreignisErfasst,
@@ -30,6 +31,7 @@ import {
   type FolgenAnlegen,
   type FolgeVerwerfen,
   type PersonZuweisung,
+  type VerweigerungGrund,
 } from '@tcms/contract';
 import type { Tx } from '@tcms/db';
 import {
@@ -614,6 +616,83 @@ export async function verwerfeFolge(
 // Ereignis abschließen / verwerfen
 // ---------------------------------------------------------------------------
 
+/** Stand eines Ereignisses, den die Vorbedingungen der Abschluss-Schritte brauchen. */
+export interface EreignisStand {
+  status: string;
+  verwerfenBegruendung: string | null;
+  verwerfenBeantragtVon: string | null;
+  folgen: readonly { status: 'VORGESCHLAGEN' | 'ANGELEGT' | 'ERLEDIGT' | 'VERWORFEN' }[];
+}
+
+export type EreignisSchritt = 'abschliessen' | 'verwerfenBeantragen' | 'verwerfenBestaetigen';
+
+/**
+ * Vorbedingungen der Schritte „abschließen", „Verwerfen beantragen" und
+ * „Verwerfen bestätigen" auf einem Stand des Ereignisses: zuerst das Recht
+ * (`kannBearbeiten`, bei der Bestätigung zusätzlich die zweite Person; 403 mit
+ * Grund), dann der Zustand (409). Einzige Quelle für die Operationen (unter
+ * der Zeilensperre) und die Rechte-Kennzeichen des Details (`rechte`); null =
+ * der Schritt ist möglich.
+ */
+export function hindernisEreignis(
+  schritt: EreignisSchritt,
+  a: Akteur,
+  mandantId: string,
+  e: EreignisStand,
+): DienstFehler | null {
+  if (!kannBearbeiten(a, mandantId)) return nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
+  if (e.status === 'ERLEDIGT' || e.status === 'VERWORFEN') {
+    return new DienstFehler('KONFLIKT', ABGESCHLOSSEN);
+  }
+  switch (schritt) {
+    case 'abschliessen':
+      if (!ereignisErledigt(e.folgen)) {
+        return new DienstFehler(
+          'KONFLIKT',
+          'Noch nicht möglich: jede Folge muss erledigt oder begründet verworfen sein.',
+        );
+      }
+      // Ohne erledigte Folge wäre das Abschließen ein Verwerfen – das braucht eine zweite Person.
+      if (!e.folgen.some((f) => f.status === 'ERLEDIGT')) {
+        return new DienstFehler(
+          'KONFLIKT',
+          'Keine Folge ist erledigt. Bitte „Ereignis verwerfen“ verwenden – das bestätigt eine zweite Person.',
+        );
+      }
+      return null;
+    case 'verwerfenBeantragen':
+      if (e.verwerfenBegruendung) {
+        return new DienstFehler('KONFLIKT', 'Das Verwerfen ist bereits beantragt.');
+      }
+      if (e.folgen.some((f) => f.status === 'ANGELEGT' || f.status === 'ERLEDIGT')) {
+        return new DienstFehler(
+          'KONFLIKT',
+          'Es sind bereits Folgen angelegt. Diese einzeln erledigen oder verwerfen und das Ereignis dann abschließen.',
+        );
+      }
+      return null;
+    case 'verwerfenBestaetigen':
+      if (!e.verwerfenBegruendung) return new DienstFehler('KONFLIKT', KEIN_ANTRAG);
+      if (!zweitePerson(a, antragsteller(e))) return nichtBerechtigt('VIER_AUGEN', ZWEITE_PERSON);
+      return null;
+  }
+}
+
+/**
+ * Recht auf einen Schritt als Kennzeichen (wie die Rechte der Durchführung):
+ * `verweigerung` ist der Grund des 403, den die Operation jetzt liefern
+ * würde; null bei Erlaubnis oder wenn nur der Zustand entgegensteht (409).
+ */
+export function ereignisRecht(
+  schritt: EreignisSchritt,
+  a: Akteur,
+  mandantId: string,
+  e: EreignisStand,
+): { erlaubt: boolean; verweigerung: VerweigerungGrund | null } {
+  const h = hindernisEreignis(schritt, a, mandantId, e);
+  return { erlaubt: h === null, verweigerung: h?.grund ?? null };
+}
+
 export async function schliesseEreignisAb(
   ctx: DienstKontext,
   eingabe: EreignisAktion,
@@ -622,20 +701,9 @@ export async function schliesseEreignisAb(
   const mandantId = x.mandantId.toLowerCase();
   pruefeKanzleiZugriff(ctx, mandantId);
   return aendere(ctx, async (tx, zeitpunkt) => {
-    const e = await ladeZumAendern(ctx, mandantId, x.ereignisId);
-    if (!ereignisErledigt(e.folgen)) {
-      throw new DienstFehler(
-        'KONFLIKT',
-        'Noch nicht möglich: jede Folge muss erledigt oder begründet verworfen sein.',
-      );
-    }
-    // Ohne erledigte Folge wäre das Abschließen ein Verwerfen – das braucht eine zweite Person.
-    if (!e.folgen.some((f) => f.status === 'ERLEDIGT')) {
-      throw new DienstFehler(
-        'KONFLIKT',
-        'Keine Folge ist erledigt. Bitte „Ereignis verwerfen“ verwenden – das bestätigt eine zweite Person.',
-      );
-    }
+    const e = await ladeGesperrt(ctx, mandantId, x.ereignisId);
+    const hindernis = hindernisEreignis('abschliessen', ctx.akteur, mandantId, e);
+    if (hindernis) throw hindernis;
     await tx.ereignis.update({
       where: { id: e.id },
       data: {
@@ -666,15 +734,9 @@ export async function beantrageEreignisVerwerfen(
   const mandantId = x.mandantId.toLowerCase();
   pruefeKanzleiZugriff(ctx, mandantId);
   return aendere(ctx, async (tx) => {
-    const e = await ladeZumAendern(ctx, mandantId, x.ereignisId);
-    if (e.verwerfenBegruendung)
-      throw new DienstFehler('KONFLIKT', 'Das Verwerfen ist bereits beantragt.');
-    if (e.folgen.some((f) => f.status === 'ANGELEGT' || f.status === 'ERLEDIGT')) {
-      throw new DienstFehler(
-        'KONFLIKT',
-        'Es sind bereits Folgen angelegt. Diese einzeln erledigen oder verwerfen und das Ereignis dann abschließen.',
-      );
-    }
+    const e = await ladeGesperrt(ctx, mandantId, x.ereignisId);
+    const hindernis = hindernisEreignis('verwerfenBeantragen', ctx.akteur, mandantId, e);
+    if (hindernis) throw hindernis;
     await tx.ereignis.update({
       where: { id: e.id },
       data: { verwerfenBegruendung: x.begruendung, verwerfenBeantragtVon: ctx.akteur.id },
@@ -697,7 +759,7 @@ export async function beantrageEreignisVerwerfen(
  * (`verwerfenBeantragtVon`, nicht aus dem Audit). Ohne Wert ist keine
  * Bestätigung möglich (fail closed).
  */
-function antragsteller(e: Pick<Gesperrt, 'verwerfenBeantragtVon'>): string | null {
+function antragsteller(e: Pick<EreignisStand, 'verwerfenBeantragtVon'>): string | null {
   return e.verwerfenBeantragtVon;
 }
 
@@ -709,10 +771,10 @@ export async function bestaetigeEreignisVerwerfen(
   const mandantId = x.mandantId.toLowerCase();
   pruefeKanzleiZugriff(ctx, mandantId);
   return aendere(ctx, async (tx, zeitpunkt) => {
-    const e = await ladeZumAendern(ctx, mandantId, x.ereignisId);
-    if (!e.verwerfenBegruendung) throw new DienstFehler('KONFLIKT', KEIN_ANTRAG);
+    const e = await ladeGesperrt(ctx, mandantId, x.ereignisId);
+    const hindernis = hindernisEreignis('verwerfenBestaetigen', ctx.akteur, mandantId, e);
+    if (hindernis) throw hindernis;
     const von = antragsteller(e);
-    if (!zweitePerson(ctx.akteur, von)) throw nichtBerechtigt('VIER_AUGEN', ZWEITE_PERSON);
     const offene = e.folgen.filter((f) => f.status === 'VORGESCHLAGEN');
     await tx.ereignisFolge.updateMany({
       where: { ereignisId: e.id, status: 'VORGESCHLAGEN' },

@@ -19,6 +19,7 @@
 // =============================================================================
 
 import { z } from 'zod';
+import { VERWEIGERUNG_GRUENDE } from '../fehler';
 import { BearbeitenRechteSchema, StandSchema } from './lesepfade';
 
 // ---------------------------------------------------------------------------
@@ -680,10 +681,36 @@ export const FolgeDetailSchema = z
   })
   .strict();
 
+/**
+ * Recht des Akteurs auf einen Schritt am Ereignis (wie die Rechte der
+ * Durchführung): `verweigerung` ist der Grund des `403`, den die Operation
+ * jetzt liefern würde (gleiche Vorbedingung im Dienst); `null` bei Erlaubnis
+ * oder wenn nur der Zustand entgegensteht (die Operation antwortet `409`).
+ * Im historischen Stand nie erlaubt.
+ */
+export const EreignisRechtSchema = z
+  .object({
+    erlaubt: z.boolean(),
+    verweigerung: z.enum(VERWEIGERUNG_GRUENDE).nullable(),
+  })
+  .strict()
+  .refine((r) => !r.erlaubt || r.verweigerung === null, {
+    message: 'erlaubt ohne Verweigerungsgrund',
+    path: ['verweigerung'],
+  });
+
 export const EreignisDetailSchema = EreignisListenEintragSchema.omit({ folgen: true })
   .extend({
     stand: TagSchema,
     historisch: z.boolean(),
+    rechte: z
+      .object({
+        abschliessen: EreignisRechtSchema,
+        verwerfen: z
+          .object({ beantragen: EreignisRechtSchema, bestaetigen: EreignisRechtSchema })
+          .strict(),
+      })
+      .strict(),
     folgen: z.array(FolgeDetailSchema),
     anlagen: z.array(AnlageSchema),
     meldung: z.object({ aktion: z.string(), at: iso, hash: z.string() }).strict().nullable(),
@@ -730,6 +757,12 @@ export const PortalMeldungErgebnisSchema = z
   .strict();
 export const PortalMeldungenSchema = z
   .object({
+    /**
+     * Melderecht des Akteurs (gesetzliche Vertretung oder Tax-Compliance-
+     * Beauftragte:r mit aktiver Rolle) – dieselbe Regel wie `POST …/portal/ereignisse`.
+     */
+    melden: z.boolean(),
+    /** Für den Mandanten besteht ein Tax-CMS (sonst nimmt das Melden nichts an). */
     programmVorhanden: z.boolean(),
     meldungen: z.array(
       z

@@ -167,8 +167,10 @@ export async function ladePortalMeldungen(
   const rollen = await ladeKontaktRollen(ctx.tx, ctx.akteur);
   if (!kannLesen(ctx.akteur, mandantId, rollen)) throw new DienstFehler('NICHT_GEFUNDEN');
   await pruefeMandant(ctx.tx, mandantId);
+  // Dieselbe Regel wie `meldeEreignis` (Kennzeichen = Ergebnis der Prüfung dort).
+  const melden = darfEreignisMelden(ctx.akteur, mandantId, rollen);
   const programm = await programmVon(ctx.tx, mandantId);
-  if (!programm) return { programmVorhanden: false, meldungen: [], namen: [] };
+  if (!programm) return { melden, programmVorhanden: false, meldungen: [], namen: [] };
   const roh = await ctx.tx.ereignis.findMany({
     where: { programmId: programm.id, quelle: 'PORTAL' },
     orderBy: { gemeldetAm: 'desc' },
@@ -185,6 +187,7 @@ export async function ladePortalMeldungen(
   });
   const meldungen = roh.map((m) => ({ ...m, gemeldetAm: isoZeit(m.gemeldetAm) }));
   return {
+    melden,
     programmVorhanden: true,
     meldungen,
     namen: await namenListe(

@@ -339,12 +339,34 @@ export const DurchfuehrungWertSchema = z
   })
   .strict();
 
+/**
+ * Kennzahl in der Prüfung: vom Dienst berechnete Werte, damit Kanzlei und
+ * Portal dieselben Differenzen zeigen wie die Prüfung beim Einreichen (statt
+ * sie selbst zu rechnen).
+ */
+export const KennzahlPruefungSchema = z
+  .object({
+    key: z.string(),
+    label: z.string(),
+    /** Erfasster Wert bzw. berechnete Differenz (a − b aus `differenzAus`, auf Cent gerundet). */
+    wert: z.number().nullable(),
+    /** Abweichung gegen das Soll bzw. die Differenz selbst; null = keine Toleranzprüfung. */
+    abweichung: z.number().nullable(),
+    /** Lage zur Toleranz der Kontrolle (`AUSSERHALB` ohne Erklärung steht auch in `ausserhalb`). */
+    lage: z.enum(['OK', 'ERKLAERT', 'AUSSERHALB']).nullable(),
+    /** Differenzkennzahl (berechnet, nicht erfasst). */
+    berechnet: z.boolean(),
+  })
+  .strict();
+
 export const EinreichPruefungSchema = z
   .object({
     schritteErledigt: z.number().int(),
     schritteGesamt: z.number().int(),
     werteFehlend: z.array(z.string()),
     ausserhalb: z.array(z.string()),
+    /** Je Kennzahl der Kontrolle die berechneten Werte (Reihenfolge der Kontrolle). */
+    kennzahlen: z.array(KennzahlPruefungSchema),
     nachweise: z.number().int(),
     mindestNachweise: z.number().int(),
     ergebnis: DurchfuehrungErgebnisSchema.nullable(),

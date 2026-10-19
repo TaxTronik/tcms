@@ -356,6 +356,46 @@ describe('Einreichprüfung', () => {
       ergebnisKommentar: null,
     });
     expect(p.maengel).toEqual(['Abweichung außerhalb der Toleranz ohne Erklärung: Differenz']);
+    // Berechnete Werte je Kennzahl (Differenz a − b auf Cent), nicht nur Kennzeichen.
+    expect(p.kennzahlen).toEqual([
+      { key: 'a', label: 'A', wert: 110, abweichung: null, lage: null, berechnet: false },
+      { key: 'b', label: 'B', wert: 100, abweichung: null, lage: null, berechnet: false },
+      {
+        key: 'd',
+        label: 'Differenz',
+        wert: 10,
+        abweichung: 10,
+        lage: 'AUSSERHALB',
+        berechnet: true,
+      },
+    ]);
+    const cent = pruefeEinreichung({
+      schritte: [],
+      kennzahlen: [...defs, { key: 's', label: 'Saldo', sollEur: 0 }],
+      werte: leseWerte(
+        {
+          a: { wert: 100.1 },
+          b: { wert: 100.03 },
+          s: { wert: -3.333, bemerkung: 'Rundung', erklaert: true },
+        },
+        [...defs, { key: 's', label: 'Saldo', sollEur: 0 }],
+      ),
+      toleranzEur: 0,
+      nachweise: 0,
+      mindestNachweise: 0,
+      ergebnis: null,
+      ergebnisKommentar: null,
+    });
+    expect(cent.kennzahlen.find((k) => k.key === 'd')).toMatchObject({
+      wert: 0.07,
+      abweichung: 0.07,
+    });
+    expect(cent.kennzahlen.find((k) => k.key === 's')).toMatchObject({
+      wert: -3.333,
+      abweichung: -3.33,
+      lage: 'ERKLAERT',
+    });
+    expect(cent.ausserhalb).toEqual(['Differenz']);
     const mitBefund = pruefeEinreichung({
       schritte: [{ erledigt: true }],
       kennzahlen: defs,

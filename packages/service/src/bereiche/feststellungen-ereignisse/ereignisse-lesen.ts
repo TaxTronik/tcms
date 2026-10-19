@@ -29,6 +29,7 @@ import {
 import { statusAm } from '@tcms/domain';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
+import { ereignisRecht, type EreignisSchritt } from './ereignisse';
 import {
   isoTag,
   isoTagOderNull,
@@ -365,10 +366,24 @@ export async function ladeEreignis(
           begruendung: e.verwerfenBegruendung,
         }
       : null;
+  // Rechte-Kennzeichen auf dem aktuellen Stand der Zeile, mit derselben
+  // Vorbedingung wie die Operationen (`hindernisEreignis`); im historischen
+  // Stand schreibgeschützt (Regel 6: weder erlaubt noch ein 403-Grund).
+  const recht = (schritt: EreignisSchritt) =>
+    historisch
+      ? { erlaubt: false, verweigerung: null }
+      : ereignisRecht(schritt, ctx.akteur, mandantId, e);
   return {
     ...basis,
     stand: isoTag(stand),
     historisch,
+    rechte: {
+      abschliessen: recht('abschliessen'),
+      verwerfen: {
+        beantragen: recht('verwerfenBeantragen'),
+        bestaetigen: recht('verwerfenBestaetigen'),
+      },
+    },
     folgen,
     anlagen,
     meldung: meldungRoh

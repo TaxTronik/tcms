@@ -539,6 +539,121 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
     expect(await auditZahl(w, e.id, 'tcms.ereignis.abgeschlossen')).toBe(1);
   });
 
+  it('Rechte im Detail (abschließen, Verwerfen beantragen/bestätigen) = Ergebnis der Operation', async () => {
+    type Schritt = 'abschliessen' | 'beantragen' | 'bestaetigen';
+    const op = (schritt: Schritt, a: Akteur, ereignisId: string) =>
+      im(a, (ctx) => {
+        const z = { mandantId: w.mandant, ereignisId };
+        if (schritt === 'abschliessen') return schliesseEreignisAb(ctx, z);
+        if (schritt === 'beantragen')
+          return beantrageEreignisVerwerfen(ctx, { ...z, begruendung: BEGRUENDUNG });
+        return bestaetigeEreignisVerwerfen(ctx, z);
+      });
+    /** Liest das Kennzeichen, führt den Schritt aus und vergleicht: erlaubt ⇔ Erfolg, sonst 403 mit Grund bzw. 409. */
+    const vergleiche = async (schritt: Schritt, a: Akteur, ereignisId: string) => {
+      const d = await im(a, (ctx) => ladeEreignis(ctx, { mandantId: w.mandant, ereignisId }));
+      expect(EreignisDetailSchema.parse(d)).toEqual(d);
+      const recht =
+        schritt === 'abschliessen'
+          ? d.rechte.abschliessen
+          : schritt === 'beantragen'
+            ? d.rechte.verwerfen.beantragen
+            : d.rechte.verwerfen.bestaetigen;
+      if (recht.erlaubt) {
+        await expect(op(schritt, a, ereignisId)).resolves.toBeTruthy();
+      } else {
+        const f = await fehlerVon(op(schritt, a, ereignisId));
+        if (recht.verweigerung) {
+          expect(f, schritt).toMatchObject({ code: 'NICHT_BERECHTIGT', grund: recht.verweigerung });
+        } else expect(f.code, schritt).toBe('KONFLIKT');
+      }
+      return recht;
+    };
+
+    // Neues Ereignis (offene Vorschläge): abschließen nur Zustand, Leser ohne Recht.
+    const e = await neuesEreignis();
+    expect(await vergleiche('abschliessen', A.leser, e.id)).toEqual({
+      erlaubt: false,
+      verweigerung: 'BEARBEITEN',
+    });
+    expect(await vergleiche('abschliessen', A.hb, e.id)).toEqual({
+      erlaubt: false,
+      verweigerung: null,
+    });
+    expect(await vergleiche('bestaetigen', A.hb, e.id)).toEqual({
+      erlaubt: false,
+      verweigerung: null,
+    });
+    expect(await vergleiche('beantragen', A.leser, e.id)).toEqual({
+      erlaubt: false,
+      verweigerung: 'BEARBEITEN',
+    });
+    expect(await vergleiche('beantragen', A.hb, e.id)).toEqual({
+      erlaubt: true,
+      verweigerung: null,
+    });
+    // Antrag liegt vor: Antragsteller → VIER_AUGEN, zweite Person darf, erneut beantragen → Zustand.
+    expect(await vergleiche('beantragen', A.zbt, e.id)).toEqual({
+      erlaubt: false,
+      verweigerung: null,
+    });
+    expect(await vergleiche('bestaetigen', A.hb, e.id)).toEqual({
+      erlaubt: false,
+      verweigerung: 'VIER_AUGEN',
+    });
+    expect(await vergleiche('bestaetigen', A.leser, e.id)).toEqual({
+      erlaubt: false,
+      verweigerung: 'BEARBEITEN',
+    });
+    expect(await vergleiche('bestaetigen', A.zbt, e.id)).toEqual({
+      erlaubt: true,
+      verweigerung: null,
+    });
+    // Verworfen: nichts mehr möglich, Recht vor Zustand.
+    for (const s of ['abschliessen', 'beantragen', 'bestaetigen'] as const) {
+      expect(await vergleiche(s, A.zbt, e.id), s).toEqual({ erlaubt: false, verweigerung: null });
+      expect(await vergleiche(s, A.leser, e.id), s).toEqual({
+        erlaubt: false,
+        verweigerung: 'BEARBEITEN',
+      });
+    }
+
+    // Abschließen erlaubt, sobald eine Folge erledigt und der Rest verworfen ist.
+    const z = await neuesEreignis('SONST');
+    const h = await folgeAn(z.id, 'HINWEIS');
+    for (const f of z.folgenListe) {
+      await im(A.hb, (ctx) =>
+        verwerfeFolge(ctx, {
+          mandantId: w.mandant,
+          ereignisId: z.id,
+          folgeId: f.id,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+    }
+    await im(A.hb, (ctx) =>
+      legeFolgenAn(ctx, { mandantId: w.mandant, ereignisId: z.id, folgen: [{ folgeId: h.id }] }),
+    );
+    await im(A.hb, (ctx) =>
+      erledigeFolge(ctx, { mandantId: w.mandant, ereignisId: z.id, folgeId: h.id }),
+    );
+    expect(await vergleiche('abschliessen', A.hb, z.id)).toEqual({
+      erlaubt: true,
+      verweigerung: null,
+    });
+
+    // Historischer Stand: schreibgeschützt (weder erlaubt noch ein 403-Grund).
+    const alt = await im(A.hb, (ctx) =>
+      ladeEreignis(ctx, { mandantId: w.mandant, ereignisId: z.id, stand: '2026-10-10' }),
+    );
+    expect(alt.historisch).toBe(true);
+    const nie = { erlaubt: false, verweigerung: null };
+    expect(alt.rechte).toEqual({
+      abschliessen: nie,
+      verwerfen: { beantragen: nie, bestaetigen: nie },
+    });
+  });
+
   it('Verwerfen: Antragsteller (aus der Zeile) bestätigt nicht; zweite Person bestätigt, offene Vorschläge mit verworfen', async () => {
     const e = await neuesEreignis();
     await im(A.hb, (ctx) =>
@@ -872,6 +987,24 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
         (await fehlerVon(im(a, (ctx) => ladePortalMeldungen(ctx, { mandantId: w.mandant })))).code,
       ).toBe('NICHT_GEFUNDEN');
     }
+  });
+
+  it('Portal-Meldungen lesen: Melderecht = Ergebnis von „Ereignis melden"; Programm vorhanden', async () => {
+    const gesehen = new Set<boolean>();
+    for (const [wer, a] of Object.entries({ gv: A.gv, tcb: A.tcb, ma: A.ma, leser: A.leser })) {
+      const l = await im(a, (ctx) => ladePortalMeldungen(ctx, { mandantId: w.mandant }));
+      expect(l.programmVorhanden, wer).toBe(true);
+      let tatsaechlich = true;
+      try {
+        await im(a, (ctx) => meldeEreignis(ctx, meldung() as never));
+      } catch (e) {
+        expect((await fehlerVon(Promise.reject(e))).code, wer).toBe('NICHT_BERECHTIGT');
+        tatsaechlich = false;
+      }
+      expect(l.melden, wer).toBe(tatsaechlich);
+      gesehen.add(tatsaechlich);
+    }
+    expect(gesehen).toEqual(new Set([true, false]));
   });
 
   // ---------------------------------------------------------------------------

@@ -329,6 +329,9 @@ nicht erlaubter oder gleichzeitig geänderter Status `409`, Mängel beim Einreic
 
 Nachweise sind Verweise der kanzleikonsole (`{ verweis: { dokumentId (UUID), dateiname, mime,
 groesse, sha256 } }`); eine Dokument-ID gehört zu genau einem Mandanten und einem Inhalt.
+Die Prüfung einer Durchführung (`pruefung`, Kanzlei-Detail, Portal-Aufgabe, Speichern) liefert je
+Kennzahl die vom Dienst berechneten Werte (`kennzahlen`: erfasster Wert bzw. Differenz a − b, Abweichung
+gegen Soll, Toleranzlage) – dieselbe Rechnung wie beim Einreichen.
 
 **Risikoinventar, Kontrollmatrix, Geschäftsprofil** (`apps/api/src/routen/risiken-kontrollen.ts`,
 nur Kanzleipersonen mit `cli.id` = Mandant; Lesen mit `?stand=YYYY-MM-DD`, Schreiben ohne Stichtag):
@@ -384,6 +387,12 @@ lesbare (RT-01).
 | POST    | `portal/ereignisse` (Portal, 201, Anlagen nur als Verweise)               | GV oder TCB des eigenen Mandanten                                                               |
 | GET     | `laender`                                                                 | Kanzlei mit Bezug                                                                               |
 | POST    | `laender` (201), `laender/staende` (201)                                  | `kannBearbeiten`                                                                                |
+
+`GET ereignisse/{id}` trägt `rechte` für `abschliessen` und `verwerfen.beantragen`/`verwerfen.bestaetigen`,
+je `{ erlaubt, verweigerung }`: `verweigerung` ist der Grund des `403`, den die Operation jetzt liefern
+würde (dieselbe Vorbedingung `hindernisEreignis` wie die Operation), `null` bei Erlaubnis oder wenn nur der
+Zustand entgegensteht (`409`); im historischen Stand nie erlaubt. `GET portal/ereignisse` liefert `melden`
+(Melderecht wie `POST portal/ereignisse`: GV oder TCB) und `programmVorhanden`.
 
 `GET laender` liefert je Land im Monitor `bezuege` (jüngster Stand bis zum Stichtag, deterministisch
 aus seinen Merkmalen): aktive Risiken mit Länderbezug (Code und Grund: Fernverkäufe, Steuersätze, OSS,

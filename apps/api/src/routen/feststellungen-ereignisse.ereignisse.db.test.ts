@@ -4,7 +4,7 @@
 // =============================================================================
 
 import { randomBytes } from 'node:crypto';
-import { EreignisDetailSchema } from '@tcms/contract';
+import { EreignisDetailSchema, PortalMeldungenSchema } from '@tcms/contract';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   AKTIV,
@@ -18,7 +18,9 @@ import {
   FRIST,
   GV,
   HB,
+  kontaktClaims,
   landEingabe,
+  M,
   naechsteNr,
   naechstesLand,
   P,
@@ -242,5 +244,49 @@ describe.skipIf(!AKTIV)('API Ereignisse und Portal gegen PostgreSQL', () => {
     const e = await ereignis();
     const ed = await rufe(HB, 'GET', `${B}/ereignisse/${e.id}`);
     expect(EreignisDetailSchema.parse(ed.json['daten']).id).toBe(e.id);
+  });
+
+  it('Detail: Rechte je Schritt mit Grund; Verwerfen bestätigt nur eine zweite Person', async () => {
+    const e = await ereignis();
+    const lies = async (wer: typeof HB) =>
+      EreignisDetailSchema.parse((await rufe(wer, 'GET', `${B}/ereignisse/${e.id}`)).json['daten'])
+        .rechte;
+    expect(await lies(HB)).toEqual({
+      abschliessen: { erlaubt: false, verweigerung: null },
+      verwerfen: {
+        beantragen: { erlaubt: true, verweigerung: null },
+        bestaetigen: { erlaubt: false, verweigerung: null },
+      },
+    });
+    const antrag = await rufe(HB, 'POST', `${B}/ereignisse/${e.id}/verwerfen/beantragen`, {
+      begruendung: BEGRUENDUNG,
+    });
+    expect(antrag.status).toBe(200);
+    expect((await lies(HB)).verwerfen.bestaetigen).toEqual({
+      erlaubt: false,
+      verweigerung: 'VIER_AUGEN',
+    });
+    const selbst = await rufe(HB, 'POST', `${B}/ereignisse/${e.id}/verwerfen/bestaetigen`);
+    expect(selbst.status).toBe(403);
+    expect(selbst.json['fehler']).toMatchObject({ grund: 'VIER_AUGEN' });
+    expect((await lies(ZBT)).verwerfen.bestaetigen).toEqual({ erlaubt: true, verweigerung: null });
+  });
+
+  it('Portal-Meldungen: Melderecht (GV ja, Mitarbeitende nein) und Programm vorhanden', async () => {
+    const gv = PortalMeldungenSchema.parse(
+      (await rufe(GV(), 'GET', `${B}/portal/ereignisse`)).json['daten'],
+    );
+    expect(gv).toMatchObject({ melden: true, programmVorhanden: true });
+    const ma = PortalMeldungenSchema.parse(
+      (await rufe(kontaktClaims(M, P.ma), 'GET', `${B}/portal/ereignisse`)).json['daten'],
+    );
+    expect(ma).toMatchObject({ melden: false, programmVorhanden: true });
+    const melden = await rufe(
+      kontaktClaims(M, P.ma),
+      'POST',
+      `${B}/portal/ereignisse`,
+      portalMeldung([]),
+    );
+    expect(melden.status).toBe(403);
   });
 });

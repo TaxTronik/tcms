@@ -163,7 +163,8 @@ const INVENTAR: Record<string, string[]> = {
     'BEARBEITEN', // ladeZumAendern
     'BEARBEITEN', // erledigeFolge (oder zuständig)
     'BEARBEITEN', // verwerfeFolge
-    'VIER_AUGEN', // bestaetigeEreignisVerwerfen
+    'BEARBEITEN', // hindernisEreignis: abschließen, Verwerfen beantragen/bestätigen (auch `rechte`)
+    'VIER_AUGEN', // hindernisEreignis: Verwerfen bestätigen, zweite Person (auch `rechte`)
     'BEARBEITEN', // erfasseEreignis
   ],
   'packages/service/src/bereiche/feststellungen-ereignisse/feststellungen.ts': [
