@@ -200,7 +200,10 @@ mit lokaler Dateiablage, der Dienst einen Port, der nur Verweise annimmt.
 - Codes: `400 UNGUELTIG` (zod, mit `felder`), `401 NICHT_AUTHENTIFIZIERT`,
   `403 NICHT_BERECHTIGT` (mit fachlichem Grund, z. B. Vier-Augen),
   `404 NICHT_GEFUNDEN` (auch fremder Tenant/Mandant), `409 KONFLIKT`
-  (Status hat sich geändert, Doppelentscheidung), `413 ZU_GROSS`.
+  (Status hat sich geändert, Doppelentscheidung), `413 ZU_GROSS`. Wo der
+  Aufrufer den gesehenen Status mitschickt (Feststellung weiterschalten,
+  `von`), ist ein auf diesem Stand fachlich gesperrter Schritt `400` mit
+  Feldfehler, `409` nur die gleichzeitige Änderung.
 - `grund` (Stufe 5) steht genau bei `403` und dort immer: ein Wert aus
   `VERWEIGERUNG_GRUENDE` (`BEARBEITEN`, `WUERDIGEN`, `VIER_AUGEN`,
   `VERWALTUNG`, `VERTRAULICH`, `DURCHFUEHREN`, `GEGENZEICHNEN`, `PARTEI`,

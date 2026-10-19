@@ -277,7 +277,7 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
     expect(await auditZahl(w, f.id, 'tcms.feststellung.status')).toBe(1);
   });
 
-  it('weiter: veralteter Status (von) → KONFLIKT; blockiert → KONFLIKT', async () => {
+  it('weiter: veralteter Status (von) → KONFLIKT; fachlich gesperrt → UNGUELTIG mit Feld von', async () => {
     const f = await neueFeststellung(w, { status: 'IN_WUERDIGUNG' });
     expect(
       (
@@ -302,8 +302,85 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
         }),
       ),
     );
-    expect(e.code).toBe('KONFLIKT');
+    expect(e.code).toBe('UNGUELTIG');
     expect(e.message).toMatch(/§-153/);
+    expect(e.felder).toEqual({ von: [e.message] });
+    // Ohne Maßnahme (§ 153 erledigt): ebenfalls gesperrt, nicht geschaltet.
+    const ohne = await neueFeststellung(w, { status: 'IN_WUERDIGUNG', auswirkung: 'NEIN' });
+    const m = await fehlerVon(
+      im(A.hb, (ctx) =>
+        schalteFeststellungWeiter(ctx, {
+          mandantId: w.mandant,
+          feststellungId: ohne.id,
+          von: 'IN_WUERDIGUNG',
+        }),
+      ),
+    );
+    expect(m).toMatchObject({
+      code: 'UNGUELTIG',
+      felder: { von: [expect.stringMatching(/Maßnahme/)] },
+    });
+    // Offene Maßnahme bzw. fehlende Nachkontrolle: gesperrt.
+    for (const [status, muster] of [
+      ['MASSNAHMEN_OFFEN', /offene Maßnahmen/],
+      ['NACHKONTROLLE', /Nachkontrolle/],
+    ] as const) {
+      const g = await neueFeststellung(w, { status, auswirkung: 'NEIN' });
+      await neueMassnahme(w, g.id, w.p.hb);
+      const x = await fehlerVon(
+        im(A.hb, (ctx) =>
+          schalteFeststellungWeiter(ctx, {
+            mandantId: w.mandant,
+            feststellungId: g.id,
+            von: status,
+          }),
+        ),
+      );
+      expect(x, status).toMatchObject({
+        code: 'UNGUELTIG',
+        felder: { von: [expect.stringMatching(muster)] },
+      });
+    }
+    // Geschlossen bzw. verworfen auf dem gesehenen Stand: kein weiterer Schritt (400);
+    // ein veralteter Stand dagegen bleibt die gleichzeitige Änderung (409).
+    for (const status of ['GESCHLOSSEN', 'VERWORFEN'] as const) {
+      const g = await neueFeststellung(w, { status });
+      const gesehen = await fehlerVon(
+        im(A.hb, (ctx) =>
+          schalteFeststellungWeiter(ctx, {
+            mandantId: w.mandant,
+            feststellungId: g.id,
+            von: status,
+          }),
+        ),
+      );
+      expect(gesehen, status).toMatchObject({
+        code: 'UNGUELTIG',
+        felder: { von: [expect.any(String)] },
+      });
+      const veraltet = await fehlerVon(
+        im(A.hb, (ctx) =>
+          schalteFeststellungWeiter(ctx, {
+            mandantId: w.mandant,
+            feststellungId: g.id,
+            von: 'NACHKONTROLLE',
+          }),
+        ),
+      );
+      expect(veraltet.code, status).toBe('KONFLIKT');
+    }
+    // Recht vor Zustand: ohne Bearbeitungsrecht 403, auch bei gesperrtem Schritt.
+    const r = await fehlerVon(
+      im(A.leser, (ctx) =>
+        schalteFeststellungWeiter(ctx, {
+          mandantId: w.mandant,
+          feststellungId: f.id,
+          von: 'IN_WUERDIGUNG',
+        }),
+      ),
+    );
+    expect(r).toMatchObject({ code: 'NICHT_BERECHTIGT', grund: 'BEARBEITEN' });
+    expect(await auditZahl(w, f.id, 'tcms.feststellung.status')).toBe(0);
   });
 
   it('weiter: Schritt wäre möglich, aber gesehener Status veraltet → KONFLIKT, nichts geschaltet', async () => {

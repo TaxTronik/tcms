@@ -220,6 +220,24 @@ describe.skipIf(!AKTIV)('API Feststellungen gegen PostgreSQL', () => {
     expect(r.status).toBe(400);
   });
 
+  it('weiter: fachlich gesperrter Schritt → 400 mit Feld von; veralteter Status → 409', async () => {
+    // §-153-Würdigung offen (Auswirkung JA): der Schritt nach IN_WUERDIGUNG ist gesperrt.
+    const f = await feststellung({ status: 'IN_WUERDIGUNG', auswirkung: 'JA' });
+    const gesperrt = await rufe(HB, 'POST', `${B}/feststellungen/${f.id}/weiter`, {
+      von: 'IN_WUERDIGUNG',
+    });
+    expect(gesperrt.status).toBe(400);
+    expect(gesperrt.json['fehler']).toMatchObject({
+      code: 'UNGUELTIG',
+      felder: { von: [expect.stringMatching(/§-153/)] },
+    });
+    const veraltet = await rufe(HB, 'POST', `${B}/feststellungen/${f.id}/weiter`, {
+      von: 'ERFASST',
+    });
+    expect(veraltet.status).toBe(409);
+    expect(veraltet.json['fehler']).toMatchObject({ code: 'KONFLIKT' });
+  });
+
   it('Antworten sind vertragskonform (Liste, Detail) und ohne Namen im Dienst', async () => {
     const f = await feststellung();
     const liste = await rufe(HB, 'GET', `${B}/feststellungen`);

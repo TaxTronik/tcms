@@ -135,6 +135,14 @@ export const FeststellungLesenSchema = z
 const feststellung = { ...mandant, feststellungId: ObjektIdSchema };
 
 // ---- Status weiterschalten ----
+/**
+ * Antworten: `409 KONFLIKT` nur, wenn der Status inzwischen ein anderer als
+ * `von` ist (gleichzeitige Änderung, TS-05). Ist der Schritt auf dem
+ * gesehenen Stand fachlich gesperrt (geschlossen/verworfen, kein weiterer
+ * Schritt, §-153-Würdigung offen, Maßnahme fehlt oder offen, Nachkontrolle
+ * fehlt), antwortet der Dienst `400 UNGUELTIG` mit `felder.von` (Grund als
+ * Text); fehlendes Recht bleibt `403` (vor dem Zustand geprüft).
+ */
 export const FeststellungWeiterBodySchema = z
   .object({
     /** Status, den der Aufrufer gesehen hat; weicht er ab → KONFLIKT (TS-05). */

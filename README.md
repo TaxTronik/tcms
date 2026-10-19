@@ -388,6 +388,11 @@ lesbare (RT-01).
 | GET     | `laender`                                                                 | Kanzlei mit Bezug                                                                               |
 | POST    | `laender` (201), `laender/staende` (201)                                  | `kannBearbeiten`                                                                                |
 
+`POST …/{id}/weiter` antwortet `409` nur, wenn der Status inzwischen ein anderer als `von` ist
+(gleichzeitige Änderung); ist der Schritt auf dem gesehenen Stand fachlich gesperrt (abgeschlossen, kein
+weiterer Schritt, §-153-Würdigung offen, Maßnahme fehlt oder offen, Nachkontrolle fehlt), `400 UNGUELTIG`
+mit dem Grund in `felder.von`.
+
 `GET ereignisse/{id}` trägt `rechte` für `abschliessen` und `verwerfen.beantragen`/`verwerfen.bestaetigen`,
 je `{ erlaubt, verweigerung }`: `verweigerung` ist der Grund des `403`, den die Operation jetzt liefern
 würde (dieselbe Vorbedingung `hindernisEreignis` wie die Operation), `null` bei Erlaubnis oder wenn nur der

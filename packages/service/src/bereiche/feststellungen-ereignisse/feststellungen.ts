@@ -162,9 +162,22 @@ function ergebnis(f: { id: string; nummer: string }, status: FeststellungErgebni
 // ---------------------------------------------------------------------------
 
 /**
+ * Fachlich gesperrter Schritt auf dem gesehenen Stand: `UNGUELTIG` mit
+ * Feldfehler `von` (der Aufrufer kann ihn erst nach einer anderen Handlung
+ * gehen); `KONFLIKT` bleibt der gleichzeitigen Änderung vorbehalten.
+ */
+function schrittGesperrt(text: string): DienstFehler {
+  return new DienstFehler('UNGUELTIG', text, { von: [text] });
+}
+
+/**
  * Schaltet die Feststellung einen Schritt weiter (`naechsterFeststellungsschritt`).
  * `von` ist der Status, den der Aufrufer gesehen hat: Zwei gleichzeitige
- * Klicks schalten so nicht zwei Schritte weiter (TS-05).
+ * Klicks schalten so nicht zwei Schritte weiter (TS-05). Unter der
+ * Zeilensperre: Recht und Vertraulichkeit (403), dann ein anderer als der
+ * gesehene Status → `KONFLIKT` (409, gleichzeitige Änderung), dann die
+ * fachlichen Sperren des gesehenen Stands (abgeschlossen, kein weiterer
+ * Schritt, Bedingung offen) → `UNGUELTIG` mit Feldfehler `von` (400).
  */
 export async function schalteFeststellungWeiter(
   ctx: DienstKontext,
@@ -174,8 +187,13 @@ export async function schalteFeststellungWeiter(
   const mandantId = e.mandantId.toLowerCase();
   pruefeKanzleiZugriff(ctx, mandantId);
   return aendere(ctx, async (tx, zeitpunkt) => {
-    const f = await ladeZumAendern(ctx, mandantId, e.feststellungId);
+    const f = await ladeGesperrt(ctx, mandantId, e.feststellungId);
+    pruefeBearbeiten(ctx, mandantId);
+    pruefeVertraulich(ctx, mandantId, f);
     if (f.status !== e.von) throw new DienstFehler('KONFLIKT', GEAENDERT);
+    if (f.status === 'GESCHLOSSEN' || f.status === 'VERWORFEN') {
+      throw schrittGesperrt(ABGESCHLOSSEN);
+    }
     const schritt = naechsterFeststellungsschritt({
       status: f.status,
       auswirkung: f.auswirkung,
@@ -186,10 +204,10 @@ export async function schalteFeststellungWeiter(
         f.nachkontrolle?.status === 'OHNE_BEFUND' && !!f.nachkontrolle.gegengezeichnetVon,
     });
     if (!schritt.ziel) {
-      throw new DienstFehler('KONFLIKT', 'Für diesen Status gibt es keinen weiteren Schritt.');
+      throw schrittGesperrt('Für diesen Status gibt es keinen weiteren Schritt.');
     }
     if (schritt.blockiert) {
-      throw new DienstFehler('KONFLIKT', `Noch nicht möglich: ${schritt.blockiert}.`);
+      throw schrittGesperrt(`Noch nicht möglich: ${schritt.blockiert}.`);
     }
     const ziel = schritt.ziel;
     const n = await tx.feststellung.updateMany({
