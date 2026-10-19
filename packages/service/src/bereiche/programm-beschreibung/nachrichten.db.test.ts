@@ -1,7 +1,8 @@
 // =============================================================================
 // Postausgang gegen PostgreSQL (DB_TESTS=1, DATABASE_URL = tcms_app): nur
 // Kanzleipersonen mit Verwaltungsrecht, tenantweit (RLS), Adressierung über
-// IDs (TS-06), Abruf protokolliert, Zustellung idempotent (auch gleichzeitig).
+// IDs (TS-06), Abruf protokolliert, Zustellung idempotent (auch gleichzeitig):
+// `zugestelltAm` gesetzt, Text geleert.
 // =============================================================================
 
 import { randomUUID } from 'node:crypto';
@@ -12,8 +13,6 @@ import {
   bestaetigeNachrichtZustellung,
   ladeOffeneNachrichten,
   legeNachrichtAn,
-  leseNachrichtAdresse,
-  nachrichtAdresse,
 } from './nachrichten';
 import {
   baueWelt,
@@ -29,28 +28,6 @@ import {
 } from './testwelt';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
-
-describe('Adresse im Postausgang (rein)', () => {
-  it('nur Zweck + kanonische UUID; alles andere wird nicht gelesen', () => {
-    const id = randomUUID();
-    expect(nachrichtAdresse('FREIGABE_CODE', id.toUpperCase())).toBe(`tcms:FREIGABE_CODE:${id}`);
-    expect(leseNachrichtAdresse(`tcms:FREIGABE_CODE:${id}`)).toEqual({
-      zweck: 'FREIGABE_CODE',
-      empfaengerId: id,
-    });
-    for (const roh of [
-      'Jana Weller',
-      `Jana Weller <jana@x.example>`,
-      `tcms:UNBEKANNT:${id}`,
-      `tcms:FREIGABE_CODE:${id}x`,
-      `tcms:FREIGABE_CODE:${id.toUpperCase()}`,
-      `xtcms:FREIGABE_CODE:${id}`,
-    ]) {
-      expect(leseNachrichtAdresse(roh), roh).toBeNull();
-    }
-    expect(() => nachrichtAdresse('FREIGABE_CODE', 'Jana Weller')).toThrow();
-  });
-});
 
 describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
   let w: Welt;
@@ -81,11 +58,6 @@ describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
         betreff: 'B3',
         text: 'T3',
       });
-      // Altbestand mit Namen statt ID und ein Präfix ohne gültige ID: werden nie ausgeliefert.
-      await tx.nachricht.create({ data: { an: 'Jana Weller', betreff: 'Alt', text: 'Alt' } });
-      await tx.nachricht.create({
-        data: { an: 'tcms:FREIGABE_CODE:Jana Weller', betreff: 'Falsch', text: 'Code 654321' },
-      });
       return [a, b, c];
     });
   });
@@ -93,7 +65,32 @@ describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
     await zweite?.$disconnect();
   });
 
-  it('liefert offene Nachrichten nach ID-Adresse, begrenzt, ohne Altbestand; Abruf im Audit (ohne Text)', async () => {
+  it('Anlage nur mit Personen-ID und bekanntem Zweck (TS-06, fail closed)', async () => {
+    for (const n of [
+      { empfaengerId: 'Jana Weller', zweck: 'FREIGABE_CODE' },
+      { empfaengerId: `${randomUUID()}x`, zweck: 'FREIGABE_CODE' },
+      { empfaengerId: randomUUID(), zweck: 'UNBEKANNT' },
+    ]) {
+      await expect(
+        inWelt(w, (tx) => legeNachrichtAn(tx, { ...n, betreff: 'x', text: 'x' } as never)),
+      ).rejects.toThrow(/Empfänger|Nachrichtenzweck/);
+    }
+    // Schreibweise der ID wird kanonisch gespeichert.
+    const id = randomUUID();
+    const nid = await inWelt(w, (tx) =>
+      legeNachrichtAn(tx, {
+        empfaengerId: id.toUpperCase(),
+        zweck: 'FREIGABE_ANGEFORDERT',
+        betreff: 'K',
+        text: 'K',
+      }),
+    );
+    const z = await inWelt(w, (tx) => tx.nachricht.findUniqueOrThrow({ where: { id: nid } }));
+    expect(z.empfaengerId).toBe(id);
+    await inWelt(w, (tx) => tx.nachricht.delete({ where: { id: nid } }));
+  });
+
+  it('liefert offene Nachrichten nach Alter, begrenzt; Abruf im Audit (ohne Text)', async () => {
     const r = await im(admin(), (ctx) => ladeOffeneNachrichten(ctx, {}));
     expect(NachrichtenOffenSchema.parse(r)).toEqual(r);
     expect(r.nachrichten.map((n) => n.id)).toEqual(ids);
@@ -137,17 +134,19 @@ describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
     }
   });
 
-  it('fremder Tenant: sieht nichts und löscht nichts', async () => {
+  it('fremder Tenant: sieht nichts und stellt nichts zu', async () => {
     const fremd = admin(randomUUID());
     expect(await im(fremd, (ctx) => ladeOffeneNachrichten(ctx, {}))).toEqual({ nachrichten: [] });
     const r = await im(fremd, (ctx) =>
       bestaetigeNachrichtZustellung(ctx, { nachrichtId: ids[1]! }),
     );
     expect(r).toEqual({ nachrichtId: ids[1], zugestellt: true });
-    expect(await inWelt(w, (tx) => tx.nachricht.count({ where: { id: ids[1] } }))).toBe(1);
+    expect(
+      await inWelt(w, (tx) => tx.nachricht.findUniqueOrThrow({ where: { id: ids[1] } })),
+    ).toMatchObject({ zugestelltAm: null, text: 'T2' });
   });
 
-  it('Zustellung löscht die Nachricht (Code verlässt das Tax-CMS), idempotent, Audit einmal', async () => {
+  it('Zustellung setzt zugestelltAm und leert den Text (Code verlässt das Tax-CMS), idempotent, Audit einmal', async () => {
     const a = admin();
     const r = await im(a, (ctx) => bestaetigeNachrichtZustellung(ctx, { nachrichtId: ids[0]! }));
     expect(r).toEqual({ nachrichtId: ids[0], zugestellt: true });
@@ -160,14 +159,18 @@ describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
       nachrichtId: 'unbekannt',
       zugestellt: true,
     });
-    const [rest, audit] = await inWelt(w, async (tx) => [
-      await tx.nachricht.count({ where: { id: ids[0] } }),
+    const [zeile, audit] = await inWelt(w, async (tx) => [
+      await tx.nachricht.findUniqueOrThrow({ where: { id: ids[0] } }),
       await tx.auditEvent.findMany({
         where: { aktion: 'tcms.nachricht.zugestellt', objektId: ids[0] },
       }),
     ]);
-    expect(rest).toBe(0);
+    const offen = await im(a, (ctx) => ladeOffeneNachrichten(ctx, {}));
+    expect(zeile.zugestelltAm).not.toBeNull();
+    expect(zeile.text).toBe('');
+    expect(offen.nachrichten.map((n) => n.id)).not.toContain(ids[0]);
     expect(audit).toHaveLength(1);
+    expect(JSON.stringify(audit[0]!.detail)).not.toContain('123456');
     expect(audit[0]!.detail).toEqual({ zweck: 'FREIGABE_CODE', empfaengerId: w.gv });
     expect(
       (await fehlerVon(im(a, (ctx) => bestaetigeNachrichtZustellung(ctx, { nachrichtId: 'x y' }))))

@@ -108,6 +108,9 @@ auf ein Objekt eines anderen Tenants scheitert also schon in der Datenbank.
 - Audit: Hashkette je Tenant (Kettenversion 2), Advisory-Lock je Tenant, `(tenant_id, prevHash)`
   eindeutig. `schreibeAudit(tx, …)` nimmt den Tenant aus dem Kontext.
 - Die Migrationshistorie beginnt mit `20261019000000_init` neu (kein Bestandsschutz).
+  `20261019120000_welle2_nachtraege` ergänzt Spalten, Teilindizes, den Einfrier-Trigger der
+  CMS-Beschreibung und den Schlüssel `(tenant_id, id)` für `Mandant` (keine neuen Tabellen; setzt
+  eine Datenbank ohne Bestandsdaten voraus und scheitert sonst an NOT NULL/CHECK).
 
 DB-Tests (RLS je Tabelle aus dem Katalog, Rechte, Tenantgrenzen, Audit-Kette bei parallelen
 Schreibern) laufen gegen eine migrierte Datenbank:
@@ -129,7 +132,7 @@ DB_TESTS=1 \
 packages/domain   Fachlogik ohne I/O: Katalog E-Commerce, Bewertung, Häufigkeitsmatrix,
                   Statusmodelle, Phasen, Grundelemente, Formatierung (mit Tests)
 packages/contract Vertrag mit der kanzleikonsole: Akteursbestätigung, Fehlercodes (ADR 0001)
-packages/db       Prisma-Schema, Init-Migration mit RLS, Rollen-Bootstrap, mitTenant,
+packages/db       Prisma-Schema, Migrationen (Init mit RLS), Rollen-Bootstrap, mitTenant,
                   Audit-Hashkette je Tenant, Seed
 packages/service  Kern der Fachoperationen: Dienstkontext (Transaktion, Akteur, Uhr, Ports),
                   Rechte über den Akteur, mitAudit, Nachweis-Ablage des Dienstes
@@ -310,19 +313,19 @@ liefert der Dienst für Nicht-Beteiligte nur maskiert (`maskiert: true`, Nummer 
 Rechte prüft `packages/service`, Eingaben und Antworten in
 `packages/contract/src/bereiche/programm-beschreibung.ts`):
 
-| Methode | Pfad                                                   | Recht (sonst `404` bzw. `403` mit Grund)      |
-| ------- | ------------------------------------------------------ | --------------------------------------------- |
-| GET     | `/v1/nachrichten/offen?limit=`                         | Kanzleiperson mit `rol.adm` (tenantweit)      |
-| POST    | `/v1/nachrichten/:nachrichtId/zugestellt`              | wie oben; idempotent, löscht die Nachricht    |
-| GET     | `…/einrichtung?berufstraegerId=&bearbeitungId=&…`      | `kannLesen`                                   |
-| POST    | `…/einrichtung/entwurf`, `…/einrichtung/anlegen`       | `kannBearbeiten`; ein Programm je Mandant     |
-| GET     | `…/beschreibung?stand=`                                | `kannLesen`                                   |
-| POST    | `…/beschreibung/versionen`, `…/versionen/:id/…`        | `kannBearbeiten`; Review-Abschluss: 2. Person |
-| POST    | `…/freigaben/:freigabeId/neuadressierung`              | `kannBearbeiten` (TS-06, auditiert)           |
-| GET     | `…/kommunikation/freigaben?stand=`                     | `kannLesen`                                   |
-| GET     | `…/portal/freigaben`                                   | Mandantenkontakt mit aktiver Rolle            |
-| POST    | `…/portal/freigaben/:freigabeId/code` bzw. `freigeben` | adressierte gesetzliche Vertretung            |
-| POST    | `…/portal/freigaben/:freigabeId/kenntnisnahme`         | adressierte Person                            |
+| Methode | Pfad                                                   | Recht (sonst `404` bzw. `403` mit Grund)         |
+| ------- | ------------------------------------------------------ | ------------------------------------------------ |
+| GET     | `/v1/nachrichten/offen?limit=`                         | Kanzleiperson mit `rol.adm` (tenantweit)         |
+| POST    | `/v1/nachrichten/:nachrichtId/zugestellt`              | wie oben; idempotent, leert Text, `zugestelltAm` |
+| GET     | `…/einrichtung?berufstraegerId=&bearbeitungId=&…`      | `kannLesen`                                      |
+| POST    | `…/einrichtung/entwurf`, `…/einrichtung/anlegen`       | `kannBearbeiten`; ein Programm je Mandant        |
+| GET     | `…/beschreibung?stand=`                                | `kannLesen`                                      |
+| POST    | `…/beschreibung/versionen`, `…/versionen/:id/…`        | `kannBearbeiten`; Review-Abschluss: 2. Person    |
+| POST    | `…/freigaben/:freigabeId/neuadressierung`              | `kannBearbeiten` (TS-06, auditiert)              |
+| GET     | `…/kommunikation/freigaben?stand=`                     | `kannLesen`                                      |
+| GET     | `…/portal/freigaben`                                   | Mandantenkontakt mit aktiver Rolle               |
+| POST    | `…/portal/freigaben/:freigabeId/code` bzw. `freigeben` | adressierte gesetzliche Vertretung               |
+| POST    | `…/portal/freigaben/:freigabeId/kenntnisnahme`         | adressierte Person                               |
 
 Bestätigungscodes erreichen die Empfänger nur über den Postausgang (Adresse = Personen-ID); keine
 andere Antwort, kein Log und kein Audit enthält einen Code. Ein falscher Code ergibt `200` mit

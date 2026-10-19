@@ -656,7 +656,11 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
       expect(f.empfaengerId).toBe(a.personen.gv);
       expect(f.status).toBe('OFFEN');
       // TS-06: Nachricht über die Kontakt-ID adressiert.
-      const n = await lies((tx) => tx.nachricht.findFirst({ where: { an: a.personen.gv } }));
+      const n = await lies((tx) =>
+        tx.nachricht.findFirst({
+          where: { empfaengerId: a.personen.gv, zweck: 'FREIGABE_ANGEFORDERT' },
+        }),
+      );
       expect(n).not.toBeNull();
       const zweiteAnf = await fehlerVon(
         rufe(akt.bt, (ctx) =>

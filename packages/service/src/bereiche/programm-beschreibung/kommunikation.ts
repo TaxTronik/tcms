@@ -45,7 +45,7 @@ export async function ladeFreigabenHistorie(
       status: spaeter ? 'OFFEN' : f.status,
       erledigtAm: spaeter ? null : iso(f.erledigtAm),
       anmerkung: spaeter ? null : f.anmerkung,
-      codeStatus: historisch ? 'KEIN' : codeStatus(f.codeHash, f.codeAblauf, jetzt),
+      codeStatus: historisch ? 'KEIN' : codeStatus(f, jetzt),
       codeAblauf: historisch ? null : iso(f.codeAblauf),
     };
   });

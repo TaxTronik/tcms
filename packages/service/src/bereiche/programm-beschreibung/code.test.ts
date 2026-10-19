@@ -11,7 +11,6 @@ import {
   erzeugeCode,
   leseCodeZustand,
   MAX_FEHLVERSUCHE,
-  schreibeCodeZustand,
 } from './code';
 
 vi.mock('node:crypto', async (original) => {
@@ -54,35 +53,42 @@ describe('Bestätigungscode', () => {
     expect(timingSafeEqual).toHaveBeenCalledTimes(2);
   });
 
-  it('liest den gespeicherten Zustand streng; Unbekanntes gilt als gesperrt', () => {
-    expect(leseCodeZustand(null)).toEqual({ fehlversuche: 0, hash: null });
-    expect(leseCodeZustand(`v1:3:${HEX}`)).toEqual({ fehlversuche: 3, hash: HEX });
-    expect(leseCodeZustand('v1:2:')).toEqual({ fehlversuche: 2, hash: null });
+  it('liest den gespeicherten Zustand streng (Hash + Zähler); Unbekanntes gilt als gesperrt', () => {
+    const z = (codeHash: string | null, codeFehlversuche: number) =>
+      leseCodeZustand({ codeHash, codeFehlversuche });
+    expect(z(null, 0)).toEqual({ fehlversuche: 0, hash: null });
+    expect(z(HEX, 3)).toEqual({ fehlversuche: 3, hash: HEX });
+    expect(z(null, 2)).toEqual({ fehlversuche: 2, hash: null });
     const gesperrt = { fehlversuche: MAX_FEHLVERSUCHE, hash: null };
-    for (const roh of [
-      HEX,
-      `v1:5:${HEX}`,
-      'v1:6:',
-      `v2:0:${HEX}`,
-      `v1:0:${HEX.toUpperCase()}`,
-      '',
-      'v1:-1:',
-    ]) {
-      expect(leseCodeZustand(roh), roh).toEqual(gesperrt);
+    for (const [hash, n] of [
+      [HEX, MAX_FEHLVERSUCHE],
+      [null, MAX_FEHLVERSUCHE],
+      [HEX, 6],
+      [HEX, -1],
+      [HEX, 1.5],
+      [HEX, Number.NaN],
+      [`v1:0:${HEX}`, 0],
+      [HEX.toUpperCase(), 0],
+      ['', 0],
+      [`${HEX}0`, 0],
+    ] as const) {
+      expect(z(hash, n), `${hash}/${n}`).toEqual(gesperrt);
     }
-    expect(schreibeCodeZustand({ fehlversuche: 0, hash: null })).toBeNull();
-    expect(schreibeCodeZustand({ fehlversuche: 0, hash: HEX })).toBe(`v1:0:${HEX}`);
-    expect(schreibeCodeZustand({ fehlversuche: MAX_FEHLVERSUCHE, hash: HEX })).toBe('v1:5:');
-    expect(schreibeCodeZustand({ fehlversuche: 99, hash: HEX })).toBe('v1:5:');
   });
 
   it('Frist und Status auf übergebener (echter) Zeit', () => {
     const jetzt = new Date('2030-01-01T00:00:00Z');
     expect(codeAblaufAb(jetzt).getTime() - jetzt.getTime()).toBe(CODE_GUELTIG_TAGE * 86_400_000);
     const ablauf = codeAblaufAb(jetzt);
-    expect(codeStatus(`v1:0:${HEX}`, ablauf, jetzt)).toBe('AKTIV');
-    expect(codeStatus(`v1:0:${HEX}`, ablauf, new Date(ablauf.getTime() + 1))).toBe('ABGELAUFEN');
-    expect(codeStatus('v1:5:', null, jetzt)).toBe('GESPERRT');
-    expect(codeStatus(null, null, jetzt)).toBe('KEIN');
+    const f = (codeHash: string | null, codeFehlversuche: number, codeAblauf: Date | null) => ({
+      codeHash,
+      codeFehlversuche,
+      codeAblauf,
+    });
+    expect(codeStatus(f(HEX, 0, ablauf), jetzt)).toBe('AKTIV');
+    expect(codeStatus(f(HEX, 0, ablauf), new Date(ablauf.getTime() + 1))).toBe('ABGELAUFEN');
+    expect(codeStatus(f(null, MAX_FEHLVERSUCHE, null), jetzt)).toBe('GESPERRT');
+    expect(codeStatus(f(HEX, MAX_FEHLVERSUCHE, ablauf), jetzt)).toBe('GESPERRT');
+    expect(codeStatus(f(null, 0, null), jetzt)).toBe('KEIN');
   });
 });

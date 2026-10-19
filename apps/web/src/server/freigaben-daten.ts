@@ -1,12 +1,11 @@
 import 'server-only';
-import { DienstFehler, NACHRICHT_ZWECKE, type PortalFreigabenView } from '@tcms/contract';
+import { DienstFehler, type PortalFreigabenView } from '@tcms/contract';
 import type { Abschnitt } from '@tcms/domain';
 import {
   FREIGABE_CODE_ARTEN,
   freigabeBrauchtCode,
   imDienst,
   ladePortalFreigaben,
-  nachrichtAdresse,
 } from '@tcms/service';
 import type { BausteinSatz, Snapshot } from '@/components/beschreibung/typen';
 import { db, DEMO_PORTS, demoPersonen } from './demo';
@@ -150,24 +149,15 @@ export async function ladeFreigaben(mandantId: string): Promise<FreigabenUebersi
 }
 
 /**
- * Letzte Nachrichten des Entwicklungs-Postausgangs an eine Person (nur Demo mit
- * Demo-Login). Adressiert über die ID (TS-06); ältere Demo-Zeilen tragen noch
- * Name bzw. Adresse.
+ * Letzte noch nicht zugestellte Nachrichten des Entwicklungs-Postausgangs an
+ * eine Person (nur Demo mit Demo-Login). Adressiert über die ID (TS-06).
  */
 export async function ladePostausgang(
   nutzer: { id: string; name: string; email: string },
   anzahl = 3,
 ) {
   return db.nachricht.findMany({
-    where: {
-      an: {
-        in: [
-          ...NACHRICHT_ZWECKE.map((z) => nachrichtAdresse(z, nutzer.id)),
-          `${nutzer.name} <${nutzer.email}>`,
-          nutzer.name,
-        ],
-      },
-    },
+    where: { empfaengerId: nutzer.id.toLowerCase(), zugestelltAm: null },
     orderBy: { createdAt: 'desc' },
     take: anzahl,
   });

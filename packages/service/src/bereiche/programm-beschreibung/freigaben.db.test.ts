@@ -26,6 +26,7 @@ import {
   ladePortalFreigaben,
 } from './freigaben';
 import {
+  alsEigentuemerOhneTrigger,
   auditZu,
   baueWelt,
   btA,
@@ -62,7 +63,7 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
   async function codeAusPostausgang(empfaengerId: string): Promise<string> {
     const n = await inWelt(w, (tx) =>
       tx.nachricht.findFirstOrThrow({
-        where: { an: `tcms:FREIGABE_CODE:${empfaengerId}` },
+        where: { empfaengerId, zweck: 'FREIGABE_CODE', zugestelltAm: null },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       }),
     );
@@ -156,7 +157,9 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
       darfKenntnisnehmen: false,
       code: null,
     });
-    expect(JSON.stringify(gv)).not.toMatch(/v1:\d:|codeHash/);
+    expect(JSON.stringify(gv)).not.toMatch(/codeHash|codeFehlversuche/);
+    const gespeichert = (await freigabeZeile(beschreibungsFreigabe)).codeHash!;
+    expect(JSON.stringify(gv)).not.toContain(gespeichert);
     expect(JSON.stringify(gv)).not.toContain(await codeAusPostausgang(w.gv));
 
     const tcb = await im(kontakt(w, w.tcb, w.mandantA), (ctx) =>
@@ -248,7 +251,8 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
     );
     const code = await codeAusPostausgang(w.gv);
     const zeile = await freigabeZeile(zieleFreigabe);
-    expect(zeile.codeHash).toMatch(/^v1:0:[0-9a-f]{64}$/);
+    expect(zeile).toMatchObject({ codeFehlversuche: 0 });
+    expect(zeile.codeHash).toMatch(/^[0-9a-f]{64}$/);
     expect(zeile.codeHash).not.toContain(code);
     expect(JSON.stringify(r)).not.toContain(code);
     expect(Object.keys(r).sort()).toEqual(['codeAblauf', 'freigabeId']);
@@ -274,7 +278,7 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
     // Neuer Code setzt den Zähler nicht zurück.
     await im(gv, (ctx) => fordereFreigabeCodeAn(ctx, fa(id)));
     const neuer = await codeAusPostausgang(w.gv);
-    expect((await freigabeZeile(id)).codeHash).toMatch(/^v1:2:/);
+    expect(await freigabeZeile(id)).toMatchObject({ codeFehlversuche: 2 });
     // Der alte Code gilt nicht mehr (sofern er sich vom neuen unterscheidet).
     if (neuer !== code) {
       const alt = await im(gv, (ctx) => erteileFreigabe(ctx, { ...fa(id), code }));
@@ -296,7 +300,12 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
       verbleibendeVersuche: 0,
     });
     const zeile = await freigabeZeile(id);
-    expect(zeile).toMatchObject({ status: 'OFFEN', codeHash: 'v1:5:', codeAblauf: null });
+    expect(zeile).toMatchObject({
+      status: 'OFFEN',
+      codeHash: null,
+      codeAblauf: null,
+      codeFehlversuche: MAX_FEHLVERSUCHE,
+    });
     // Gesperrt: auch der richtige Code und neue Codes helfen nicht.
     expect((await fehlerVon(im(gv, (ctx) => erteileFreigabe(ctx, { ...fa(id), code })))).code).toBe(
       'KONFLIKT',
@@ -316,7 +325,11 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
       adressiereFreigabeNeu(ctx, { ...fa(id), empfaengerId: w.gv }),
     );
     expect(n).toEqual({ freigabeId: id, vorherId: w.gv, empfaengerId: w.gv });
-    expect(await freigabeZeile(id)).toMatchObject({ codeHash: null, codeAblauf: null });
+    expect(await freigabeZeile(id)).toMatchObject({
+      codeHash: null,
+      codeAblauf: null,
+      codeFehlversuche: 0,
+    });
     await im(gv, (ctx) => fordereFreigabeCodeAn(ctx, fa(id)));
     const ungueltig = await fehlerVon(
       im(gv, (ctx) => erteileFreigabe(ctx, { ...fa(id), code: '12345' })),
@@ -340,7 +353,7 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
     expect(f).toMatchObject({ code: 'KONFLIKT' });
     expect(f.message).toContain('abgelaufen');
     expect((await freigabeZeile(id)).status).toBe('OFFEN');
-    expect((await freigabeZeile(id)).codeHash).toMatch(/^v1:0:/);
+    expect(await freigabeZeile(id)).toMatchObject({ codeFehlversuche: 0 });
   });
 
   it('TS-06: der richtige Code in der Hand einer anderen GV erteilt keine Freigabe', async () => {
@@ -365,20 +378,30 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
       tx.beschreibungVersion.findUniqueOrThrow({ where: { id: versionId } }),
     );
     const verfaelscht = { ...(original.snapshot as Record<string, unknown>), nummer: '9.9' };
-    await inWelt(w, (tx) =>
-      tx.beschreibungVersion.update({ where: { id: versionId }, data: { snapshot: verfaelscht } }),
-    );
+    // Die Laufzeitrolle kann eingefrorenen Inhalt nicht ändern (Trigger).
+    await expect(
+      inWelt(w, (tx) =>
+        tx.beschreibungVersion.update({
+          where: { id: versionId },
+          data: { snapshot: verfaelscht },
+        }),
+      ),
+    ).rejects.toThrow(/unveränderlich/);
+    // Unterhalb des Dienstes verändert (Eigentümerrechte): der Hash fällt auf.
+    const setze = (snapshot: unknown) =>
+      alsEigentuemerOhneTrigger(
+        w,
+        'UPDATE "BeschreibungVersion" SET snapshot = $1::jsonb WHERE id = $2',
+        JSON.stringify(snapshot),
+        versionId,
+      );
+    expect(await setze(verfaelscht)).toBe(1);
     const f = await fehlerVon(
       im(gv, (ctx) => erteileFreigabe(ctx, { ...fa(beschreibungsFreigabe), code })),
     );
     expect(f.code).toBe('KONFLIKT');
-    expect((await freigabeZeile(beschreibungsFreigabe)).codeHash).toMatch(/^v1:0:/);
-    await inWelt(w, (tx) =>
-      tx.beschreibungVersion.update({
-        where: { id: versionId },
-        data: { snapshot: original.snapshot as never },
-      }),
-    );
+    expect(await freigabeZeile(beschreibungsFreigabe)).toMatchObject({ codeFehlversuche: 0 });
+    expect(await setze(original.snapshot)).toBe(1);
   });
 
   it('Freigeben mit richtigem Code: Beschreibung unveränderlich freigegeben, Code nur einmal verwendbar', async () => {
@@ -452,7 +475,7 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
       () => im(gv, (ctx) => erteileFreigabe(ctx, { ...fa(id), code: falsch(code) }), zweite),
     ]);
     expect(fehl.every((x) => x.status === 'fulfilled')).toBe(true);
-    expect((await freigabeZeile(id)).codeHash).toMatch(/^v1:2:/);
+    expect(await freigabeZeile(id)).toMatchObject({ codeFehlversuche: 2 });
     const e = nurEinErfolg(
       await gleichzeitig(w, [
         () => im(gv, (ctx) => erteileFreigabe(ctx, { ...fa(id), code })),
@@ -563,7 +586,7 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
       codeZurueckgesetzt: true,
     });
     const n = await inWelt(w, (tx) =>
-      tx.nachricht.findMany({ where: { an: `tcms:FREIGABE_NEU_ADRESSIERT:${w.gv2}` } }),
+      tx.nachricht.findMany({ where: { empfaengerId: w.gv2, zweck: 'FREIGABE_NEU_ADRESSIERT' } }),
     );
     expect(n).toHaveLength(1);
     // Die frühere Empfängerin kann nichts mehr tun, die neue schon.

@@ -642,6 +642,7 @@ export async function schliesseEreignisAb(
       data: {
         status: 'ERLEDIGT',
         verwerfenBegruendung: null,
+        verwerfenBeantragtVon: null,
         ...(e.triagiertVon ? {} : { triagiertVon: ctx.akteur.id, triagiertAm: zeitpunkt }),
       },
     });
@@ -677,7 +678,7 @@ export async function beantrageEreignisVerwerfen(
     }
     await tx.ereignis.update({
       where: { id: e.id },
-      data: { verwerfenBegruendung: x.begruendung },
+      data: { verwerfenBegruendung: x.begruendung, verwerfenBeantragtVon: ctx.akteur.id },
     });
     return {
       wert: ergebnis(e, e.status),
@@ -693,26 +694,12 @@ export async function beantrageEreignisVerwerfen(
 }
 
 /**
- * Antragsteller:in des offenen Antrags: jüngster Antrag im Audit-Log. Wird
- * nach der Sperre der Ereignis-Zeile gelesen; Antrag und Audit-Eintrag
- * entstehen in derselben Transaktion, sind also konsistent. Ohne Eintrag:
- * null (dann ist keine Bestätigung möglich, fail closed).
+ * Antragsteller:in des offenen Antrags aus der gesperrten Ereignis-Zeile
+ * (`verwerfenBeantragtVon`, nicht aus dem Audit). Ohne Wert ist keine
+ * Bestätigung möglich (fail closed).
  */
-async function antragsteller(
-  tx: Tx,
-  e: Pick<Gesperrt, 'id' | 'programmId'>,
-): Promise<string | null> {
-  const a = await tx.auditEvent.findFirst({
-    where: {
-      objektTyp: 'Ereignis',
-      objektId: e.id,
-      programmId: e.programmId,
-      aktion: 'tcms.ereignis.verwerfen_beantragt',
-    },
-    orderBy: { seq: 'desc' },
-    select: { actorId: true },
-  });
-  return a?.actorId ?? null;
+function antragsteller(e: Pick<Gesperrt, 'verwerfenBeantragtVon'>): string | null {
+  return e.verwerfenBeantragtVon;
 }
 
 export async function bestaetigeEreignisVerwerfen(
@@ -725,7 +712,7 @@ export async function bestaetigeEreignisVerwerfen(
   return aendere(ctx, async (tx, zeitpunkt) => {
     const e = await ladeZumAendern(ctx, mandantId, x.ereignisId);
     if (!e.verwerfenBegruendung) throw new DienstFehler('KONFLIKT', KEIN_ANTRAG);
-    const von = await antragsteller(tx, e);
+    const von = antragsteller(e);
     if (!zweitePerson(ctx.akteur, von)) throw new DienstFehler('NICHT_BERECHTIGT', ZWEITE_PERSON);
     const offene = e.folgen.filter((f) => f.status === 'VORGESCHLAGEN');
     await tx.ereignisFolge.updateMany({
@@ -762,9 +749,12 @@ export async function lehneEreignisVerwerfenAb(
   return aendere(ctx, async (tx) => {
     const e = await ladeZumAendern(ctx, mandantId, x.ereignisId);
     if (!e.verwerfenBegruendung) throw new DienstFehler('KONFLIKT', KEIN_ANTRAG);
-    const von = await antragsteller(tx, e);
+    const von = antragsteller(e);
     const zurueckgezogen = gleicheId(von, ctx.akteur.id);
-    await tx.ereignis.update({ where: { id: e.id }, data: { verwerfenBegruendung: null } });
+    await tx.ereignis.update({
+      where: { id: e.id },
+      data: { verwerfenBegruendung: null, verwerfenBeantragtVon: null },
+    });
     return {
       wert: { id: e.id, zurueckgezogen },
       protokoll: {

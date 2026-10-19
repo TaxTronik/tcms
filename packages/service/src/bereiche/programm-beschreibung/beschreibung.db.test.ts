@@ -182,7 +182,7 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
     const [version, freigabe, nachrichten] = await inWelt(w, async (tx) => [
       await tx.beschreibungVersion.findUniqueOrThrow({ where: { id: erste } }),
       await tx.freigabe.findUniqueOrThrow({ where: { id: r.freigabeId } }),
-      await tx.nachricht.findMany({ where: { an: `tcms:FREIGABE_CODE:${w.gv}` } }),
+      await tx.nachricht.findMany({ where: { empfaengerId: w.gv, zweck: 'FREIGABE_CODE' } }),
     ]);
     expect(version.status).toBe('BEIM_MANDANTEN');
     expect(version.snapshotSha256).toBe(r.snapshotSha256);
@@ -199,7 +199,8 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
       empfaengerId: w.gv,
       status: 'OFFEN',
     });
-    expect(freigabe.codeHash).toMatch(/^v1:0:[0-9a-f]{64}$/);
+    expect(freigabe.codeHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(freigabe.codeFehlversuche).toBe(0);
     // Frist auf echter Zeit (nicht Testuhr 2026-10-19).
     const ablauf = freigabe.codeAblauf!.getTime();
     expect(ablauf).toBeGreaterThanOrEqual(vorher + CODE_GUELTIG_TAGE * 86_400_000 - 1000);
@@ -279,7 +280,7 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
     expect(gelesen.letzteBearbeitung).toBe(w.hb);
     expect(lesen.freigaben.find((f) => f.refId === erste)?.codeStatus).toBe('KEIN');
     expect(lesen.versionen.find((x) => x.id === erste)?.snapshotGeprueft).toBe(true);
-    expect(JSON.stringify(lesen)).not.toMatch(/v1:\d:/);
+    expect(JSON.stringify(lesen)).not.toMatch(/codeHash|codeFehlversuche/);
   });
 
   it('Rechte: ohne Bearbeitungsrecht NICHT_BERECHTIGT; Lesen mit Bezug erlaubt', async () => {

@@ -47,7 +47,8 @@ describe.skipIf(!AKTIV)('Freigaben-Historie (Service, PostgreSQL)', () => {
             status: 'FREIGEGEBEN',
             erledigtAm: new Date('2026-10-19T08:00:00Z'),
             anmerkung: 'später',
-            codeHash: `v1:1:${'b'.repeat(64)}`,
+            codeHash: 'b'.repeat(64),
+            codeFehlversuche: 1,
             codeAblauf: new Date(Date.now() + 86_400_000),
           },
         }),
@@ -65,7 +66,7 @@ describe.skipIf(!AKTIV)('Freigaben-Historie (Service, PostgreSQL)', () => {
       anmerkung: 'später',
       codeStatus: 'AKTIV',
     });
-    expect(JSON.stringify(h)).not.toMatch(/v1:\d:|b{64}/);
+    expect(JSON.stringify(h)).not.toMatch(/b{64}|codeHash|codeFehlversuche/);
   });
 
   it('zum Stichtag: später Angefordertes fehlt, später Erledigtes gilt als offen', async () => {

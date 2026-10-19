@@ -11,17 +11,11 @@
 //     neuer Code setzt den Zähler nicht zurück); danach gesperrt, bis die
 //     Kanzlei die Freigabe neu adressiert.
 //
-// Ablage (Übergang, Schema-Vorschlag im Bericht): Das Schema hat noch keine
-// Spalte für den Fehlversuchszähler. Bis dahin trägt `Freigabe.codeHash` den
-// Codezustand in einem versionierten Format; der Zähler wird nur unter
-// Zeilensperre gelesen und bedingt geschrieben (TS-05), nie aus dem Audit:
-//
-//   null                   kein Code ausgestellt, keine Fehlversuche
-//   "v1:<n>:<64 hex>"      aktiver Code, n Fehlversuche bisher (0 ≤ n < MAX)
-//   "v1:<n>:"              kein aktiver Code, n Fehlversuche (n = MAX: gesperrt)
-//
-// Jeder andere Wert (auch ein roher Hash älterer Demo-Stände) gilt als
-// gesperrt (fail closed).
+// Ablage: `Freigabe.codeHash` ist nur der SHA-256 (hex) des aktiven Codes,
+// `Freigabe.codeFehlversuche` der Zähler (CHECK 0–5 in der Datenbank). Beide
+// werden nur unter Zeilensperre gelesen und bedingt auf genau den gelesenen
+// Zustand geschrieben (TS-05), nie aus dem Audit. Ein anderer Hash-Wert oder
+// ein Zähler außerhalb 0–4 bei aktivem Code gilt als gesperrt (fail closed).
 // =============================================================================
 
 import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
@@ -30,7 +24,7 @@ import type { FreigabeCodeStatus } from '@tcms/contract';
 export const CODE_GUELTIG_TAGE = 7;
 export const MAX_FEHLVERSUCHE = 5;
 const TAG_MS = 86_400_000;
-const FORMAT = /^v1:([0-5]):([0-9a-f]{64})?$/;
+const HASH = /^[0-9a-f]{64}$/;
 
 export interface CodeZustand {
   fehlversuche: number;
@@ -38,23 +32,22 @@ export interface CodeZustand {
   hash: string | null;
 }
 
+/** Gespeicherte Spalten einer Freigabe, aus denen sich der Codezustand ergibt. */
+export interface CodeSpalten {
+  codeHash: string | null;
+  codeFehlversuche: number;
+}
+
 const GESPERRT: CodeZustand = Object.freeze({ fehlversuche: MAX_FEHLVERSUCHE, hash: null });
 
 /** Liest den gespeicherten Codezustand; Unbekanntes gilt als gesperrt. */
-export function leseCodeZustand(roh: string | null): CodeZustand {
-  if (roh === null) return { fehlversuche: 0, hash: null };
-  const m = FORMAT.exec(roh);
-  if (!m) return { ...GESPERRT };
-  const fehlversuche = Number(m[1]);
-  // Ein aktiver Code bei ausgeschöpften Versuchen ist ungültig (fail closed).
-  if (fehlversuche >= MAX_FEHLVERSUCHE) return { ...GESPERRT };
-  return { fehlversuche, hash: m[2] ?? null };
-}
-
-export function schreibeCodeZustand(z: CodeZustand): string | null {
-  if (z.fehlversuche === 0 && z.hash === null) return null;
-  const n = Math.min(MAX_FEHLVERSUCHE, Math.max(0, Math.trunc(z.fehlversuche)));
-  return `v1:${n}:${n >= MAX_FEHLVERSUCHE ? '' : (z.hash ?? '')}`;
+export function leseCodeZustand(f: CodeSpalten): CodeZustand {
+  const n = f.codeFehlversuche;
+  // Ausgeschöpfte oder unplausible Zähler: gesperrt, auch mit Hash.
+  if (!Number.isInteger(n) || n < 0 || n >= MAX_FEHLVERSUCHE) return { ...GESPERRT };
+  if (f.codeHash === null) return { fehlversuche: n, hash: null };
+  if (!HASH.test(f.codeHash)) return { ...GESPERRT };
+  return { fehlversuche: n, hash: f.codeHash };
 }
 
 export const istGesperrt = (z: CodeZustand) => z.fehlversuche >= MAX_FEHLVERSUCHE;
@@ -88,12 +81,11 @@ export function codeAblaufAb(jetzt: Date): Date {
 
 /** Status für Anzeigen (nie Code oder Hash). */
 export function codeStatus(
-  roh: string | null,
-  ablauf: Date | null,
+  f: CodeSpalten & { codeAblauf: Date | null },
   jetzt: Date,
 ): FreigabeCodeStatus {
-  const z = leseCodeZustand(roh);
+  const z = leseCodeZustand(f);
   if (istGesperrt(z)) return 'GESPERRT';
-  if (!z.hash || !ablauf) return 'KEIN';
-  return ablauf.getTime() < jetzt.getTime() ? 'ABGELAUFEN' : 'AKTIV';
+  if (!z.hash || !f.codeAblauf) return 'KEIN';
+  return f.codeAblauf.getTime() < jetzt.getTime() ? 'ABGELAUFEN' : 'AKTIV';
 }

@@ -60,6 +60,7 @@ import { ladeKontext } from '../../kern/tcms-kontext';
 import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { zweitePerson } from '../../rechte';
+import { legeNachrichtAn } from '../programm-beschreibung/nachrichten';
 import {
   kanonisch,
   konflikt,
@@ -817,13 +818,12 @@ export async function risikoakzeptanzAnfordern(
         },
       });
       // TS-06: Empfänger als Kontakt-ID; die kanzleikonsole stellt zu und löst Namen auf.
-      await tx.nachricht.create({
-        data: {
-          an: empfaengerId,
-          betreff: `Freigabe angefordert: ${titel}`,
-          text: `Im Portal wartet eine Risikoakzeptanz (${risiko.code}) auf Ihre Entscheidung. Den Bestätigungscode erhalten Sie beim Freigeben.`,
-          createdAt: zeitpunkt,
-        },
+      await legeNachrichtAn(tx, {
+        empfaengerId,
+        zweck: 'FREIGABE_ANGEFORDERT',
+        betreff: `Freigabe angefordert: ${titel}`,
+        text: `Im Portal wartet eine Risikoakzeptanz (${risiko.code}) auf Ihre Entscheidung. Den Bestätigungscode erhalten Sie beim Freigeben.`,
+        erstelltAm: zeitpunkt,
       });
       return {
         wert: { risikoId: risiko.id, freigabeId: f.id, empfaengerId },

@@ -419,7 +419,9 @@ const PROGRAMM_INHALT = {
     include: {
       staende: true,
       risiken: true,
-      durchfuehrungen: { include: { _count: { select: { nachweise: true } } } },
+      durchfuehrungen: {
+        include: { _count: { select: { nachweise: { where: { entferntAm: null } } } } },
+      },
     },
   },
   feststellungen: { include: { massnahmen: true, risiken: { include: { risiko: true } } } },
@@ -452,7 +454,7 @@ export async function ladeKontext(
   const heute = heuteDatum(ctx.uhr);
   const { stand, historisch } = leseStand(standIso, heute);
   // RLS beschränkt auf den Tenant des Akteurs: ein Mandant eines anderen Tenants ist hier unsichtbar.
-  const mandant = await tx.mandant.findUnique({ where: { id: mandantId } });
+  const mandant = await tx.mandant.findFirst({ where: { id: mandantId } });
   if (!mandant) throw new DienstFehler('NICHT_GEFUNDEN');
   const kontakte = await tx.mandantKontaktRolle.findMany({
     where: { mandantId, aktiv: true },

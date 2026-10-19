@@ -34,8 +34,6 @@ export {
   bestaetigeNachrichtZustellung,
   ladeOffeneNachrichten,
   legeNachrichtAn,
-  leseNachrichtAdresse,
-  nachrichtAdresse,
 } from './programm-beschreibung/nachrichten';
 export {
   CODE_GUELTIG_TAGE as FREIGABE_CODE_GUELTIG_TAGE,

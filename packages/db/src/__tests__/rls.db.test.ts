@@ -244,7 +244,12 @@ async function baueFixture(client: PrismaClient, tenant: string): Promise<Fixtur
         },
       });
       const nachricht = await tx.nachricht.create({
-        data: { an: 'Test', betreff: 'Betreff', text: 'Text' },
+        data: {
+          empfaengerId: randomUUID(),
+          zweck: 'FREIGABE_CODE',
+          betreff: 'Betreff',
+          text: 'Text',
+        },
       });
       await schreibeAudit(tx, {
         actorId: randomUUID(),
@@ -542,7 +547,13 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
       await mitTenant(
         A.tenant,
         async (tx) => {
-          expect(await tx.mandant.findUnique({ where: { id: B.mandantId } })).toBeNull();
+          expect(await tx.mandant.findFirst({ where: { id: B.mandantId } })).toBeNull();
+          // Auch mit dem vollständigen Schlüssel von B (Tenant aus fremder Quelle): RLS.
+          expect(
+            await tx.mandant.findUnique({
+              where: { tenantId_id: { tenantId: B.tenant, id: B.mandantId } },
+            }),
+          ).toBeNull();
           expect(await tx.tcmsProgramm.findUnique({ where: { id: B.programmId } })).toBeNull();
           expect(await tx.risiko.findUnique({ where: { id: B.risikoId } })).toBeNull();
           expect(await tx.kontrolle.findUnique({ where: { id: B.kontrolleId } })).toBeNull();
@@ -590,9 +601,9 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
       await mitTenant(
         B.tenant,
         async (tx) => {
-          expect(
-            (await tx.mandant.findUniqueOrThrow({ where: { id: B.mandantId } })).name,
-          ).not.toBe('übernommen');
+          expect((await tx.mandant.findFirstOrThrow({ where: { id: B.mandantId } })).name).not.toBe(
+            'übernommen',
+          );
           expect(await tx.nachricht.findUnique({ where: { id: B.nachrichtId } })).not.toBeNull();
           expect(
             (await tx.freigabe.findUniqueOrThrow({ where: { id: B.freigabeId } })).status,
@@ -633,9 +644,11 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
 
     it('INSERT ohne Kontext scheitert (tenant_id bleibt NULL)', async () => {
       const meldung = await fehlerVon(
-        roh.query(`INSERT INTO "Nachricht" (id, an, betreff, text) VALUES ($1, 'x', 'x', 'x')`, [
-          randomUUID(),
-        ]),
+        roh.query(
+          `INSERT INTO "Nachricht" (id, "empfaengerId", zweck, betreff, text)
+           VALUES ($1, $2, 'FREIGABE_CODE', 'x', 'x')`,
+          [randomUUID(), randomUUID()],
+        ),
       );
       expect(meldung).toMatch(/null value in column "tenant_id"|row-level security/);
     });
@@ -1090,6 +1103,250 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
         },
         { client: app },
       );
+    });
+  });
+
+  describe('Schema-Nachträge Welle 2', () => {
+    async function scheitert(fn: (tx: Tx) => Promise<unknown>): Promise<string> {
+      return fehlerVon(mitTenant(A.tenant, fn, { client: app }));
+    }
+    const inA = <T>(fn: (tx: Tx) => Promise<T>) => mitTenant(A.tenant, fn, { client: app });
+
+    it('Mandant: dieselbe ID in zwei Tenants (Schlüssel tenant_id, id), ohne Auskunft über den anderen', async () => {
+      // Die ID des Mandanten von B ist in A frei: Anlegen gelingt wie mit einer neuen ID.
+      const m = await inA((tx) =>
+        tx.mandant.create({
+          data: { id: B.mandantId, name: 'Gleiche ID in A', rechtsform: 'KapG' },
+        }),
+      );
+      expect(m).toMatchObject({ id: B.mandantId, tenantId: A.tenant });
+      await mitTenant(
+        B.tenant,
+        async (tx) => {
+          const b = await tx.mandant.findMany({ where: { id: B.mandantId } });
+          expect(b.map((x) => x.name)).toEqual([`Testmandant ${B.tenant.slice(0, 8)}`]);
+        },
+        { client: app },
+      );
+      // Ein zweites Mal im selben Tenant scheitert am Schlüssel.
+      expect(
+        await scheitert((tx) =>
+          tx.mandant.create({ data: { id: B.mandantId, name: 'doppelt', rechtsform: 'KapG' } }),
+        ),
+      ).toMatch(/Unique constraint/i);
+      const { rows } = await roh.query<{ spalten: string }>(
+        `SELECT string_agg(a.attname, ',' ORDER BY k.ord) AS spalten
+         FROM pg_constraint c
+         CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+         WHERE c.conrelid = 'public."Mandant"'::regclass AND c.contype = 'p'`,
+      );
+      expect(rows[0]?.spalten).toBe('tenant_id,id');
+    });
+
+    it('Teilindizes: ein offener Nachtrag, eine beantragte Übersteuerung je Sicht, eine offene Risikoakzeptanz', async () => {
+      const nachtrag = (status: 'GEPLANT' | 'OHNE_BEFUND') => (tx: Tx) =>
+        tx.durchfuehrung.create({
+          data: {
+            kontrolleId: A.kontrolleId,
+            kontrolleStandId: A.kontrolleStandId,
+            periodeLabel: 'Okt 2026 · Nachtrag',
+            periodeVon: new Date('2026-10-01'),
+            periodeBis: new Date('2026-10-31'),
+            faelligAm: new Date('2026-11-20'),
+            ausserplanmaessig: true,
+            nachtragZuId: A.durchfuehrungId,
+            status,
+          },
+        });
+      const erster = await inA(nachtrag('GEPLANT'));
+      expect(await scheitert(nachtrag('GEPLANT'))).toMatch(/Unique constraint/i);
+      // Abgeschlossene Nachträge zählen nicht.
+      await inA(nachtrag('OHNE_BEFUND'));
+      await inA((tx) =>
+        tx.durchfuehrung.update({ where: { id: erster.id }, data: { status: 'OHNE_BEFUND' } }),
+      );
+      await inA(nachtrag('GEPLANT'));
+
+      const uebersteuerung = (sicht: 'DESIGN' | 'BETRIEB') => (tx: Tx) =>
+        tx.uebersteuerung.create({
+          data: {
+            risikoId: A.risikoId,
+            sicht,
+            klasse: 'GERING',
+            berechnet: 'MITTEL',
+            begruendung: 'Begründung mit mindestens dreißig Zeichen.',
+            beantragtVon: randomUUID(),
+          },
+        });
+      // Die Fixture hat bereits eine beantragte Übersteuerung (DESIGN).
+      expect(await scheitert(uebersteuerung('DESIGN'))).toMatch(/Unique constraint/i);
+      await inA(uebersteuerung('BETRIEB'));
+
+      const akzeptanz = (tx: Tx) =>
+        tx.freigabe.create({
+          data: {
+            programmId: A.programmId,
+            art: 'RISIKOAKZEPTANZ',
+            refId: A.risikoId,
+            titel: 'Risikoakzeptanz',
+            angefordertVon: randomUUID(),
+            empfaengerId: randomUUID(),
+          },
+        });
+      const offen = await inA(akzeptanz);
+      expect(await scheitert(akzeptanz)).toMatch(/Unique constraint/i);
+      await inA((tx) =>
+        tx.freigabe.update({ where: { id: offen.id }, data: { status: 'ABGELEHNT' } }),
+      );
+      await inA(akzeptanz);
+      // Je Tenant: dieselbe refId in B stört A nicht.
+      await mitTenant(
+        B.tenant,
+        (tx) =>
+          tx.freigabe.create({
+            data: {
+              programmId: B.programmId,
+              art: 'RISIKOAKZEPTANZ',
+              refId: A.risikoId,
+              titel: 'Risikoakzeptanz',
+              angefordertVon: randomUUID(),
+              empfaengerId: randomUUID(),
+            },
+          }),
+        { client: app },
+      );
+    });
+
+    it('Freigabe: Fehlversuche nur 0–5, Code nur als SHA-256 (hex) gespeichert', async () => {
+      for (const data of [
+        { codeFehlversuche: 6 },
+        { codeFehlversuche: -1 },
+        { codeHash: `v1:0:${'a'.repeat(64)}` },
+        { codeHash: '123456' },
+        { codeHash: 'A'.repeat(64) },
+      ]) {
+        expect(
+          await scheitert((tx) => tx.freigabe.update({ where: { id: A.freigabeId }, data })),
+          JSON.stringify(data),
+        ).toMatch(/check constraint/i);
+      }
+      await inA((tx) =>
+        tx.freigabe.update({
+          where: { id: A.freigabeId },
+          data: { codeFehlversuche: 5, codeHash: 'a'.repeat(64) },
+        }),
+      );
+      await inA((tx) =>
+        tx.freigabe.update({
+          where: { id: A.freigabeId },
+          data: { codeFehlversuche: 0, codeHash: null },
+        }),
+      );
+    });
+
+    it('Nachricht: Empfänger nur als UUID, Zweck nur aus dem Enum', async () => {
+      for (const sql of [
+        `INSERT INTO "Nachricht" (id, "empfaengerId", zweck, betreff, text) VALUES ('${randomUUID()}', 'Jana Weller', 'FREIGABE_CODE', 'x', 'x')`,
+        `INSERT INTO "Nachricht" (id, "empfaengerId", zweck, betreff, text) VALUES ('${randomUUID()}', '${randomUUID()}', 'UNBEKANNT', 'x', 'x')`,
+        `INSERT INTO "Nachricht" (id, zweck, betreff, text) VALUES ('${randomUUID()}', 'FREIGABE_CODE', 'x', 'x')`,
+      ]) {
+        expect(await scheitert((tx) => tx.$executeRawUnsafe(sql))).toMatch(
+          /invalid input|null value|violates not-null/i,
+        );
+      }
+    });
+  });
+
+  describe('Eingefrorene CMS-Beschreibung (Trigger)', () => {
+    const inA = <T>(fn: (tx: Tx) => Promise<T>) => mitTenant(A.tenant, fn, { client: app });
+    async function version(status: 'BEIM_MANDANTEN' | 'ENTWURF'): Promise<string> {
+      const v = await inA((tx) =>
+        tx.beschreibungVersion.create({
+          data: {
+            programmId: A.programmId,
+            nummer: `9.${Math.floor(Math.random() * 1e6)}`,
+            status,
+            abschnitte: [{ key: 'a', text: 'Inhalt' }],
+            snapshot: status === 'ENTWURF' ? undefined : { nummer: '9', eingefroren: true },
+            snapshotSha256: status === 'ENTWURF' ? null : 'a'.repeat(64),
+          },
+        }),
+      );
+      return v.id;
+    }
+    const aendere = (id: string, data: Record<string, unknown>) =>
+      inA((tx) => tx.beschreibungVersion.update({ where: { id }, data }));
+
+    it('Inhalt, Metadaten und Löschen gesperrt; nur die vorgesehenen Statusübergänge', async () => {
+      const id = await version('BEIM_MANDANTEN');
+      for (const data of [
+        { snapshot: { nummer: '9', eingefroren: false } },
+        { snapshotSha256: 'b'.repeat(64) },
+        { abschnitte: [] },
+        { nummer: '9.9' },
+        { createdAt: new Date('2020-01-01') },
+        { reviewVon: randomUUID() },
+        { status: 'ENTWURF' },
+        { status: 'KANZLEI_REVIEW' },
+        { status: 'FREIGEGEBEN' }, // ohne freigebende Person
+        { freigegebenVon: randomUUID() }, // ohne Statuswechsel
+      ]) {
+        expect(await fehlerVon(aendere(id, data)), JSON.stringify(data)).toMatch(/tcms: /);
+      }
+      expect(
+        await fehlerVon(inA((tx) => tx.beschreibungVersion.delete({ where: { id } }))),
+      ).toMatch(/nicht gelöscht/);
+      await aendere(id, {
+        status: 'FREIGEGEBEN',
+        freigegebenVon: randomUUID(),
+        freigegebenAm: new Date(),
+      });
+      for (const data of [
+        { freigegebenAm: new Date('2020-01-01') },
+        { status: 'BEIM_MANDANTEN' },
+        { snapshotSha256: 'c'.repeat(64) },
+      ]) {
+        expect(await fehlerVon(aendere(id, data)), JSON.stringify(data)).toMatch(/tcms: /);
+      }
+      await aendere(id, { status: 'ABGELOEST' });
+      for (const data of [{ status: 'FREIGEGEBEN' }, { abschnitte: [] }]) {
+        expect(await fehlerVon(aendere(id, data)), JSON.stringify(data)).toMatch(/tcms: /);
+      }
+      // Beim Mandanten → abgelöst (zurückgezogen) ist ebenfalls vorgesehen.
+      await aendere(await version('BEIM_MANDANTEN'), { status: 'ABGELOEST' });
+    });
+
+    it('Entwürfe bleiben änderbar und löschbar', async () => {
+      const id = await version('ENTWURF');
+      await aendere(id, { abschnitte: [], status: 'KANZLEI_REVIEW' });
+      await inA((tx) => tx.beschreibungVersion.delete({ where: { id } }));
+    });
+
+    it('die App-Rolle kann den Trigger nicht abschalten; er gilt auch für den Eigentümer', async () => {
+      const id = await version('BEIM_MANDANTEN');
+      expect(
+        await fehlerVon(
+          inA((tx) =>
+            tx.$executeRawUnsafe(
+              'ALTER TABLE "BeschreibungVersion" DISABLE TRIGGER "BeschreibungVersion_eingefroren"',
+            ),
+          ),
+        ),
+      ).toMatch(/must be owner/);
+      const eigentuemer = pgClient(OWNER_URL);
+      await eigentuemer.connect();
+      try {
+        await eigentuemer.query('BEGIN');
+        await eigentuemer.query(`SELECT set_config('tcms.tenant_id', $1, true)`, [A.tenant]);
+        const meldung = await fehlerVon(
+          eigentuemer.query(`UPDATE "BeschreibungVersion" SET nummer = 'x' WHERE id = $1`, [id]),
+        );
+        expect(meldung).toMatch(/unveränderlich/);
+      } finally {
+        await eigentuemer.query('ROLLBACK');
+        await eigentuemer.end();
+      }
     });
   });
 

@@ -146,7 +146,10 @@ async function beginneInTx(
 }
 
 async function sperreNachweise(tx: Tx, durchfuehrungId: string, gesperrt: boolean) {
-  return tx.nachweis.updateMany({ where: { durchfuehrungId }, data: { gesperrt } });
+  return tx.nachweis.updateMany({
+    where: { durchfuehrungId, entferntAm: null },
+    data: { gesperrt },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +321,7 @@ export async function haengeNachweisAn(
     verlange(lage.rechte.bearbeiten);
     // Gleichzeitige Verwendung derselben Dokument-ID serialisieren (je Tenant).
     await tenantSperre(tx, `nachweis.dokument.${dokumentId}`);
+    // Auch entfernte Verweise zählen: Die Bindung an Mandant und Inhalt bleibt.
     const gleiche = await tx.nachweis.findMany({
       where: { dokumentId },
       select: {
@@ -383,16 +387,18 @@ export async function haengeNachweisAn(
 }
 
 /**
- * Nachweis entfernen, nur vor der Einreichung (nicht gesperrt). Der Tax-CMS-
- * Verweis entfällt; das Dokument in der kanzleikonsole bleibt unberührt und
- * der vollständige Verweis steht im Audit (`nachweis_entfernt`).
+ * Nachweis entfernen, nur vor der Einreichung (nicht gesperrt). Der Verweis
+ * wird als entfernt markiert (`entferntAm`/`entferntVon`) und von keinem Leser
+ * mehr geliefert; er bleibt gespeichert, damit die Dokument-ID an Mandant und
+ * Inhalt gebunden bleibt. Das Dokument in der kanzleikonsole bleibt unberührt,
+ * der vollständige Verweis steht zusätzlich im Audit (`nachweis_entfernt`).
  */
 export async function entferneNachweis(
   ctx: DienstKontext,
   eingabe: NachweisEntfernenEingabe,
 ): Promise<NachweisEntfernt> {
   const e = pruefeEingabe(NachweisEntfernenEingabeSchema, eingabe);
-  return ausfuehren(ctx, async (tx) => {
+  return ausfuehren(ctx, async (tx, zeitpunkt) => {
     const lage = await ladeLage(ctx, e, { sperren: true });
     const n = lage.d.nachweise.find((x) => x.id === e.nachweisId);
     if (!n) throw new DienstFehler('NICHT_GEFUNDEN');
@@ -402,8 +408,9 @@ export async function entferneNachweis(
     if (n.gesperrt)
       throw new DienstFehler('KONFLIKT', 'Gesperrte Nachweise können nicht entfernt werden.');
     await bleibt(tx, lage.d.id, lage.d.status);
-    const weg = await tx.nachweis.deleteMany({
-      where: { id: n.id, durchfuehrungId: lage.d.id, gesperrt: false },
+    const weg = await tx.nachweis.updateMany({
+      where: { id: n.id, durchfuehrungId: lage.d.id, gesperrt: false, entferntAm: null },
+      data: { entferntAm: zeitpunkt, entferntVon: ctx.akteur.id },
     });
     if (weg.count !== 1) throw new DienstFehler('KONFLIKT', GEAENDERT);
     return {

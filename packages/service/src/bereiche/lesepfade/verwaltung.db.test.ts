@@ -71,21 +71,30 @@ describe.skipIf(!AKTIV)('Mandantenanker und Kontaktrollen gegen PostgreSQL', () 
       const f = await fehlerVon(anker(m, 'X', ohneZustaendigkeit(m)));
       expect(f.code).toBe('NICHT_BERECHTIGT');
       expect(
-        (await mitTenant(tenant, (tx) => tx.mandant.findUnique({ where: { id: m } })))?.name,
+        (await mitTenant(tenant, (tx) => tx.mandant.findFirst({ where: { id: m } })))?.name,
       ).toBe('Muster GmbH');
     });
 
-    it('fremder Tenant: ID eines anderen Tenants wird weder gelesen noch verändert', async () => {
+    it('fremder Tenant: dieselbe ID ist je Tenant ein eigener Anker; keine Auskunft über den anderen', async () => {
       const m = randomUUID();
       await anker(m, 'Fremde GmbH', admin(m, tenantB));
-      const f = await fehlerVon(anker(m, 'Übernahme', admin(m)));
-      expect(f.code).toBe('KONFLIKT');
-      expect(f.message).not.toContain('Fremde');
-      const b = await mitTenant(tenantB, (tx) => tx.mandant.findUnique({ where: { id: m } }));
+      // Anlegen im eigenen Tenant gelingt wie bei einer unbekannten ID (kein Existenz-Orakel).
+      const r = await anker(m, 'Eigene GmbH', admin(m));
+      expect(r).toMatchObject({
+        angelegt: true,
+        geaendert: true,
+        mandant: { id: m, name: 'Eigene GmbH' },
+      });
+      expect(JSON.stringify(r)).not.toContain('Fremde');
+      const b = await mitTenant(tenantB, (tx) => tx.mandant.findFirst({ where: { id: m } }));
       expect(b?.name).toBe('Fremde GmbH');
+      const eigen = await mitTenant(tenant, (tx) => tx.mandant.findFirst({ where: { id: m } }));
+      expect(eigen?.name).toBe('Eigene GmbH');
+      // Aktualisieren trifft nur den eigenen Anker.
+      await anker(m, 'Eigene AG', admin(m));
       expect(
-        await mitTenant(tenant, (tx) => tx.mandant.findUnique({ where: { id: m } })),
-      ).toBeNull();
+        (await mitTenant(tenantB, (tx) => tx.mandant.findFirst({ where: { id: m } })))?.name,
+      ).toBe('Fremde GmbH');
     });
 
     it('ungültige Eingaben', async () => {

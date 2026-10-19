@@ -352,7 +352,7 @@ export async function ladeEreignis(
   const verwerfenAntrag =
     e.verwerfenBegruendung && e.status !== 'VERWORFEN'
       ? {
-          vonId: antrag?.actorId ?? null,
+          vonId: e.verwerfenBeantragtVon,
           am: isoZeit(antrag?.at ?? e.gemeldetAm),
           begruendung: e.verwerfenBegruendung,
         }

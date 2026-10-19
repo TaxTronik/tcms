@@ -105,7 +105,7 @@ export function pruefeKanzleiZugriff(ctx: DienstKontext, mandantId: string): voi
  * die `NICHT_BERECHTIGT` ergeben könnte (kein Existenz-Orakel).
  */
 export async function pruefeMandant(tx: Tx, mandantId: string): Promise<void> {
-  const m = await tx.mandant.findUnique({ where: { id: mandantId }, select: { id: true } });
+  const m = await tx.mandant.findFirst({ where: { id: mandantId }, select: { id: true } });
   if (!m) throw new DienstFehler('NICHT_GEFUNDEN');
 }
 

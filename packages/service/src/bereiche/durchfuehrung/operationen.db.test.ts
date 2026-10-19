@@ -10,6 +10,13 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { Akteur } from '@tcms/contract';
 import { pruefeAuditKette } from '@tcms/db';
 import type { DienstKontext } from '../../kontext';
+import { ladeKontext } from '../../kern/tcms-kontext';
+import {
+  ladeDurchfuehrung,
+  ladeKontrollaufgabe,
+  ladeNachweis,
+  listeKontrollaufgaben,
+} from './lesen';
 import {
   beantrageEntfallen,
   beginneDurchfuehrung,
@@ -51,10 +58,17 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
   });
   const audit = (objektId: string, aktion: string) =>
     f.tx((tx) => tx.auditEvent.findMany({ where: { objektId, aktion }, orderBy: { seq: 'asc' } }));
+  /** Durchführung mit den nicht entfernten Nachweisen (wie jeder Leser). */
   const zeile = (id: string) =>
     f.tx((tx) =>
-      tx.durchfuehrung.findUniqueOrThrow({ where: { id }, include: { nachweise: true } }),
+      tx.durchfuehrung.findUniqueOrThrow({
+        where: { id },
+        include: { nachweise: { where: { entferntAm: null } } },
+      }),
     );
+  /** Alle gespeicherten Verweise einer Durchführung, auch entfernte. */
+  const alleNachweise = (durchfuehrungId: string) =>
+    f.tx((tx) => tx.nachweis.findMany({ where: { durchfuehrungId } }));
 
   /** K1: beginnen, speichern, Nachweis, einreichen – alles durch die Hauptbearbeitung. */
   async function eingereicht(k: 'k1' | 'k2' = 'k1', ergebnis?: 'OHNE_BEFUND' | 'MIT_BEFUND') {
@@ -453,8 +467,11 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
   });
 
   describe('Nachweis entfernen', () => {
-    it('vor Einreichung: Zeile entfällt, Verweis bleibt im Audit', async () => {
+    it('vor Einreichung: Verweis als entfernt markiert, kein Lesepfad liefert ihn, Verweis im Audit', async () => {
       const did = await f.durchfuehrung('k1');
+      await f.dienst(a.bearbeiter, (ctx) =>
+        speichereDurchfuehrung(ctx, { ...ziel(did), ...vollstaendig() }),
+      );
       const v = verweis();
       const { nachweis } = await f.dienst(a.bearbeiter, (ctx) =>
         haengeNachweisAn(ctx, { ...ziel(did), verweis: v }),
@@ -463,7 +480,43 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
         entferneNachweis(ctx, { ...ziel(did), nachweisId: nachweis.id }),
       );
       expect(r).toEqual({ durchfuehrungId: did, nachweisId: nachweis.id });
-      expect((await zeile(did)).nachweise).toHaveLength(0);
+      // Markiert statt gelöscht (Dokument-ID bleibt an Mandant und Inhalt gebunden).
+      const gespeichert = await alleNachweise(did);
+      expect(gespeichert).toHaveLength(1);
+      expect(gespeichert[0]).toMatchObject({ id: nachweis.id, entferntVon: f.p.vertretung });
+      expect(gespeichert[0]!.entferntAm).not.toBeNull();
+      // Kein Lesepfad liefert den entfernten Verweis: Detail, Download, Kontext, Mängelprüfung.
+      const d = await f.dienst(a.bt, (ctx) => ladeDurchfuehrung(ctx, ziel(did)));
+      expect(d.nachweise).toEqual([]);
+      const dl = await fehlerVon(
+        f.dienst(a.bt, (ctx) =>
+          ladeNachweis(ctx, { mandantId: f.mandant, nachweisId: nachweis.id }),
+        ),
+      );
+      expect(dl.code).toBe('NICHT_GEFUNDEN');
+      const k = await f.dienst(a.bt, (ctx) => ladeKontext(ctx, { mandantId: f.mandant }));
+      expect(k?.durchfuehrungen.find((x) => x.id === did)?.nachweise).toBe(0);
+      const ein = await fehlerVon(
+        f.dienst(a.bearbeiter, (ctx) => reicheDurchfuehrungEin(ctx, ziel(did))),
+      );
+      expect(ein.code).toBe('UNGUELTIG');
+      // Zweites Entfernen findet nichts mehr.
+      const nochmal = await fehlerVon(
+        f.dienst(a.vertretung, (ctx) =>
+          entferneNachweis(ctx, { ...ziel(did), nachweisId: nachweis.id }),
+        ),
+      );
+      expect(nochmal.code).toBe('NICHT_GEFUNDEN');
+      // Dieselbe Dokument-ID bleibt gebunden: mit anderem Inhalt unbrauchbar.
+      const fremd = await fehlerVon(
+        f.dienst(a.bearbeiter, (ctx) =>
+          haengeNachweisAn(ctx, {
+            ...ziel(did),
+            verweis: { ...v, sha256: 'c'.repeat(64) },
+          }),
+        ),
+      );
+      expect(fremd.code).toBe('UNGUELTIG');
       const ev = await audit(nachweis.id, 'tcms.durchfuehrung.nachweis_entfernt');
       expect(ev).toHaveLength(1);
       expect(ev[0]!.actorId).toBe(f.p.vertretung);
@@ -525,8 +578,33 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
           expect(z.nachweise[0]!.gesperrt).toBe(true);
         } else {
           expect(z.nachweise).toHaveLength(0);
+          expect((await alleNachweise(did))[0]!.entferntAm).not.toBeNull();
         }
       }
+    });
+
+    it('Portal: entfernte Anlage erscheint weder in der Aufgabe noch in der Aufgabenliste', async () => {
+      const did = await f.durchfuehrung('k2');
+      const { nachweis } = await f.dienst(a.ma, (ctx) =>
+        haengeNachweisAn(ctx, { ...ziel(did), verweis: verweis() }),
+      );
+      const vorher = await f.dienst(a.ma, (ctx) => ladeKontrollaufgabe(ctx, ziel(did)));
+      expect(vorher.nachweise.map((n) => n.id)).toEqual([nachweis.id]);
+      await f.dienst(a.ma, (ctx) =>
+        entferneNachweis(ctx, { ...ziel(did), nachweisId: nachweis.id }),
+      );
+      const nachher = await f.dienst(a.ma, (ctx) => ladeKontrollaufgabe(ctx, ziel(did)));
+      expect(nachher.nachweise).toEqual([]);
+      const liste = await f.dienst(a.ma, (ctx) =>
+        listeKontrollaufgaben(ctx, { mandantId: f.mandant }),
+      );
+      expect(liste.aufgaben.find((x) => x.id === did)?.nachweise).toBe(0);
+      const dl = await fehlerVon(
+        f.dienst(a.ma, (ctx) =>
+          ladeNachweis(ctx, { mandantId: f.mandant, nachweisId: nachweis.id }),
+        ),
+      );
+      expect(dl.code).toBe('NICHT_GEFUNDEN');
     });
   });
 
@@ -1024,6 +1102,9 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
           r.filter((x) => x.status === 'fulfilled'),
           `Runde ${runde}`,
         ).toHaveLength(1);
+        expect((r.find((x) => x.status === 'rejected') as PromiseRejectedResult).reason.code).toBe(
+          'KONFLIKT',
+        );
         expect(await f.tx((tx) => tx.durchfuehrung.count({ where: { nachtragZuId: did } }))).toBe(
           1,
         );

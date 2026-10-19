@@ -52,7 +52,8 @@ export const LAGE_INCLUDE = {
       programm: { select: { mandantId: true } },
     },
   },
-  nachweise: { orderBy: [{ hochgeladenAm: 'asc' }, { id: 'asc' }] },
+  // Entfernte Verweise bleiben gespeichert, werden aber nie gelesen.
+  nachweise: { where: { entferntAm: null }, orderBy: [{ hochgeladenAm: 'asc' }, { id: 'asc' }] },
 } satisfies Prisma.DurchfuehrungInclude;
 
 export type DurchfuehrungRoh = Prisma.DurchfuehrungGetPayload<{ include: typeof LAGE_INCLUDE }>;

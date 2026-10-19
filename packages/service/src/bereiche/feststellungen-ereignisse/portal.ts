@@ -20,6 +20,7 @@ import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { kannLesen, kannPortalLesen, type KontaktRolle } from '../../rechte';
 import { ladeKontaktRollen } from '../../rollen';
+import { legeNachrichtAn } from '../programm-beschreibung/nachrichten';
 import { legeEreignisAn } from './ereignisse';
 import {
   aendere,
@@ -87,7 +88,7 @@ export async function meldeEreignis(
   const akteurName = ctx.akteur.name;
   return aendere(ctx, async (tx, zeitpunkt) => {
     const programm = await programmVon(tx, mandantId);
-    const mandant = await tx.mandant.findUnique({
+    const mandant = await tx.mandant.findFirst({
       where: { id: mandantId },
       select: { name: true },
     });
@@ -103,15 +104,18 @@ export async function meldeEreignis(
       zeitpunkt,
     });
     const typTitel = ereignistyp(x.typ)?.titel ?? PORTAL_SONSTIGES.titel;
-    // Benachrichtigung der Kanzlei (Postausgang der Entwicklungsumgebung).
-    await tx.nachricht.create({
-      data: {
-        an: x.benachrichtigen?.name ?? 'Kanzlei',
+    // Benachrichtigung der von der kanzleikonsole genannten Person über den
+    // Postausgang, adressiert nur über ihre ID (TS-06). Ohne Angabe keine
+    // Nachricht: Das Ereignis steht im Ereigniseingang.
+    if (x.benachrichtigen) {
+      await legeNachrichtAn(tx, {
+        empfaengerId: x.benachrichtigen.id,
+        zweck: 'EREIGNIS_GEMELDET',
         betreff: `Neues Ereignis ${e.nummer}: ${typTitel}`,
         text: `${akteurName} hat für ${mandant.name} am ${fmtDatumZeit(zeitpunkt)} ein Ereignis gemeldet: „${x.titel}". Bitte im Ereigniseingang triagieren.`,
-        createdAt: zeitpunkt,
-      },
-    });
+        erstelltAm: zeitpunkt,
+      });
+    }
     return {
       wert: { id: e.id, nummer: e.nummer },
       protokoll: {

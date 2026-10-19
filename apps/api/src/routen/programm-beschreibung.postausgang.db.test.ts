@@ -1,7 +1,6 @@
 // Postausgang über die App (DB_TESTS=1): nur Verwaltungsrecht (sonst 404),
 // Query und ID geprüft (400), Zustellung idempotent, tenantweit (RLS).
 import { mitTenant } from '@tcms/db';
-import { nachrichtAdresse } from '@tcms/service';
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { akteure, legeMandantenAn, neueApiWelt, ok, senden } from './programm-beschreibung.testapp';
@@ -18,7 +17,8 @@ describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
       await mitTenant(w.T, (tx) =>
         tx.nachricht.create({
           data: {
-            an: nachrichtAdresse('FREIGABE_CODE', w.GV),
+            empfaengerId: w.GV,
+            zweck: 'FREIGABE_CODE',
             betreff: 'Betreff',
             text: 'Code 123456',
           },
@@ -49,6 +49,10 @@ describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
     expect(await ok(await senden(w, 'GET', '/v1/nachrichten/offen', a.admin()))).toEqual({
       nachrichten: [],
     });
+    // Zugestellt: Text (Code) geleert, Zustellung vermerkt.
+    const zeile = await mitTenant(w.T, (tx) => tx.nachricht.findUniqueOrThrow({ where: { id } }));
+    expect(zeile.text).toBe('');
+    expect(zeile.zugestelltAm).not.toBeNull();
   });
 
   it('nur Verwaltungsrecht: Kanzlei ohne Admin und Kontakte → 404', async () => {

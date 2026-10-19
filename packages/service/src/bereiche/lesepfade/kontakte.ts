@@ -63,7 +63,7 @@ export async function ladeKontakte(
   if (ctx.akteur.art !== 'KANZLEI' || !kannLesen(ctx.akteur, id)) {
     throw new DienstFehler('NICHT_GEFUNDEN');
   }
-  const m = await ctx.tx.mandant.findUnique({ where: { id }, select: { id: true } });
+  const m = await ctx.tx.mandant.findFirst({ where: { id }, select: { id: true } });
   if (!m) throw new DienstFehler('NICHT_GEFUNDEN');
   const zeilen = await ctx.tx.mandantKontaktRolle.findMany({
     where: { mandantId: id },

@@ -59,7 +59,6 @@ import {
   istGesperrt,
   leseCodeZustand,
   MAX_FEHLVERSUCHE,
-  schreibeCodeZustand,
 } from './code';
 import {
   aktiveKontakte,
@@ -170,7 +169,7 @@ export async function ladePortalFreigaben(
         : !istEmpfaenger
           ? 'Diese Kenntnisnahme ist an eine andere Person gerichtet.'
           : null;
-    const z = leseCodeZustand(f.codeHash);
+    const z = leseCodeZustand(f);
     const v = f.art === 'BESCHREIBUNG' ? versionJe.get(f.refId) : undefined;
     return {
       id: f.id,
@@ -191,7 +190,7 @@ export async function ladePortalFreigaben(
       code:
         code && istEmpfaenger
           ? {
-              status: codeStatus(f.codeHash, f.codeAblauf, jetzt),
+              status: codeStatus(f, jetzt),
               ablauf: iso(f.codeAblauf),
               verbleibendeVersuche: Math.max(0, MAX_FEHLVERSUCHE - z.fehlversuche),
             }
@@ -295,7 +294,7 @@ export async function fordereFreigabeCodeAn(
   const mandantId = e.mandantId.toLowerCase();
   const { f, rollen, mandant } = await portalFreigabe(ctx, mandantId, e.freigabeId);
   pruefeFreigabeRecht(ctx, mandantId, rollen, f);
-  const z = leseCodeZustand(f.codeHash);
+  const z = leseCodeZustand(f);
   if (istGesperrt(z)) throw new DienstFehler('KONFLIKT', GESPERRT);
   let sha256: string | null = null;
   if (f.art === 'BESCHREIBUNG') {
@@ -308,11 +307,17 @@ export async function fordereFreigabeCodeAn(
   // Neuer Code ersetzt den alten; die Fehlversuche dieser Freigabe bleiben stehen.
   const code = erzeugeCode();
   const codeAblauf = codeAblaufAb(new Date());
-  const neu = schreibeCodeZustand({ fehlversuche: z.fehlversuche, hash: codeHash(f.id, code) });
   return mitAudit(ctx, async (tx) => {
+    // Bedingt auf den gelesenen Zustand (Hash und Zähler unter der Zeilensperre).
     const r = await tx.freigabe.updateMany({
-      where: { id: f.id, status: 'OFFEN', empfaengerId: f.empfaengerId, codeHash: f.codeHash },
-      data: { codeHash: neu, codeAblauf },
+      where: {
+        id: f.id,
+        status: 'OFFEN',
+        empfaengerId: f.empfaengerId,
+        codeHash: f.codeHash,
+        codeFehlversuche: f.codeFehlversuche,
+      },
+      data: { codeHash: codeHash(f.id, code), codeAblauf },
     });
     if (r.count !== 1) throw new DienstFehler('KONFLIKT', ERLEDIGT);
     await legeNachrichtAn(tx, {
@@ -350,7 +355,7 @@ export async function erteileFreigabe(
   const mandantId = e.mandantId.toLowerCase();
   const { f, rollen } = await portalFreigabe(ctx, mandantId, e.freigabeId);
   pruefeFreigabeRecht(ctx, mandantId, rollen, f);
-  const z = leseCodeZustand(f.codeHash);
+  const z = leseCodeZustand(f);
   if (istGesperrt(z)) throw new DienstFehler('KONFLIKT', GESPERRT);
   if (!z.hash || !f.codeAblauf)
     throw new DienstFehler('KONFLIKT', 'Bitte fordern Sie zuerst einen Bestätigungscode an.');
@@ -394,13 +399,19 @@ export async function erteileFreigabe(
   if (!codePasst(f.id, e.code, z.hash)) {
     const versuch = z.fehlversuche + 1;
     const sperren = versuch >= MAX_FEHLVERSUCHE;
-    const neu = schreibeCodeZustand({ fehlversuche: versuch, hash: sperren ? null : z.hash });
     return mitAudit(ctx, async (tx) => {
       // Bedingt auf den gelesenen Zustand: Unter der Zeilensperre kann ihn niemand
       // zwischenzeitlich ändern; ohne Treffer bleibt nichts gezählt (fail closed).
       const r = await tx.freigabe.updateMany({
-        where: { id: f.id, status: 'OFFEN', codeHash: f.codeHash },
-        data: sperren ? { codeHash: neu, codeAblauf: null } : { codeHash: neu },
+        where: {
+          id: f.id,
+          status: 'OFFEN',
+          codeHash: f.codeHash,
+          codeFehlversuche: f.codeFehlversuche,
+        },
+        data: sperren
+          ? { codeFehlversuche: versuch, codeHash: null, codeAblauf: null }
+          : { codeFehlversuche: versuch },
       });
       if (r.count !== 1) throw new DienstFehler('KONFLIKT', 'Der Code ist nicht mehr gültig.');
       const protokoll: Protokoll[] = [
@@ -440,6 +451,7 @@ export async function erteileFreigabe(
         status: 'OFFEN',
         empfaengerId: f.empfaengerId,
         codeHash: f.codeHash,
+        codeFehlversuche: f.codeFehlversuche,
         codeAblauf: { gte: new Date() },
       },
       data: { status: 'FREIGEGEBEN', erledigtAm: zeitpunkt, codeHash: null, codeAblauf: null },
@@ -625,7 +637,7 @@ export async function adressiereFreigabeNeu(
   return mitAudit(ctx, async (tx) => {
     const r = await tx.freigabe.updateMany({
       where: { id: f.id, status: 'OFFEN', empfaengerId: f.empfaengerId },
-      data: { empfaengerId, codeHash: null, codeAblauf: null },
+      data: { empfaengerId, codeHash: null, codeAblauf: null, codeFehlversuche: 0 },
     });
     if (r.count !== 1) throw new DienstFehler('KONFLIKT', 'Diese Anforderung hat sich geändert.');
     await legeNachrichtAn(tx, {
@@ -644,7 +656,7 @@ export async function adressiereFreigabeNeu(
           art: f.art,
           vorherId: f.empfaengerId,
           empfaengerId,
-          codeZurueckgesetzt: f.codeHash !== null,
+          codeZurueckgesetzt: f.codeHash !== null || f.codeFehlversuche > 0,
         },
       },
     };

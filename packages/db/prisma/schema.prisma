@@ -39,8 +39,10 @@ enum MandantRolle {
 }
 
 /// Mandant der kanzleikonsole. `id` ist deren Mandanten-ID (kein Standardwert).
+/// Primärschlüssel (tenant_id, id): Dieselbe ID kann in zwei Tenants bestehen;
+/// das Anlegen verrät nie, ob es sie in einem anderen Tenant gibt (Welle 2).
 model Mandant {
-  id         String                @id @db.Uuid
+  id         String                @db.Uuid
   tenantId   String                @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   name       String
   rechtsform String
@@ -51,7 +53,7 @@ model Mandant {
   programme  TcmsProgramm[]
   kontakte   MandantKontaktRolle[]
 
-  @@unique([tenantId, id])
+  @@id([tenantId, id])
   @@index([tenantId, name])
 }
 
@@ -306,6 +308,8 @@ model Uebersteuerung {
   entschiedenVon String?
   entschiedenAm  DateTime?
 
+  /// Höchstens eine beantragte Übersteuerung je (Risiko, Sicht): Teilindex
+  /// `Uebersteuerung_beantragt_key` in der Migration (TS-05).
   @@index([tenantId, risikoId])
 }
 
@@ -458,6 +462,8 @@ model Durchfuehrung {
   entfallenBegruendung String?
   entfallenVon         String?
   entfallenAm          DateTime?
+  /// Höchstens ein offener Nachtrag je Durchführung: Teilindex
+  /// `Durchfuehrung_nachtrag_offen_key` in der Migration (TS-05).
   nachtragZuId         String?
   createdAt            DateTime            @default(now())
   nachweise            Nachweis[]
@@ -471,7 +477,10 @@ model Durchfuehrung {
 
 /// Verweis auf einen Nachweis (ADR 0001 §6). Im Dienst ist `dokumentId` die
 /// Dokument-ID der kanzleikonsole; die Demo-Oberfläche legt Dateien lokal ab
-/// und speichert hier den relativen Ablagepfad.
+/// und speichert hier den relativen Ablagepfad. Entfernen markiert den Verweis
+/// (`entferntAm`/`entferntVon`) statt ihn zu löschen; jeder Lesezugriff
+/// filtert `entferntAm IS NULL`, die Bindung einer Dokument-ID an Mandant und
+/// Inhalt gilt weiter.
 model Nachweis {
   id              String        @id @default(cuid())
   tenantId        String        @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
@@ -485,8 +494,11 @@ model Nachweis {
   gesperrt        Boolean       @default(false)
   hochgeladenVon  String
   hochgeladenAm   DateTime      @default(now())
+  entferntAm      DateTime?
+  entferntVon     String?
 
   @@index([tenantId, durchfuehrungId])
+  @@index([tenantId, dokumentId])
 }
 
 // ---------------------------------------------------------------------------
@@ -654,24 +666,26 @@ enum FolgeStatus {
 }
 
 model Ereignis {
-  id                   String          @id @default(cuid())
-  tenantId             String          @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
-  programmId           String
-  programm             TcmsProgramm    @relation(fields: [tenantId, programmId], references: [tenantId, id])
+  id                    String          @id @default(cuid())
+  tenantId              String          @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  programmId            String
+  programm              TcmsProgramm    @relation(fields: [tenantId, programmId], references: [tenantId, id])
   /// `<Jahr>-T-<nnnn>`, je Kanzlei (Tenant) eindeutig.
-  nummer               String
-  typ                  String
-  titel                String
-  beschreibung         String
-  quelle               EreignisQuelle
-  gemeldetVon          String?
-  gemeldetAm           DateTime        @default(now())
-  ereignisDatum        DateTime        @db.Date
-  status               EreignisStatus  @default(NEU)
-  verwerfenBegruendung String?
-  triagiertVon         String?
-  triagiertAm          DateTime?
-  folgen               EreignisFolge[]
+  nummer                String
+  typ                   String
+  titel                 String
+  beschreibung          String
+  quelle                EreignisQuelle
+  gemeldetVon           String?
+  gemeldetAm            DateTime        @default(now())
+  ereignisDatum         DateTime        @db.Date
+  status                EreignisStatus  @default(NEU)
+  verwerfenBegruendung  String?
+  /// Antragsteller:in des offenen Antrags auf Verwerfen (Vier-Augen).
+  verwerfenBeantragtVon String?
+  triagiertVon          String?
+  triagiertAm           DateTime?
+  folgen                EreignisFolge[]
 
   @@unique([tenantId, id])
   @@unique([tenantId, nummer])
@@ -753,7 +767,10 @@ model BeschreibungVersion {
   freigabeAngefordertAm DateTime?
   freigegebenVon        String?
   freigegebenAm         DateTime?
-  /// Eingefrorener Inhalt inkl. gerenderter lebender Bausteine.
+  /// Eingefrorener Inhalt inkl. gerenderter lebender Bausteine. Ab dem
+  /// Einfrieren (beim Mandanten, freigegeben, abgelöst) verhindert der Trigger
+  /// `BeschreibungVersion_eingefroren` jede Änderung außer den erlaubten
+  /// Statusübergängen und jedes Löschen (AGENTS.md Regel 3).
   snapshot              Json?
   snapshotSha256        String?
   createdAt             DateTime           @default(now())
@@ -778,38 +795,56 @@ enum FreigabeStatus {
 }
 
 model Freigabe {
-  id             String         @id @default(cuid())
-  tenantId       String         @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
-  programmId     String
-  programm       TcmsProgramm   @relation(fields: [tenantId, programmId], references: [tenantId, id])
-  art            FreigabeArt
-  refId          String
-  titel          String
+  id               String         @id @default(cuid())
+  tenantId         String         @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  programmId       String
+  programm         TcmsProgramm   @relation(fields: [tenantId, programmId], references: [tenantId, id])
+  art              FreigabeArt
+  refId            String
+  titel            String
   /// Darzustellender Inhalt (Markdown-light) bei Kenntnisnahmen und Akzeptanzen.
-  inhalt         String?
-  angefordertVon String
-  angefordertAm  DateTime       @default(now())
-  empfaengerId   String
-  codeHash       String?
-  codeAblauf     DateTime?
-  status         FreigabeStatus @default(OFFEN)
-  anmerkung      String?
-  erledigtAm     DateTime?
+  inhalt           String?
+  angefordertVon   String
+  angefordertAm    DateTime       @default(now())
+  empfaengerId     String
+  /// SHA-256 (hex) des aktiven Bestätigungscodes, an die Freigabe gebunden.
+  codeHash         String?
+  codeAblauf       DateTime?
+  /// Fehlversuche je Freigabe (0–5, CHECK in der Migration); nur unter
+  /// Zeilensperre gelesen und bedingt geschrieben.
+  codeFehlversuche Int            @default(0)
+  status           FreigabeStatus @default(OFFEN)
+  anmerkung        String?
+  erledigtAm       DateTime?
 
+  /// Höchstens eine offene Risikoakzeptanz je Risiko: Teilindex
+  /// `Freigabe_risikoakzeptanz_offen_key` in der Migration (TS-05).
   @@index([tenantId, programmId])
   @@index([tenantId, empfaengerId, status])
 }
 
-/// Postausgang der Entwicklungsumgebung (kein Mailversand in Stufe 1).
-model Nachricht {
-  id        String   @id @default(cuid())
-  tenantId  String   @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
-  an        String
-  betreff   String
-  text      String
-  createdAt DateTime @default(now())
+/// Zweck einer Nachricht im Postausgang (wie `NACHRICHT_ZWECKE` im Vertrag).
+enum NachrichtZweck {
+  FREIGABE_ANGEFORDERT
+  FREIGABE_CODE
+  FREIGABE_NEU_ADRESSIERT
+  EREIGNIS_GEMELDET
+}
 
-  @@index([tenantId, createdAt])
+/// Postausgang: Die kanzleikonsole holt offene Nachrichten ab und stellt sie
+/// zu. Empfänger nur als Personen-ID (TS-06). „Zugestellt" setzt
+/// `zugestelltAm` und leert `text` (er kann einen Bestätigungscode enthalten).
+model Nachricht {
+  id           String         @id @default(cuid())
+  tenantId     String         @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  empfaengerId String         @db.Uuid
+  zweck        NachrichtZweck
+  betreff      String
+  text         String
+  createdAt    DateTime       @default(now())
+  zugestelltAm DateTime?
+
+  @@index([tenantId, zugestelltAm, createdAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -839,6 +874,7 @@ model AuditEvent {
   @@index([tenantId, seq])
   @@index([tenantId, programmId, seq])
   @@index([tenantId, objektTyp, objektId])
+  @@index([tenantId, aktion, seq])
 }
 
 // ---------------------------------------------------------------------------

@@ -1,8 +1,8 @@
 // =============================================================================
 // Ereigniseingang, Triage und Portal-Meldung gegen PostgreSQL (DB_TESTS=1):
 // Rechte je Operation, Mandanten- und Tenant-Trennung, TS-04 auf dem Weg
-// „Folge → Feststellung", Vier-Augen beim Verwerfen (Antragsteller aus dem
-// Audit unter Sperre), TS-05 bei gleichzeitigen Übergängen, Anlagen nur als
+// „Folge → Feststellung", Vier-Augen beim Verwerfen (Antragsteller aus der
+// gesperrten Zeile), TS-05 bei gleichzeitigen Übergängen, Anlagen nur als
 // Verweise (TS-09) und Audit je Änderung.
 // =============================================================================
 
@@ -15,6 +15,7 @@ import {
   type Akteur,
   type AnlageVerweis,
 } from '@tcms/contract';
+import { schreibeAudit } from '@tcms/db';
 import type { DienstKontext } from '../../kontext';
 import {
   beantrageEreignisVerwerfen,
@@ -534,7 +535,7 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
     expect(await auditZahl(w, e.id, 'tcms.ereignis.abgeschlossen')).toBe(1);
   });
 
-  it('Verwerfen: Antragsteller (aus dem Audit) bestätigt nicht; zweite Person bestätigt, offene Vorschläge mit verworfen', async () => {
+  it('Verwerfen: Antragsteller (aus der Zeile) bestätigt nicht; zweite Person bestätigt, offene Vorschläge mit verworfen', async () => {
     const e = await neuesEreignis();
     await im(A.hb, (ctx) =>
       beantrageEreignisVerwerfen(ctx, {
@@ -588,6 +589,46 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
       actorId: w.p.zbt,
       detail: expect.objectContaining({ beantragtVon: w.p.hb }),
     });
+  });
+
+  it('Verwerfen: Antragsteller steht in der Zeile; ein späterer Audit-Eintrag eines Dritten ändert nichts', async () => {
+    const e = await neuesEreignis();
+    await im(A.hb, (ctx) =>
+      beantrageEreignisVerwerfen(ctx, {
+        mandantId: w.mandant,
+        ereignisId: e.id,
+        begruendung: BEGRUENDUNG,
+      }),
+    );
+    expect(
+      await inTenant(w, (tx) => tx.ereignis.findUniqueOrThrow({ where: { id: e.id } })),
+    ).toMatchObject({ verwerfenBeantragtVon: w.p.hb });
+    // Ein Audit-Eintrag „verwerfen_beantragt" einer anderen Person (z. B. Altbestand
+    // oder Fehler) macht die antragstellende Person nicht zur zweiten Person.
+    await inTenant(w, (tx) =>
+      schreibeAudit(tx, {
+        actorId: w.p.zbt,
+        actorName: 'Dritte Person',
+        aktion: 'tcms.ereignis.verwerfen_beantragt',
+        objektTyp: 'Ereignis',
+        objektId: e.id,
+        programmId: w.programm,
+        detail: {},
+      }),
+    );
+    const x = await fehlerVon(
+      im(A.hb, (ctx) =>
+        bestaetigeEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId: e.id }),
+      ),
+    );
+    expect(x.code).toBe('NICHT_BERECHTIGT');
+    // Zurückziehen leert den Antrag samt Antragsteller.
+    await im(A.hb, (ctx) =>
+      lehneEreignisVerwerfenAb(ctx, { mandantId: w.mandant, ereignisId: e.id }),
+    );
+    expect(
+      await inTenant(w, (tx) => tx.ereignis.findUniqueOrThrow({ where: { id: e.id } })),
+    ).toMatchObject({ verwerfenBegruendung: null, verwerfenBeantragtVon: null });
   });
 
   it('TS-05 Verwerfen: zwei zweite Personen gleichzeitig → genau eine Bestätigung', async () => {
@@ -743,8 +784,19 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
       const n = await inTenant(w, (tx) =>
         tx.nachricht.findFirstOrThrow({ where: { betreff: { contains: r.nummer } } }),
       );
-      expect(n.an).toBe('Leon Brandt');
+      // TS-06: adressiert über die ID, nie über den mitgelieferten Namen.
+      expect(n).toMatchObject({ empfaengerId: w.p.hb, zweck: 'EREIGNIS_GEMELDET' });
+      expect(JSON.stringify(n)).not.toContain('Leon Brandt');
     }
+    // Ohne genannte Person entsteht keine Nachricht (das Ereignis steht im Eingang).
+    const ohne = await im(A.gv, (ctx) =>
+      meldeEreignis(ctx, meldung({ benachrichtigen: null }) as never),
+    );
+    expect(
+      await inTenant(w, (tx) =>
+        tx.nachricht.count({ where: { betreff: { contains: ohne.nummer } } }),
+      ),
+    ).toBe(0);
   });
 
   it('Portal: Mitarbeitende und Kanzlei → NICHT_BERECHTIGT; ohne Rolle, fremder Mandant, fremder Tenant → NICHT_GEFUNDEN', async () => {

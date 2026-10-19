@@ -80,7 +80,7 @@ export async function ladeSetupProgramm(mandantId: string): Promise<SetupProgram
  */
 export async function ladeUmfeld(mandantId: string, heute: Date): Promise<Umfeld | null> {
   if (!UUID.test(mandantId)) return null;
-  const mandant = await db.mandant.findUnique({ where: { id: mandantId } });
+  const mandant = await db.mandant.findFirst({ where: { id: mandantId } });
   if (!mandant) return null;
   const kontakte = await db.mandantKontaktRolle.findMany({
     where: { mandantId, aktiv: true },

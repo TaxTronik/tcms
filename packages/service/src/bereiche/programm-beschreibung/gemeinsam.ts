@@ -64,7 +64,7 @@ export async function kanzleiZugriff(
   const a = ctx.akteur;
   if (a.art !== 'KANZLEI' || !kannLesen(a, mandantId)) nichtGefunden();
   // RLS: ein Mandant eines anderen Tenants ist hier unsichtbar.
-  const mandant = await ctx.tx.mandant.findUnique({
+  const mandant = await ctx.tx.mandant.findFirst({
     where: { id: mandantId },
     select: { id: true, name: true },
   });
@@ -87,7 +87,7 @@ export async function portalZugriff(
   if (a.art !== 'MANDANT') return nichtGefunden();
   const rollen = await ladeKontaktRollen(ctx.tx, a);
   if (!kannLesen(a, mandantId, rollen)) nichtGefunden();
-  const mandant = await ctx.tx.mandant.findUnique({
+  const mandant = await ctx.tx.mandant.findFirst({
     where: { id: mandantId },
     select: { id: true, name: true },
   });

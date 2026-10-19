@@ -2,7 +2,8 @@
 // Nur für Tests des Bereichs „programm-beschreibung": eine eigene Welt je
 // Testdatei in einem frischen Tenant (zwei Mandanten mit Kontakten und Rollen),
 // Akteure, Uhr und Helfer. Läuft über `mitTenant` als Laufzeitrolle tcms_app
-// (RLS aktiv); legt nur Daten im eigenen Tenant an.
+// (RLS aktiv); legt nur Daten im eigenen Tenant an. Einzige Ausnahme ist
+// `alsEigentuemerOhneTrigger` für Manipulationstests (Eigentümerrolle).
 // =============================================================================
 
 import { randomUUID } from 'node:crypto';
@@ -168,6 +169,36 @@ export function inWelt<T>(w: Welt, fn: (tx: Tx) => Promise<T>): Promise<T> {
 /** Zweite Laufzeitverbindung für Gleichzeitigkeitstests (eigener Pool, ebenfalls tcms_app). */
 export function zweiteVerbindung(): PrismaClient {
   return erzeugeClient(process.env['DATABASE_URL']);
+}
+
+/**
+ * Ändert Daten unterhalb des Dienstes, wie es nur mit Eigentümerrechten ginge
+ * (Migrationsrolle `tcms_owner`, `DATABASE_OWNER_URL`; nur für
+ * Manipulationstests): eine Transaktion im Tenant der Welt, in der der
+ * Einfrier-Trigger der Beschreibung abgeschaltet ist (vor dem Festschreiben
+ * wieder an). Die Laufzeitrolle kann den Trigger nicht abschalten.
+ */
+export async function alsEigentuemerOhneTrigger(
+  w: Welt,
+  sql: string,
+  ...werte: unknown[]
+): Promise<number> {
+  const eigentuemer = erzeugeClient(process.env['DATABASE_OWNER_URL']);
+  try {
+    return await eigentuemer.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('tcms.tenant_id', ${w.tenantId}, true)`;
+      await tx.$executeRawUnsafe(
+        'ALTER TABLE "BeschreibungVersion" DISABLE TRIGGER "BeschreibungVersion_eingefroren"',
+      );
+      const n = await tx.$executeRawUnsafe(sql, ...werte);
+      await tx.$executeRawUnsafe(
+        'ALTER TABLE "BeschreibungVersion" ENABLE TRIGGER "BeschreibungVersion_eingefroren"',
+      );
+      return n;
+    });
+  } finally {
+    await eigentuemer.$disconnect();
+  }
 }
 
 /** Audit-Einträge zu einem Objekt (neueste zuletzt). */

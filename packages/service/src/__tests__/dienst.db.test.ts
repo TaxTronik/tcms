@@ -70,8 +70,8 @@ describe.skipIf(!AKTIV)('Dienstkontext gegen PostgreSQL', () => {
 
   it('läuft im Tenant des Akteurs und sieht keine Daten anderer Tenants', async () => {
     const sicht = await imDienst(kanzlei, PORTS, async (ctx) => ({
-      eigene: await ctx.tx.mandant.findUnique({ where: { id: mandantA } }),
-      fremde: await ctx.tx.mandant.findUnique({ where: { id: mandantB } }),
+      eigene: await ctx.tx.mandant.findFirst({ where: { id: mandantA } }),
+      fremde: await ctx.tx.mandant.findFirst({ where: { id: mandantB } }),
     }));
     expect(sicht.eigene?.id).toBe(mandantA);
     expect(sicht.fremde).toBeNull();
@@ -80,7 +80,7 @@ describe.skipIf(!AKTIV)('Dienstkontext gegen PostgreSQL', () => {
   it('mitAudit schreibt Akteur-ID und -Name in die Kette des Tenants', async () => {
     await imDienst(kanzlei, PORTS, (ctx) =>
       mitAudit(ctx, async (tx) => {
-        await tx.mandant.update({ where: { id: mandantA }, data: { name: 'A neu' } });
+        await tx.mandant.updateMany({ where: { id: mandantA }, data: { name: 'A neu' } });
         return {
           wert: null,
           protokoll: {
@@ -110,13 +110,16 @@ describe.skipIf(!AKTIV)('Dienstkontext gegen PostgreSQL', () => {
     await expect(
       imDienst(kanzlei, PORTS, (ctx) =>
         mitAudit(ctx, async (tx) => {
-          await tx.mandant.update({ where: { id: mandantA }, data: { name: 'ohne Protokoll' } });
+          await tx.mandant.updateMany({
+            where: { id: mandantA },
+            data: { name: 'ohne Protokoll' },
+          });
           return { wert: null, protokoll: [] };
         }),
       ),
     ).rejects.toThrow(/ohne Audit-Eintrag/);
     const m = await mitTenant(tenantA, (tx) =>
-      tx.mandant.findUniqueOrThrow({ where: { id: mandantA } }),
+      tx.mandant.findFirstOrThrow({ where: { id: mandantA } }),
     );
     expect(m.name).not.toBe('ohne Protokoll');
   });

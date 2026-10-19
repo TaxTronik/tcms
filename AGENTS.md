@@ -10,7 +10,8 @@ für KI-Werkzeuge.
   Häufigkeitsmatrix Governance-Typ × Bruttoklasse, Statusmodelle, Phasen,
   Grundelemente, Prüflast, Formatierung. Änderungen hier brauchen Tests
   (`pnpm --filter @tcms/domain test`).
-- `packages/db` – Prisma-Schema, Init-Migration mit RLS je Tabelle, Rollen-Bootstrap
+- `packages/db` – Prisma-Schema, Migrationen (Init mit RLS je Tabelle, danach
+  Nachträge von Hand im Prisma-Format), Rollen-Bootstrap
   (`prisma/init/01_bootstrap.sql`), `mitTenant` (Prisma 7 mit `@prisma/adapter-pg`),
   Audit-Hashkette je Tenant (`schreibeAudit`), Seed. Jeder Laufzeitzugriff läuft in
   `mitTenant`; einen ungebundenen Client gibt es nicht. Neue Tabellen brauchen
@@ -125,8 +126,13 @@ für KI-Werkzeuge.
   (`SELECT … FOR UPDATE`) in derselben Transaktion, Änderungen als bedingtes
   Update (TS-05).
 - Nachweise sind Verweise der kanzleikonsole (Dokument-ID als UUID, SHA-256):
-  eine Dokument-ID gehört zu genau einem Mandanten und einem Inhalt; Entfernen
-  löscht nur den Verweis, der vollständige Verweis bleibt im Audit.
+  eine Dokument-ID gehört zu genau einem Mandanten und einem Inhalt (auch nach
+  dem Entfernen). Entfernen markiert den Verweis (`entferntAm`/`entferntVon`);
+  jeder Lesezugriff filtert `entferntAm IS NULL`, der vollständige Verweis
+  steht zusätzlich im Audit.
+- Mandanten-IDs der kanzleikonsole sind nur je Tenant eindeutig (Schlüssel
+  `(tenant_id, id)`): Anlegen und Lesen verraten nie, ob es eine ID in einem
+  anderen Tenant gibt. Mandanten nur mit `findFirst`/Tenant-Schlüssel lesen.
 
 ## Freigaben und Postausgang (verbindlich)
 
@@ -134,11 +140,20 @@ für KI-Werkzeuge.
   aktive gesetzliche Vertretung. Eine andere Person zieht keine Anforderung an sich; die Kanzlei
   adressiert neu (eigene, auditierte Aktion, setzt Code und Fehlversuche zurück) – TS-06.
 - Bestätigungscodes: 6 Ziffern aus `randomInt`, nur ein an die Freigabe gebundener SHA-256 wird
-  gespeichert, 7 Tage gültig (echte Zeit), höchstens 5 Fehlversuche je Freigabe (gezählt unter
-  Zeilensperre, nie aus dem Audit), einmal verwendbar, Vergleich mit `timingSafeEqual`. Codes
-  stehen in keiner Antwort, keinem Log und keinem Audit-Detail – nur im Postausgang.
-- Nachrichten adressieren Empfänger über die Personen-ID (`tcms:<ZWECK>:<uuid>`), nie über Namen.
-- Freigegeben wird nur ein eingefrorener Inhalt, dessen SHA-256 zum gespeicherten Hash passt.
+  gespeichert (`codeHash`, CHECK hex), 7 Tage gültig (echte Zeit), höchstens 5 Fehlversuche je
+  Freigabe (`codeFehlversuche`, CHECK 0–5, gezählt unter Zeilensperre mit bedingtem Update, nie
+  aus dem Audit), einmal verwendbar, Vergleich mit `timingSafeEqual`. Codes stehen in keiner
+  Antwort, keinem Log und keinem Audit-Detail – nur im Postausgang.
+- Nachrichten adressieren Empfänger nur über die Personen-ID (`empfaengerId`, UUID) mit einem
+  Zweck aus `NACHRICHT_ZWECKE`, nie über Namen. „Zugestellt" setzt `zugestelltAm` und leert den
+  Text (er kann einen Code enthalten).
+- Freigegeben wird nur ein eingefrorener Inhalt, dessen SHA-256 zum gespeicherten Hash passt. Ab
+  dem Einfrieren (beim Mandanten, freigegeben, abgelöst) verhindert der Trigger
+  `BeschreibungVersion_eingefroren` jede Änderung außer den Statusübergängen zu „freigegeben"
+  (mit Person und Zeitpunkt) bzw. „abgelöst" und jedes Löschen – für jede Rolle.
+- Höchstens eine offene Risikoakzeptanz je Risiko, eine beantragte Übersteuerung je (Risiko,
+  Sicht) und ein offener Nachtrag je Durchführung: unter Zeilensperre geprüft und zusätzlich als
+  eindeutiger Teilindex (Verletzung → `KONFLIKT`).
 
 ## Dienst und Authentifizierung (verbindlich, ADR 0001 §3)
 

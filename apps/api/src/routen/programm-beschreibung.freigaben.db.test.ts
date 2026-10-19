@@ -83,7 +83,7 @@ describe.skipIf(!AKTIV)('Endpunkte CMS-Beschreibung und Freigaben (App + Postgre
       await senden(w, 'GET', `${m(w.A)}/portal/freigaben`, a.kontakt(w.GV, w.A)),
     );
     expect(JSON.stringify(portal)).not.toContain(code);
-    expect(JSON.stringify(portal)).not.toMatch(/v1:\d:/);
+    expect(JSON.stringify(portal)).not.toMatch(/codeHash|codeFehlversuche/);
     const P = `${m(w.A)}/portal/freigaben/${String(fr['freigabeId'])}`;
     const falsch = await ok(
       await senden(w, 'POST', `${P}/freigeben`, a.kontakt(w.GV, w.A), {

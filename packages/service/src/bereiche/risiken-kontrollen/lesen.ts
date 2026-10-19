@@ -636,7 +636,7 @@ export async function ladeProfil(ctx: DienstKontext, eingabe: ProfilLesen): Prom
   const e = pruefeEingabe(ProfilLesenSchema, eingabe);
   const mandantId = kanonisch(e.mandantId);
   pruefeStaffLesen(ctx.akteur, mandantId);
-  const mandant = await ctx.tx.mandant.findUnique({
+  const mandant = await ctx.tx.mandant.findFirst({
     where: { id: mandantId },
     select: { id: true },
   });

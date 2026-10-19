@@ -71,8 +71,9 @@ export async function setzeMandantAnker(
       });
     }
     const nachher = await mitAudit(ctx, async (tx) => {
+      // Schlüssel (tenant_id, id): Tenant aus dem Akteur, nie aus der Eingabe.
       const m = await tx.mandant.update({
-        where: { id },
+        where: { tenantId_id: { tenantId: ctx.akteur.tenantId, id } },
         data: soll,
         select: { id: true, name: true, rechtsform: true, datevNr: true, aktiv: true },
       });
@@ -121,8 +122,9 @@ export async function setzeMandantAnker(
       geaendert: true,
     });
   } catch (f) {
-    // Die ID ist global eindeutig: Gibt es sie (unsichtbar) in einem anderen Tenant,
-    // scheitert das Anlegen. Antwort ohne Hinweis darauf, wo sie existiert.
+    // Schlüssel (tenant_id, id): Eine ID eines anderen Tenants stört nie (kein
+    // Existenz-Orakel). Eine Unique-Verletzung bleibt nur bei gleichzeitigem
+    // Anlegen im selben Tenant denkbar (die Tenant-Sperre serialisiert das).
     if (f instanceof Prisma.PrismaClientKnownRequestError && f.code === 'P2002') {
       throw new DienstFehler('KONFLIKT', 'Der Mandant kann nicht angelegt werden.');
     }

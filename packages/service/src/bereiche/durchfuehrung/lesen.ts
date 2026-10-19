@@ -488,7 +488,7 @@ export async function listeKontrollaufgaben(
     include: {
       kontrolleStand: true,
       kontrolle: { select: { code: true, aktivAb: true, entfallenAb: true } },
-      _count: { select: { nachweise: true } },
+      _count: { select: { nachweise: { where: { entferntAm: null } } } },
     },
     orderBy: [{ faelligAm: 'asc' }, { id: 'asc' }],
   });
@@ -565,7 +565,11 @@ export async function ladeNachweis(
   const { mandantId, nachweisId } = pruefeEingabe(NachweisLesenEingabeSchema, eingabe);
   const rollen = await pruefeLeserecht(ctx, mandantId);
   const n = await ctx.tx.nachweis.findFirst({
-    where: { id: nachweisId, durchfuehrung: { kontrolle: { programm: { mandantId } } } },
+    where: {
+      id: nachweisId,
+      entferntAm: null,
+      durchfuehrung: { kontrolle: { programm: { mandantId } } },
+    },
     include: { durchfuehrung: { include: { kontrolleStand: true } } },
   });
   if (!n) throw new DienstFehler('NICHT_GEFUNDEN');

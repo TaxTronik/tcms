@@ -51,6 +51,8 @@ export const NACHRICHT_ZWECKE = [
   'FREIGABE_CODE',
   /** Die Kanzlei hat eine Anforderung an diese Person neu adressiert (ohne Code). */
   'FREIGABE_NEU_ADRESSIERT',
+  /** Ein Mandantenkontakt hat im Portal ein Ereignis gemeldet (an die zuständige Kanzleiperson). */
+  'EREIGNIS_GEMELDET',
 ] as const;
 export const NachrichtZweckSchema = z.enum(NACHRICHT_ZWECKE);
 export type NachrichtZweck = z.infer<typeof NachrichtZweckSchema>;

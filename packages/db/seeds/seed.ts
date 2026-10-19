@@ -1366,6 +1366,8 @@ async function main() {
       reviewVon: anna.id,
       reviewAm: zeit(utc(2026, 9, 29), 17),
       freigabeAngefordertAm: zeit(utc(2026, 9, 30), 8, 45),
+      // Beim Mandanten liegt nur eingefrorener Inhalt (Freigabe prüft den SHA-256).
+      ...snap('1.2', abschnitte(talwind.name)),
     },
   });
   await prisma.beschreibungVersion.create({
@@ -1625,10 +1627,11 @@ async function main() {
   // Mandant ohne Tax-CMS: Ausgangspunkt für den Einrichtungsassistenten (S3).
   await mandant(DEMO_IDS.bergkamm);
 
-  // Dev-Postausgang: Hinweis auf die Entwicklungs-Anmeldung.
+  // Postausgang: Hinweis an die adressierte gesetzliche Vertreterin (Personen-ID, TS-06).
   await prisma.nachricht.create({
     data: {
-      an: jana.name,
+      empfaengerId: jana.id,
+      zweck: 'FREIGABE_ANGEFORDERT',
       betreff: 'Freigabe angefordert: CMS-Beschreibung v1.2',
       text: 'Im Portal wartet die CMS-Beschreibung v1.2 auf Ihre Freigabe. Den Bestätigungscode erhalten Sie beim Freigeben.',
       createdAt: zeit(utc(2026, 9, 30), 8, 46),

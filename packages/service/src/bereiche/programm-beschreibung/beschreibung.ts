@@ -52,7 +52,7 @@ import {
   pruefeSnapshot,
   type BeschreibungStatusWert,
 } from './bausteine';
-import { codeAblaufAb, codeHash, codeStatus, erzeugeCode, schreibeCodeZustand } from './code';
+import { codeAblaufAb, codeHash, codeStatus, erzeugeCode } from './code';
 import {
   aktiveKontakte,
   fachlichUngueltig,
@@ -200,7 +200,7 @@ export async function ladeBeschreibung(
         angefordertVon: f.angefordertVon,
         angefordertAm: f.angefordertAm.toISOString(),
         empfaengerId: f.empfaengerId,
-        codeStatus: k.historisch ? ('KEIN' as const) : codeStatus(f.codeHash, f.codeAblauf, jetzt),
+        codeStatus: k.historisch ? ('KEIN' as const) : codeStatus(f, jetzt),
         codeAblauf: k.historisch ? null : iso(f.codeAblauf),
         anmerkung: spaeter ? null : f.anmerkung,
         erledigtAm: spaeter ? null : iso(f.erledigtAm),
@@ -601,7 +601,7 @@ export async function fordereBeschreibungsfreigabeAn(
     await tx.freigabe.update({
       where: { id: freigabe.id },
       data: {
-        codeHash: schreibeCodeZustand({ fehlversuche: 0, hash: codeHash(freigabe.id, code) }),
+        codeHash: codeHash(freigabe.id, code),
         codeAblauf,
       },
     });

@@ -269,7 +269,7 @@ describe.skipIf(!AKTIV)('Einrichtungsassistent (Service, PostgreSQL)', () => {
     const [programm, freigabe, nachrichten, kette, audit] = await inWelt(w, async (tx) => [
       await tx.tcmsProgramm.findUniqueOrThrow({ where: { id: r.programmId } }),
       await tx.freigabe.findUniqueOrThrow({ where: { id: r.freigabeId! } }),
-      await tx.nachricht.findMany({ where: { an: { endsWith: m.gv } } }),
+      await tx.nachricht.findMany({ where: { empfaengerId: m.gv } }),
       await pruefeAuditKette(tx),
       await tx.auditEvent.findMany({
         where: { programmId: r.programmId },
@@ -284,7 +284,7 @@ describe.skipIf(!AKTIV)('Einrichtungsassistent (Service, PostgreSQL)', () => {
       status: 'OFFEN',
       codeHash: null,
     });
-    expect(nachrichten.map((n) => n.an)).toEqual([`tcms:FREIGABE_ANGEFORDERT:${m.gv}`]);
+    expect(nachrichten.map((n) => n.zweck)).toEqual(['FREIGABE_ANGEFORDERT']);
     expect(kette.gueltig).toBe(true);
     const aktionen = audit.map((a) => a.aktion);
     expect(aktionen).toContain('tcms.programm.version1_angelegt');

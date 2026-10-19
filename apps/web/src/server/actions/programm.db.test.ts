@@ -181,7 +181,7 @@ describe.skipIf(!AKTIV)('Demo-Actions Einrichtung, Beschreibung, Freigaben', () 
     });
     const n = await imDemo((tx) =>
       tx.nachricht.findFirstOrThrow({
-        where: { an: `tcms:FREIGABE_CODE:${DEMO_IDS.lea}` },
+        where: { empfaengerId: DEMO_IDS.lea, zweck: 'FREIGABE_CODE' },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       }),
     );
