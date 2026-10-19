@@ -17,6 +17,7 @@ import {
   EinrichtungLesenQuerySchema,
   EntwurfSpeichernBodySchema,
   FreigabeNeuadressierungBodySchema,
+  FreigabenHistorieQuerySchema,
   NachrichtenOffenQuerySchema,
   PortalFreigebenBodySchema,
   PortalKenntnisnahmeBodySchema,
@@ -34,6 +35,7 @@ import {
   gibBeschreibungZurReview,
   ladeBeschreibung,
   ladeEinrichtung,
+  ladeFreigabenHistorie,
   ladeOffeneNachrichten,
   ladePortalFreigaben,
   legeBeschreibungsversionAn,
@@ -209,5 +211,14 @@ export function registriereProgrammBeschreibung(r: Routen<Tx>): void {
         freigabeId: c.params.freigabeId!,
         ...c.body,
       }),
+  });
+
+  // ---- Kommunikation ----
+  r.route({
+    methode: 'GET',
+    pfad: `${M}/kommunikation/freigaben`,
+    query: FreigabenHistorieQuerySchema,
+    handler: (c) =>
+      ladeFreigabenHistorie(dienstKontext(c), { mandantId: c.params.mandantId!, ...c.query }),
   });
 }

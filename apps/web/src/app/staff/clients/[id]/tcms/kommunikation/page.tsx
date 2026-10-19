@@ -62,7 +62,7 @@ export default async function Kommunikation({
     );
   }
 
-  const alle = await ladeFreigaben(ctx.programm.id, ctx.stand);
+  const alle = await ladeFreigaben(id, seite.standIso);
   const freigaben = alle.filter((f) => f.art !== 'KENNTNISNAHME');
   const kenntnisnahmen = alle.filter((f) => f.art === 'KENNTNISNAHME');
   const freigegebeneBeschreibungen = ctx.beschreibungen.filter(

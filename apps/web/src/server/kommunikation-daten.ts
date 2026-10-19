@@ -1,10 +1,13 @@
 import 'server-only';
-import { db } from './demo';
-import { tagesende } from './zeit';
+import { DienstFehler } from '@tcms/contract';
+import { imDienst, ladeFreigabenHistorie } from '@tcms/service';
+import { DEMO_PORTS } from './demo';
+import { demoAkteur } from './sitzung';
 
 // =============================================================================
-// S13 Kommunikation: Freigaben und Kenntnisnahmen des Programms zum Stichtag.
-// Status zum Stichtag: eine später erledigte Anforderung gilt am Stichtag als offen.
+// S13 Kommunikation: Freigaben und Kenntnisnahmen des Programms zum Stichtag
+// über den Service-Lader `ladeFreigabenHistorie` (Status zum Stichtag: eine
+// später erledigte Anforderung gilt am Stichtag als offen).
 // =============================================================================
 
 export interface FreigabeZeile {
@@ -20,30 +23,21 @@ export interface FreigabeZeile {
   codeAblauf: Date | null;
 }
 
-export async function ladeFreigaben(programmId: string, stand: Date): Promise<FreigabeZeile[]> {
-  const ende = tagesende(stand);
-  const roh = await db.freigabe.findMany({
-    where: { programmId, angefordertAm: { lte: ende } },
-    orderBy: { angefordertAm: 'desc' },
-    select: {
-      id: true,
-      art: true,
-      titel: true,
-      empfaengerId: true,
-      angefordertVon: true,
-      angefordertAm: true,
-      status: true,
-      erledigtAm: true,
-      anmerkung: true,
-      codeAblauf: true,
-    },
-  });
-  return roh.map((f) => {
-    const spaeter = f.erledigtAm != null && f.erledigtAm.getTime() > ende.getTime();
-    return {
+export async function ladeFreigaben(mandantId: string, standIso: string): Promise<FreigabeZeile[]> {
+  const akteur = await demoAkteur(mandantId);
+  if (!akteur) return [];
+  try {
+    const h = await imDienst(akteur, DEMO_PORTS, (ctx) =>
+      ladeFreigabenHistorie(ctx, { mandantId, stand: standIso }),
+    );
+    return h.freigaben.map((f) => ({
       ...f,
-      status: spaeter ? 'OFFEN' : f.status,
-      erledigtAm: spaeter ? null : f.erledigtAm,
-    };
-  });
+      angefordertAm: new Date(f.angefordertAm),
+      erledigtAm: f.erledigtAm ? new Date(f.erledigtAm) : null,
+      codeAblauf: f.codeStatus === 'AKTIV' && f.codeAblauf ? new Date(f.codeAblauf) : null,
+    }));
+  } catch (e) {
+    if (e instanceof DienstFehler && e.code === 'NICHT_GEFUNDEN') return [];
+    throw e;
+  }
 }

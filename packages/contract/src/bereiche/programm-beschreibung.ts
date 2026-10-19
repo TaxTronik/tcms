@@ -921,3 +921,38 @@ export type PortalKenntnisnahmeEingabe = z.infer<typeof PortalKenntnisnahmeEinga
 export const PortalKenntnisnahmeErgebnisSchema = z
   .object({ freigabeId: z.string(), erledigtAm: isoZeit })
   .strict();
+
+// -----------------------------------------------------------------------------
+// Kommunikation: Freigaben-Historie (Kanzlei)
+// -----------------------------------------------------------------------------
+
+export const FreigabenHistorieQuerySchema = z.object({ stand: StandSchema.optional() }).strict();
+export const FreigabenHistorieEingabeSchema = FreigabenHistorieQuerySchema.extend({
+  mandantId: uuid,
+}).strict();
+export type FreigabenHistorieEingabe = z.infer<typeof FreigabenHistorieEingabeSchema>;
+export const FreigabeHistorieZeileSchema = z
+  .object({
+    id: z.string(),
+    art: freigabeArt,
+    titel: z.string(),
+    empfaengerId: z.string(),
+    angefordertVon: z.string(),
+    angefordertAm: isoZeit,
+    /** Status zum Stichtag: später erledigte Anforderungen gelten am Stichtag als offen. */
+    status: freigabeStatus,
+    erledigtAm: isoZeit.nullable(),
+    anmerkung: z.string().nullable(),
+    codeStatus: FreigabeCodeStatusSchema,
+    codeAblauf: isoZeit.nullable(),
+  })
+  .strict();
+export type FreigabeHistorieZeile = z.infer<typeof FreigabeHistorieZeileSchema>;
+export const FreigabenHistorieSchema = z
+  .object({
+    stand: isoTag,
+    historisch: z.boolean(),
+    freigaben: z.array(FreigabeHistorieZeileSchema),
+  })
+  .strict();
+export type FreigabenHistorie = z.infer<typeof FreigabenHistorieSchema>;

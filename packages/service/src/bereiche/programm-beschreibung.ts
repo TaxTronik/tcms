@@ -29,6 +29,7 @@ export {
   freigabeBrauchtCode,
   ladePortalFreigaben,
 } from './programm-beschreibung/freigaben';
+export { ladeFreigabenHistorie } from './programm-beschreibung/kommunikation';
 export {
   bestaetigeNachrichtZustellung,
   ladeOffeneNachrichten,
