@@ -47,7 +47,8 @@ für KI-Werkzeuge.
   Akteursbestätigung (`signiereAkteur`, `pruefeAkteur`, nur `node:crypto`),
   strenges JSON (`parseJsonStrikt`), Fehlercodes und Antwortumschlag,
   Endpunktregister `ENDPUNKTE` (`endpunkte.ts`: je Endpunkt Methode, Muster,
-  `portal`, Schemas für Pfadparameter, Query, Body und Antwort, Status). Beide
+  zugelassene Akteursarten `akteure` (daraus abgeleitet `portal`), Schemas für
+  Pfadparameter, Query, Body und Antwort, Status). Beide
   Seiten nutzen denselben Code; Änderungen hier brauchen Positiv- und
   Negativtests (`pnpm --filter @tcms/contract test`).
 - `apps/api` – interner HTTP-Dienst (Hono auf Node 24) für die kanzleikonsole:
@@ -173,8 +174,12 @@ für KI-Werkzeuge.
   aus dem Audit), einmal verwendbar, Vergleich mit `timingSafeEqual`. Codes stehen in keiner
   Antwort, keinem Log und keinem Audit-Detail – nur im Postausgang.
 - Nachrichten adressieren Empfänger nur über die Personen-ID (`empfaengerId`, UUID) mit einem
-  Zweck aus `NACHRICHT_ZWECKE`, nie über Namen. „Zugestellt" setzt `zugestelltAm` und leert den
-  Text (er kann einen Code enthalten).
+  Zweck aus `NACHRICHT_ZWECKE`, nie über Namen; jede trägt `mandantId`, die aus dem Zweck folgende
+  `empfaengerArt` und Vorlagendaten `daten` (geprüft gegen den Vertrag, ohne Namen und ohne Code).
+  Neue Nachrichten nur über `legeNachrichtAn`. Der Code steht nur in der Spalte `code` der offenen
+  Nachricht. „Zugestellt" setzt `zugestelltAm` und leert `code` und Text; gilt ein Code nicht mehr,
+  verwirft der nächste Abruf die Nachricht (`verworfenAm`, leert `code` und Text) und liefert sie
+  nicht aus. Abholen und Zustellung melden darf ausschließlich der Systemakteur (Stufe 4).
 - Freigegeben wird nur ein eingefrorener Inhalt, dessen SHA-256 zum gespeicherten Hash passt. Ab
   dem Einfrieren (beim Mandanten, freigegeben, abgelöst) verhindert der Trigger
   `BeschreibungVersion_eingefroren` jede Änderung außer den Statusübergängen zu „freigegeben"
@@ -200,10 +205,18 @@ für KI-Werkzeuge.
   Muster, `portal`, Schemas und Erfolgsstatus stehen nur im Endpunktregister
   (`packages/contract/src/endpunkte.ts`). Ein neuer Endpunkt entsteht zuerst
   dort; weichen Routentabelle und Register ab, startet der Dienst nicht. Jede
-  Fachroute verlangt Token und Bestätigung. Pfade unter
-  `/v1/mandanten/:mandantId/…` sind an `cli.id` gebunden, `MANDANT`-Personen nur
-  auf Routen mit `portal: true` (nur `/v1/ich` und `…/portal/…`).
-  Pfadparameter werden nach Body und Query eingesetzt.
+  Fachroute verlangt Token und Bestätigung. Jede Route lässt nur die
+  Akteursarten aus `akteure` zu (sonst 404): `MANDANT`-Personen nur `/v1/ich`
+  und `…/portal/…`, der Systemakteur (`knd: SYSTEM`, ohne `rol`/`cli`) nur die
+  zwei Nachrichten-Endpunkte, nie neben einer Person und nie auf
+  Mandantenpfaden. Pfade unter `/v1/mandanten/:mandantId/…` sind an `cli.id`
+  gebunden. Pfadparameter werden nach Body und Query eingesetzt.
+- Operationen für Personen bekommen nur einen `DienstKontext` (Akteur
+  `PersonAkteur`; `personAkteur`/`imDienst` weisen den Systemakteur mit 404 ab),
+  Systemoperationen nur einen `SystemKontext` (`systemAkteur`/`imSystemdienst`).
+  Eine neue Systemoperation braucht einen Registereintrag `akteure: NUR_SYSTEM`,
+  eine eigene Artprüfung in der Operation und den registerweiten Test
+  (`apps/api/src/__tests__/systemakteur*.test.ts`) angepasst.
 - Logs: JSON-Zeilen ohne Header-Werte, Bodys, Namen und rohe Pfade, nur IDs
   und Codes. Keine Secrets in Logs, Fehlermeldungen, Tests oder Commits.
 - Jede Sicherheitsannahme hat einen Negativtest, der ohne die Schutzmaßnahme

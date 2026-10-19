@@ -126,6 +126,8 @@ auf ein Objekt eines anderen Tenants scheitert also schon in der Datenbank.
   CMS-Beschreibung und den Schlüssel `(tenant_id, id)` für `Mandant` (keine neuen Tabellen; setzt
   eine Datenbank ohne Bestandsdaten voraus und scheitert sonst an NOT NULL/CHECK).
   `20261019200000_audit_pos` ergänzt die Audit-Position `pos` je Tenant (RT-03; ebenfalls ohne
+  Bestandsdaten). `20261019230000_nachrichten_strukturiert` ergänzt den Postausgang um Mandant
+  (Fremdschlüssel), Empfängerart, Vorlagendaten, Code und `verworfenAm` samt CHECKs (Stufe 4, ohne
   Bestandsdaten).
 
 DB-Tests (RLS je Tabelle aus dem Katalog, Rechte, Tenantgrenzen, Audit-Kette bei parallelen
@@ -203,8 +205,9 @@ keine Verbindungen mehr an, lässt laufende Anfragen höchstens 20 s zu Ende lau
 (Exit 0; nach Fristablauf Exit 1).
 
 **Endpunktregister.** Jeder Endpunkt steht genau einmal in `packages/contract/src/endpunkte.ts`
-(`ENDPUNKTE`: Methode, Pfadmuster, `portal`, `mandantenbezogen`, Schemas für Pfadparameter, Query, Body
-und Antwort, Erfolgsstatus). Die Routen in `apps/api/src/routen/*` liefern nur Handler
+(`ENDPUNKTE`: Methode, Pfadmuster, zugelassene Akteursarten `akteure`, `mandantenbezogen`, Schemas für
+Pfadparameter, Query, Body und Antwort, Erfolgsstatus; `portal` ist aus `akteure` abgeleitet). Jede nicht
+zugelassene Akteursart erhält `404` (ADR 0001 §3.4). Die Routen in `apps/api/src/routen/*` liefern nur Handler
 (`r.endpunkt(ENDPUNKTE.risikoLesen, …)`); beim Start vergleicht der Dienst seine Routentabelle mit dem
 Register und startet bei jeder Abweichung nicht. Die API-Tests prüfen jede Antwort gegen den Vertrag
 (`apps/api/src/__tests__/vertrag.ts`). Die kanzleikonsole kann ihren Client direkt aus einem Eintrag
@@ -261,7 +264,13 @@ Fehler bei Token, Bestätigung oder `jti` ergibt dieselbe Antwort `401 NICHT_AUT
 `Connection: close`); der Grund steht nur im Log (JSON-Zeilen auf stdout, mit Request-ID, ohne
 Header-Werte und Bodys). Fremde Mandanten und nicht kanonische Pfade ergeben `404`.
 `GET /v1/health` braucht nur das Dienst-Token, `GET /v1/ich` liefert den abgeleiteten Akteur
-(Vertragstest).
+(Vertragstest; nur Personen).
+
+**Systemakteur (Stufe 4).** Für Arbeit ohne Person (Zustell-Worker) signiert die kanzleikonsole
+`knd: 'SYSTEM'` mit `sub` = feste UUID des Dienstnutzers je Tenant und `nam` = Bezeichnung, ohne `rol`
+und ohne `cli`. Er erreicht ausschließlich die zwei Nachrichten-Endpunkte (`akteure: ['SYSTEM']`); jeder
+andere Endpunkt antwortet `404`, und keine Person – auch kein Admin – erreicht die Nachrichten-Endpunkte.
+Im Audit steht er als `System: <nam>` mit `detail.systemakteur: true`.
 
 **Endpunkte Lesepfade und Verwaltung** (Rechte prüft `packages/service`; Personen nur als IDs, Namen
 und Zuständigkeit ergänzt die kanzleikonsole):
@@ -352,22 +361,26 @@ lesbare (RT-01).
 Rechte prüft `packages/service`, Eingaben und Antworten in
 `packages/contract/src/bereiche/programm-beschreibung.ts`):
 
-| Methode | Pfad                                                   | Recht (sonst `404` bzw. `403` mit Grund)         |
-| ------- | ------------------------------------------------------ | ------------------------------------------------ |
-| GET     | `/v1/nachrichten/offen?limit=`                         | Kanzleiperson mit `rol.adm` (tenantweit)         |
-| POST    | `/v1/nachrichten/:nachrichtId/zugestellt`              | wie oben; idempotent, leert Text, `zugestelltAm` |
-| GET     | `…/einrichtung?berufstraegerId=&bearbeitungId=&…`      | `kannLesen`                                      |
-| POST    | `…/einrichtung/entwurf`, `…/einrichtung/anlegen`       | `kannBearbeiten`; ein Programm je Mandant        |
-| GET     | `…/beschreibung?stand=`                                | `kannLesen`                                      |
-| POST    | `…/beschreibung/versionen`, `…/versionen/:id/…`        | `kannBearbeiten`; Review-Abschluss: 2. Person    |
-| POST    | `…/freigaben/:freigabeId/neuadressierung`              | `kannBearbeiten` (TS-06, auditiert)              |
-| GET     | `…/kommunikation/freigaben?stand=`                     | `kannLesen`                                      |
-| GET     | `…/portal/freigaben`                                   | Mandantenkontakt mit aktiver Rolle               |
-| POST    | `…/portal/freigaben/:freigabeId/code` bzw. `freigeben` | adressierte gesetzliche Vertretung               |
-| POST    | `…/portal/freigaben/:freigabeId/kenntnisnahme`         | adressierte Person                               |
+| Methode | Pfad                                                   | Recht (sonst `404` bzw. `403` mit Grund)                                    |
+| ------- | ------------------------------------------------------ | --------------------------------------------------------------------------- |
+| GET     | `/v1/nachrichten/offen?limit=`                         | nur Systemakteur (tenantweit); verfallene Codes nicht ausgeliefert, geleert |
+| POST    | `/v1/nachrichten/:nachrichtId/zugestellt`              | nur Systemakteur; idempotent, leert Text und Code; fremde ID `404`          |
+| GET     | `…/einrichtung?berufstraegerId=&bearbeitungId=&…`      | `kannLesen`                                                                 |
+| POST    | `…/einrichtung/entwurf`, `…/einrichtung/anlegen`       | `kannBearbeiten`; ein Programm je Mandant                                   |
+| GET     | `…/beschreibung?stand=`                                | `kannLesen`                                                                 |
+| POST    | `…/beschreibung/versionen`, `…/versionen/:id/…`        | `kannBearbeiten`; Review-Abschluss: 2. Person                               |
+| POST    | `…/freigaben/:freigabeId/neuadressierung`              | `kannBearbeiten` (TS-06, auditiert)                                         |
+| GET     | `…/kommunikation/freigaben?stand=`                     | `kannLesen`                                                                 |
+| GET     | `…/portal/freigaben`                                   | Mandantenkontakt mit aktiver Rolle                                          |
+| POST    | `…/portal/freigaben/:freigabeId/code` bzw. `freigeben` | adressierte gesetzliche Vertretung                                          |
+| POST    | `…/portal/freigaben/:freigabeId/kenntnisnahme`         | adressierte Person                                                          |
 
 Bestätigungscodes erreichen die Empfänger nur über den Postausgang (Adresse = Personen-ID); keine
-andere Antwort, kein Log und kein Audit enthält einen Code. Ein falscher Code ergibt `200` mit
+andere Antwort, kein Log und kein Audit enthält einen Code. Eine offene Nachricht ist nach `zweck`
+diskriminiert (`OffeneNachrichtSchema`) und trägt `mandantId`, `empfaengerArt` (`KONTAKT` bzw. `KANZLEI`
+bei `EREIGNIS_GEMELDET`) und Vorlagendaten `daten`; `betreff`/`text` bleiben Rückfall. Der Code steht nur
+in der offenen Nachricht und wird bei Zustellung bzw. Verwerfen (Freigabe erledigt, Code abgelaufen,
+ersetzt, gesperrt oder neu adressiert) geleert. Ein falscher Code ergibt `200` mit
 `freigegeben: false` (der Fehlversuch bleibt gezählt und protokolliert).
 
 Tests: `pnpm --filter @tcms/api test`. Die PostgreSQL-Tests laufen gegen eine Datenbank, die wie in
@@ -435,7 +448,8 @@ Variable `REGISTRY`, Secrets `REGISTRY_USER` und `REGISTRY_TOKEN`.
   Zielbild meldet die kanzleikonsole an und ruft das Tax-CMS mit Dienst-Token und signierter
   Akteursbestätigung auf (ADR 0001 §3).
 - **E-Mail:** kein Versand; Nachrichten und Bestätigungscodes stehen im Postausgang (Demo:
-  Entwicklungs-Postausgang; Dienst: Abholung durch die kanzleikonsole über `/v1/nachrichten`).
+  Entwicklungs-Postausgang; Dienst: Abholung durch den Systemakteur der kanzleikonsole über
+  `/v1/nachrichten`, Zustellung mit deren Vorlagen).
 - **Nachweisablage:** Demo: Dateisystem unter `.data/nachweise`, Pfad nur in der Form
   `<2 Hex>/<SHA-256>`, beim Lesen gegen den SHA-256 geprüft. Kein WORM-Speicher, kein Virenscan.
   Der Dienst speichert nur Verweise; Dateien nimmt die kanzleikonsole an (ADR 0001 §6). Die Demo
