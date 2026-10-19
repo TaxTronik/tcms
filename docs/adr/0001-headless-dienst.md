@@ -276,5 +276,8 @@ Kontexts innerhalb derselben Transaktion.
   Feststellung bleiben für alle mit Leserecht sichtbar: Beschreibung und Folgetexte
   eines Ereignisses, aus dem eine Feststellung entstand, der Ergebniskommentar einer
   Durchführung mit Befund, die für eine Nachkontrolle gewählte Kontrolle.
-  Admins/Partner gehören nach Fachkonzept §13 zum Kreis der Beteiligten und sehen im
-  tenantweiten Audit alle Details.
+  Eine eingefrorene CMS-Beschreibung (Snapshot, unveränderlich) behält eine
+  Feststellung, die erst nach dem Einfrieren vertraulich wurde; neue Versionen
+  nehmen vertrauliche Feststellungen nie auf. Admins/Partner gehören nach
+  Fachkonzept §13 zum Kreis der Beteiligten und sehen im tenantweiten Audit alle
+  Details.
