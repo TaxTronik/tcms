@@ -3,7 +3,10 @@
 // Abschnitt 11 ab: Talwind Outdoor GmbH im Wirksamkeitszeitraum (Monat 4 von 6,
 // Stand 16.10.2026) und drei weitere Mandanten im Portfolio.
 //
-// Aufruf: pnpm db:seed (leert alle Tabellen vorher).
+// Aufruf: pnpm db:seed (leert alle Tabellen vorher). Läuft als Eigentümerrolle
+// (`DATABASE_OWNER_URL`) im festen Demo-Tenant: RLS gilt auch hier (FORCE), der
+// Tenant steht für jede Verbindung des Seeds als Sitzungswert fest.
+// Personen kommen aus dem statischen Demo-Verzeichnis (`seeds/demo.ts`).
 // =============================================================================
 
 import { createHash } from 'node:crypto';
@@ -29,10 +32,28 @@ import {
   type Turnus,
 } from '@tcms/domain';
 import { kanonisch } from '@tcms/domain/audit';
-import { Prisma } from '@prisma/client';
-import { createPrisma, schreibeAudit, speichereDatei } from '../src/index';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { Prisma, PrismaClient } from '@prisma/client';
+import { haengeAuditAn } from '../src/audit';
+import { speichereDatei } from '../src/storage';
+import { TENANT_EINSTELLUNG } from '../src/tenant';
+import { DEMO_IDS, DEMO_MANDANTEN, DEMO_PERSONEN, DEMO_TENANT_ID, type DemoPerson } from './demo';
 
-const prisma = createPrisma();
+if (process.env['NODE_ENV'] === 'production') {
+  // Der Seed leert alle Tabellen; nie gegen eine Produktionsumgebung.
+  throw new Error('[seed] Abbruch: NODE_ENV=production.');
+}
+const OWNER_URL = process.env['DATABASE_OWNER_URL'];
+if (!OWNER_URL) throw new Error('[seed] DATABASE_OWNER_URL fehlt. Siehe .env.example.');
+
+// Jede Verbindung des Seeds startet im Demo-Tenant (RLS ist auch für den
+// Eigentümer erzwungen); die Laufzeit setzt den Tenant dagegen je Transaktion.
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({
+    connectionString: OWNER_URL,
+    options: `-c ${TENANT_EINSTELLUNG}=${DEMO_TENANT_ID}`,
+  }),
+});
 
 const HEUTE = process.env['TCMS_DEMO_TODAY']
   ? new Date(`${process.env['TCMS_DEMO_TODAY']}T00:00:00Z`)
@@ -57,10 +78,11 @@ async function leeren() {
 
 type P = { id: string; name: string };
 
-async function person(data: Prisma.PersonUncheckedCreateInput): Promise<P> {
-  const p = await prisma.person.create({ data });
+const person = (id: string): P => {
+  const p = DEMO_PERSONEN.find((x) => x.id === id);
+  if (!p) throw new Error(`[seed] Demo-Person fehlt: ${id}`);
   return { id: p.id, name: p.name };
-}
+};
 
 async function audit(
   actor: P | null,
@@ -71,17 +93,21 @@ async function audit(
   at: Date,
   detail: Record<string, unknown> = {},
 ) {
+  // Rückdatierte Demo-Historie; die Laufzeit schreibt immer die echte Zeit.
   await prisma.$transaction((tx) =>
-    schreibeAudit(tx, {
-      actorId: actor?.id ?? null,
-      actorName: actor?.name ?? 'System',
-      aktion,
-      objektTyp,
-      objektId,
-      programmId,
+    haengeAuditAn(
+      tx,
+      {
+        actorId: actor?.id ?? null,
+        actorName: actor?.name ?? 'System',
+        aktion,
+        objektTyp,
+        objektId,
+        programmId,
+        detail,
+      },
       at,
-      detail,
-    }),
+    ),
   );
 }
 
@@ -370,6 +396,7 @@ async function baueProgramm(cfg: ProgrammCfg): Promise<Aufgebaut> {
   await prisma.profilStand.create({
     data: {
       programmId: programm.id,
+      version: 1,
       antworten: cfg.profil as unknown as Prisma.InputJsonValue,
       gueltigAb: cfg.angelegt,
       erstelltVon: cfg.hb.id,
@@ -400,6 +427,7 @@ async function baueProgramm(cfg: ProgrammCfg): Promise<Aufgebaut> {
         createdAt: cfg.version1Am,
         staende: {
           create: {
+            version: 1,
             titel: k.titel,
             fehlerquelle: k.fehlerquelle,
             folge: k.folge,
@@ -614,7 +642,7 @@ async function nachweiseFuer(
         mime: 'text/csv',
         groesse: gespeichert.groesse,
         sha256: gespeichert.sha256,
-        speicherpfad: gespeichert.speicherpfad,
+        dokumentId: gespeichert.speicherpfad,
         gesperrt: true,
         hochgeladenVon: k.durchfuehrend.id,
         hochgeladenAm: zeit(addTage(faelligAm, -3), 11, 0),
@@ -635,68 +663,37 @@ async function main() {
   await leeren();
   console.log(`Seed mit Stichtag ${HEUTE.toISOString().slice(0, 10)} …`);
 
-  const anna = await person({
-    name: 'StB Dr. Anna Roth',
-    kuerzel: 'AR',
-    email: 'anna.roth@kanzlei-roth.example',
-    art: 'KANZLEI',
-    kanzleiRolle: 'BERUFSTRAEGER',
-    istAdmin: true,
-    funktion: 'Berufsträgerin, Partnerin',
-    telefon: '+49 561 1234567',
-  });
-  const leon = await person({
-    name: 'Leon Brandt',
-    kuerzel: 'LB',
-    email: 'leon.brandt@kanzlei-roth.example',
-    art: 'KANZLEI',
-    kanzleiRolle: 'BEARBEITUNG',
-    funktion: 'Bearbeitung',
-    telefon: '+49 561 1234568',
-  });
-  const thomas = await person({
-    name: 'StB Thomas Kern',
-    kuerzel: 'TK',
-    email: 'thomas.kern@kanzlei-roth.example',
-    art: 'KANZLEI',
-    kanzleiRolle: 'BERUFSTRAEGER',
-    funktion: 'Berufsträger',
-  });
+  const anna = person(DEMO_IDS.anna);
+  const leon = person(DEMO_IDS.leon);
+  const thomas = person(DEMO_IDS.thomas);
 
-  const mandant = async (name: string, rechtsform: string, datevNr: string, bt: P) =>
-    prisma.mandant.create({
-      data: { name, rechtsform, datevNr, berufstraegerId: bt.id, bearbeitungId: leon.id },
+  // Mandanten mit den festen IDs des Demo-Verzeichnisses; Zuständigkeiten (BT,
+  // Hauptbearbeitung) stehen nur dort (in der kanzleikonsole: cli.bt / cli.hb).
+  const mandant = async (id: string) => {
+    const m = DEMO_MANDANTEN.find((x) => x.id === id)!;
+    const neu = await prisma.mandant.create({
+      data: { id: m.id, name: m.name, rechtsform: m.rechtsform, datevNr: m.datevNr },
     });
+    const kontakte = DEMO_PERSONEN.filter(
+      (p): p is DemoPerson & { rolle: NonNullable<DemoPerson['rolle']> } =>
+        p.art === 'MANDANT' && p.mandantId === m.id && p.rolle !== null,
+    );
+    await prisma.mandantKontaktRolle.createMany({
+      data: kontakte.map((p) => ({
+        mandantId: m.id,
+        kontaktId: p.id,
+        rolle: p.rolle,
+        funktion: p.funktion,
+      })),
+    });
+    return neu;
+  };
 
   // ------------------------------------------------------------- Talwind --
-  const talwind = await mandant('Talwind Outdoor GmbH', 'KapG', '4711', anna);
-  const jana = await person({
-    name: 'Jana Weller',
-    kuerzel: 'JW',
-    email: 'jana.weller@talwind.example',
-    art: 'MANDANT',
-    mandantId: talwind.id,
-    mandantRolle: 'GESETZLICHER_VERTRETER',
-    funktion: 'Geschäftsführerin',
-  });
-  const murat = await person({
-    name: 'Murat Aydin',
-    kuerzel: 'MA',
-    email: 'murat.aydin@talwind.example',
-    art: 'MANDANT',
-    mandantId: talwind.id,
-    mandantRolle: 'TAX_COMPLIANCE_BEAUFTRAGTER',
-    funktion: 'Leitung Finanzen',
-  });
-  const sabine = await person({
-    name: 'Sabine Kraus',
-    kuerzel: 'SK',
-    email: 'sabine.kraus@talwind.example',
-    art: 'MANDANT',
-    mandantId: talwind.id,
-    mandantRolle: 'MITARBEITER',
-    funktion: 'Buchhaltung',
-  });
+  const talwind = await mandant(DEMO_IDS.talwind);
+  const jana = person(DEMO_IDS.jana);
+  const murat = person(DEMO_IDS.murat);
+  const sabine = person(DEMO_IDS.sabine);
 
   const tw = await baueProgramm({
     mandantId: talwind.id,
@@ -719,10 +716,6 @@ async function main() {
   const K = (code: string) => tw.kontrollen.get(code)!;
 
   // Profiländerung: Lager CZ (gültig ab 01.10.2026, aus Ereignis T-02).
-  await prisma.profilStand.updateMany({
-    where: { programmId: tw.programmId, gueltigBis: null },
-    data: { gueltigBis: utc(2026, 10, 1) },
-  });
   // Versionierung: bisherigen Stand schließen, neuen anlegen (AGENTS.md Regel 3).
   await prisma.profilStand.updateMany({
     where: { programmId: tw.programmId, gueltigBis: null },
@@ -731,6 +724,7 @@ async function main() {
   await prisma.profilStand.create({
     data: {
       programmId: tw.programmId,
+      version: 2,
       antworten: talwindProfil(true) as unknown as Prisma.InputJsonValue,
       gueltigAb: utc(2026, 10, 1),
       erstelltVon: leon.id,
@@ -758,6 +752,7 @@ async function main() {
     await prisma.risikoStand.create({
       data: {
         risikoId: rid,
+        version: s1.version + 1,
         titel: s1.titel,
         fehlerquelle: s1.fehlerquelle,
         folge: s1.folge,
@@ -1427,25 +1422,9 @@ async function main() {
   );
 
   // ------------------------------------------------------------- Seestern --
-  const seestern = await mandant('Seestern Home & Living GmbH', 'KapG', '4720', thomas);
-  const clara = await person({
-    name: 'Clara Seemann',
-    kuerzel: 'CS',
-    email: 'clara.seemann@seestern.example',
-    art: 'MANDANT',
-    mandantId: seestern.id,
-    mandantRolle: 'GESETZLICHER_VERTRETER',
-    funktion: 'Geschäftsführerin',
-  });
-  const ole = await person({
-    name: 'Ole Brink',
-    kuerzel: 'OB',
-    email: 'ole.brink@seestern.example',
-    art: 'MANDANT',
-    mandantId: seestern.id,
-    mandantRolle: 'TAX_COMPLIANCE_BEAUFTRAGTER',
-    funktion: 'Kaufmännische Leitung',
-  });
+  const seestern = await mandant(DEMO_IDS.seestern);
+  const clara = person(DEMO_IDS.clara);
+  const ole = person(DEMO_IDS.ole);
   const ss = await baueProgramm({
     mandantId: seestern.id,
     bt: thomas,
@@ -1522,21 +1501,8 @@ async function main() {
   });
 
   // ------------------------------------------------------------- Kleinwerk --
-  const kleinwerk = await mandant(
-    'Kleinwerk Manufaktur UG (haftungsbeschränkt)',
-    'KapG',
-    '4733',
-    anna,
-  );
-  const jonas = await person({
-    name: 'Jonas Klein',
-    kuerzel: 'JK',
-    email: 'jonas.klein@kleinwerk.example',
-    art: 'MANDANT',
-    mandantId: kleinwerk.id,
-    mandantRolle: 'GESETZLICHER_VERTRETER',
-    funktion: 'Geschäftsführer',
-  });
+  const kleinwerk = await mandant(DEMO_IDS.kleinwerk);
+  const jonas = person(DEMO_IDS.jonas);
   const kw = await baueProgramm({
     mandantId: kleinwerk.id,
     bt: anna,
@@ -1606,25 +1572,9 @@ async function main() {
   });
 
   // ------------------------------------------------------------ Pixelhafen --
-  const pixel = await mandant('Pixelhafen Electronics KG', 'PersG', '4698', thomas);
-  const pia = await person({
-    name: 'Pia Hafner',
-    kuerzel: 'PH',
-    email: 'pia.hafner@pixelhafen.example',
-    art: 'MANDANT',
-    mandantId: pixel.id,
-    mandantRolle: 'GESETZLICHER_VERTRETER',
-    funktion: 'Komplementärin',
-  });
-  const henrik = await person({
-    name: 'Henrik Vogt',
-    kuerzel: 'HV',
-    email: 'henrik.vogt@pixelhafen.example',
-    art: 'MANDANT',
-    mandantId: pixel.id,
-    mandantRolle: 'TAX_COMPLIANCE_BEAUFTRAGTER',
-    funktion: 'Leitung Rechnungswesen',
-  });
+  const pixel = await mandant(DEMO_IDS.pixelhafen);
+  const pia = person(DEMO_IDS.pia);
+  const henrik = person(DEMO_IDS.henrik);
   const px = await baueProgramm({
     mandantId: pixel.id,
     bt: thomas,
@@ -1673,25 +1623,7 @@ async function main() {
   });
 
   // Mandant ohne Tax-CMS: Ausgangspunkt für den Einrichtungsassistenten (S3).
-  const bergkamm = await mandant('Bergkamm Kaffeerösterei GmbH', 'KapG', '4752', anna);
-  await person({
-    name: 'Lea Berg',
-    kuerzel: 'LE',
-    email: 'lea.berg@bergkamm.example',
-    art: 'MANDANT',
-    mandantId: bergkamm.id,
-    mandantRolle: 'GESETZLICHER_VERTRETER',
-    funktion: 'Geschäftsführerin',
-  });
-  await person({
-    name: 'Nils Ohm',
-    kuerzel: 'NO',
-    email: 'nils.ohm@bergkamm.example',
-    art: 'MANDANT',
-    mandantId: bergkamm.id,
-    mandantRolle: 'TAX_COMPLIANCE_BEAUFTRAGTER',
-    funktion: 'Buchhaltung',
-  });
+  await mandant(DEMO_IDS.bergkamm);
 
   // Dev-Postausgang: Hinweis auf die Entwicklungs-Anmeldung.
   await prisma.nachricht.create({

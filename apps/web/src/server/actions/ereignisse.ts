@@ -1,7 +1,6 @@
 'use server';
 
 import { z } from 'zod';
-import { prisma } from '@tcms/db';
 import {
   EREIGNISTYPEN,
   ereignisErledigt,
@@ -9,6 +8,7 @@ import {
   isoDatum,
   type FolgeArt,
 } from '@tcms/domain';
+import { db, personImMandat, type KanzleiAkteur } from '../demo';
 import { aktualisiereMandant, KEIN_RECHT, mitAudit, type Protokoll } from '../aktion';
 import type { Ergebnis } from '../ergebnis';
 import { legeEreignisAn } from '../ereignisse-daten';
@@ -16,8 +16,8 @@ import {
   legeAusserplanmaessigeDurchfuehrungAn,
   naechsteFeststellungsnummer,
 } from '../feststellungen-daten';
-import { kannBearbeiten, zweitePerson } from '../rechte';
-import { brauchtKanzlei, type Nutzer } from '../sitzung';
+import { kannBearbeiten, zweitePerson } from '../berechtigung';
+import { brauchtKanzlei } from '../sitzung';
 import { heute, jetzt } from '../zeit';
 
 // =============================================================================
@@ -35,7 +35,7 @@ const datum = z
   .refine((d) => !Number.isNaN(d.getTime()));
 
 async function ladeEreignis(id: string) {
-  return prisma.ereignis.findUnique({
+  return db.ereignis.findUnique({
     where: { id },
     include: { folgen: true, programm: { include: { mandant: true } } },
   });
@@ -43,7 +43,7 @@ async function ladeEreignis(id: string) {
 type Geladen = NonNullable<Awaited<ReturnType<typeof ladeEreignis>>>;
 
 async function vorpruefung(
-  n: Nutzer,
+  n: KanzleiAkteur,
   id: string,
   offen = true,
 ): Promise<{ e: Geladen } | { fehler: string }> {
@@ -56,7 +56,7 @@ async function vorpruefung(
 }
 
 function triageStart(
-  n: Nutzer,
+  n: KanzleiAkteur,
   e: Pick<Geladen, 'id' | 'status' | 'nummer' | 'programmId'>,
   zeitpunkt: Date,
 ): {
@@ -82,8 +82,8 @@ async function zulaessigePerson(
   mandantId: string,
 ): Promise<{ id: string; name: string } | null | 'ungueltig'> {
   if (!id) return null;
-  const p = await prisma.person.findUnique({ where: { id } });
-  if (!p || !p.aktiv || (p.art !== 'KANZLEI' && p.mandantId !== mandantId)) return 'ungueltig';
+  const p = await personImMandat(id, mandantId);
+  if (!p) return 'ungueltig';
   return { id: p.id, name: p.name };
 }
 
@@ -182,9 +182,7 @@ export async function legeFolgenAn(_prev: Ergebnis, fd: FormData): Promise<Ergeb
     const plan: Plan = { folge, zustaendig, frist };
     if (folge.art === 'RISIKO_NEU_BEWERTEN' || folge.art === 'RISIKO_AKTIVIEREN') {
       const r = folge.ziel
-        ? await prisma.risiko.findUnique({
-            where: { programmId_code: { programmId, code: folge.ziel } },
-          })
+        ? await db.risiko.findFirst({ where: { programmId, code: folge.ziel } })
         : null;
       const aktiv =
         !!r &&
@@ -200,9 +198,7 @@ export async function legeFolgenAn(_prev: Ergebnis, fd: FormData): Promise<Ergeb
     }
     if (folge.art === 'KONTROLLE_AUSSERPLANMAESSIG') {
       const k = folge.ziel
-        ? await prisma.kontrolle.findUnique({
-            where: { programmId_code: { programmId, code: folge.ziel } },
-          })
+        ? await db.kontrolle.findFirst({ where: { programmId, code: folge.ziel } })
         : null;
       if (
         !k ||
@@ -413,7 +409,7 @@ export async function fuegeFolgeHinzu(_prev: Ergebnis, fd: FormData): Promise<Er
 // ----------------------------------------------------------------------------
 
 async function ladeFolge(id: string) {
-  return prisma.ereignisFolge.findUnique({
+  return db.ereignisFolge.findUnique({
     where: { id },
     include: { ereignis: { include: { folgen: true, programm: { include: { mandant: true } } } } },
   });
@@ -421,7 +417,7 @@ async function ladeFolge(id: string) {
 
 /** Neubewertungs-Markierung nur aufheben, wenn keine andere offene Folge sie braucht. */
 async function markierungFrei(risikoId: string, ausserFolgeId: string): Promise<boolean> {
-  const andere = await prisma.ereignisFolge.count({
+  const andere = await db.ereignisFolge.count({
     where: {
       id: { not: ausserFolgeId },
       objektId: risikoId,
@@ -444,7 +440,7 @@ export async function erledigeFolge(_prev: Ergebnis, fd: FormData): Promise<Erge
   if (e.status === 'ERLEDIGT' || e.status === 'VERWORFEN') return { fehler: ABGESCHLOSSEN };
   if (f.status !== 'ANGELEGT') return { fehler: 'Nur angelegte Folgen können erledigt werden.' };
   if (f.art === 'KONTROLLE_AUSSERPLANMAESSIG' && f.objektId) {
-    const d = await prisma.durchfuehrung.findUnique({ where: { id: f.objektId } });
+    const d = await db.durchfuehrung.findUnique({ where: { id: f.objektId } });
     if (!d || !['OHNE_BEFUND', 'MIT_BEFUND', 'ENTFALLEN'].includes(d.status)) {
       return {
         fehler: 'Die außerplanmäßige Durchführung ist noch nicht abgeschlossen (gegengezeichnet).',
@@ -627,7 +623,7 @@ export async function beantrageEreignisVerwerfen(_prev: Ergebnis, fd: FormData):
 }
 
 async function antragsteller(ereignisId: string): Promise<string | null> {
-  const a = await prisma.auditEvent.findFirst({
+  const a = await db.auditEvent.findFirst({
     where: {
       objektTyp: 'Ereignis',
       objektId: ereignisId,
@@ -732,7 +728,7 @@ export async function erfasseEreignis(_prev: Ergebnis, fd: FormData): Promise<Er
       fehler:
         'Bitte Typ, Quelle, Titel (mind. 5 Zeichen), Beschreibung (mind. 10 Zeichen) und Datum angeben.',
     };
-  const programm = await prisma.tcmsProgramm.findUnique({
+  const programm = await db.tcmsProgramm.findUnique({
     where: { id: p.data.programmId },
     include: { mandant: true },
   });

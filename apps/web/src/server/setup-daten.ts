@@ -1,7 +1,7 @@
 import 'server-only';
-import { prisma } from '@tcms/db';
 import type { Geschaeftsprofil } from '@tcms/domain';
-import type { PersonKurz, TcmsKontext } from './kontext';
+import { db, demoPersonen, zustaendigkeit } from './demo';
+import { personKurz, type PersonKurz, type TcmsKontext } from './kontext';
 import type { Umfeld } from './programm-aufbau';
 
 // =============================================================================
@@ -19,60 +19,51 @@ export interface SetupProgramm {
 
 /** Jüngstes Programm des Mandanten (wie `ladeKontext`), inklusive Entwurfsstand. */
 export async function ladeSetupProgramm(mandantId: string): Promise<SetupProgramm | null> {
-  return prisma.tcmsProgramm.findFirst({
+  if (!UUID.test(mandantId)) return null;
+  return db.tcmsProgramm.findFirst({
     where: { mandantId },
     orderBy: { createdAt: 'desc' },
     select: { id: true, status: true, version1Am: true, setupEntwurf: true, createdAt: true },
   });
 }
 
-function kurz(x: {
-  id: string;
-  name: string;
-  kuerzel: string;
-  art: 'KANZLEI' | 'MANDANT';
-  funktion: string | null;
-  email: string;
-  telefon: string | null;
-  kanzleiRolle: PersonKurz['kanzleiRolle'];
-  mandantRolle: PersonKurz['mandantRolle'];
-}): PersonKurz {
-  return {
-    id: x.id,
-    name: x.name,
-    kuerzel: x.kuerzel,
-    art: x.art,
-    funktion: x.funktion,
-    email: x.email,
-    telefon: x.telefon,
-    kanzleiRolle: x.kanzleiRolle,
-    mandantRolle: x.mandantRolle,
-  };
-}
-
-/** Personen-Umfeld eines Mandanten (aktive Kanzlei- und Mandantenpersonen). */
+/**
+ * Personen-Umfeld eines Mandanten: Kanzleipersonen aus dem Demo-Verzeichnis,
+ * Mandantenpersonen mit aktiver Rolle aus MandantKontaktRolle (ADR 0001 §5).
+ */
 export async function ladeUmfeld(mandantId: string, heute: Date): Promise<Umfeld | null> {
-  const mandant = await prisma.mandant.findUnique({
-    where: { id: mandantId },
-    include: { personen: { where: { aktiv: true }, orderBy: { name: 'asc' } } },
-  });
+  if (!UUID.test(mandantId)) return null;
+  const mandant = await db.mandant.findUnique({ where: { id: mandantId } });
   if (!mandant) return null;
-  const kanzlei = await prisma.person.findMany({
-    where: { art: 'KANZLEI', aktiv: true },
-    orderBy: { name: 'asc' },
+  const kontakte = await db.mandantKontaktRolle.findMany({
+    where: { mandantId, aktiv: true },
+    orderBy: { createdAt: 'asc' },
   });
+  const kanzlei = demoPersonen
+    .alle()
+    .filter((p) => p.art === 'KANZLEI')
+    .map((p) => personKurz(p));
+  const mandantPersonen: PersonKurz[] = [];
+  for (const k of kontakte) {
+    const p = demoPersonen.person(k.kontaktId);
+    if (p && !mandantPersonen.some((m) => m.id === p.id))
+      mandantPersonen.push(personKurz(p, k.rolle));
+  }
+  const zust = zustaendigkeit(mandant.id);
   return {
     mandant: {
       id: mandant.id,
       name: mandant.name,
-      berufstraegerId: mandant.berufstraegerId,
-      bearbeitungId: mandant.bearbeitungId,
+      berufstraegerId: zust.berufstraegerId ?? '',
+      bearbeitungId: zust.bearbeitungId ?? '',
     },
-    kanzlei: kanzlei.map(kurz).sort((a, b) => a.name.localeCompare(b.name, 'de')),
-    mandantPersonen: mandant.personen.map(kurz).sort((a, b) => a.name.localeCompare(b.name, 'de')),
+    kanzlei: kanzlei.sort((a, b) => a.name.localeCompare(b.name, 'de')),
+    mandantPersonen: mandantPersonen.sort((a, b) => a.name.localeCompare(b.name, 'de')),
     heute,
   };
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Umfeld aus dem bereits geladenen Kontext (Seiten). */
 export function umfeldAusKontext(ctx: TcmsKontext): Umfeld {
@@ -118,11 +109,11 @@ export async function ladeProfilDaten(
   programmId: string,
 ): Promise<{ staende: ProfilStandView[]; risiken: RisikoEntscheidungView[] }> {
   const [staende, risiken] = await Promise.all([
-    prisma.profilStand.findMany({
+    db.profilStand.findMany({
       where: { programmId },
       orderBy: [{ gueltigAb: 'asc' }, { createdAt: 'asc' }],
     }),
-    prisma.risiko.findMany({
+    db.risiko.findMany({
       where: { programmId },
       select: {
         id: true,

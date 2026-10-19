@@ -2,7 +2,7 @@
 
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
-import { prisma, Prisma, type Tx } from '@tcms/db';
+import { Prisma, type Tx } from '@tcms/db';
 import {
   ereignistyp,
   fmtDatum,
@@ -20,11 +20,12 @@ import {
   pruefeProfil,
   type FrageDiff,
 } from '@/components/profil/profil-logik';
+import { db } from '../demo';
 import { aktualisiereMandant, KEIN_RECHT, mitAudit, type Protokoll } from '../aktion';
 import type { Ergebnis } from '../ergebnis';
 import { naechsteEreignisnummern } from '../nummern';
 import { AufbauFehler, nimmRisikoAuf } from '../programm-aufbau';
-import { kannBearbeiten } from '../rechte';
+import { kannBearbeiten } from '../berechtigung';
 import { ladeUmfeld } from '../setup-daten';
 import { brauchtKanzlei } from '../sitzung';
 import { heute, jetzt } from '../zeit';
@@ -35,7 +36,7 @@ import { heute, jetzt } from '../zeit';
 // =============================================================================
 
 async function programmFuer(programmId: string) {
-  return prisma.tcmsProgramm.findUnique({ where: { id: programmId }, include: { mandant: true } });
+  return db.tcmsProgramm.findUnique({ where: { id: programmId }, include: { mandant: true } });
 }
 
 const AenderungSchema = z.object({
@@ -83,7 +84,7 @@ export async function aendereProfil(_prev: Ergebnis, fd: FormData): Promise<Erge
   const pflicht = pruefeProfil(profil);
   if (pflicht.length) return { fehler: pflicht.join(' ') };
 
-  const letzter = await prisma.profilStand.findFirst({
+  const letzter = await db.profilStand.findFirst({
     where: { programmId: programm.id, gueltigBis: null },
     orderBy: { gueltigAb: 'desc' },
   });
@@ -104,7 +105,7 @@ export async function aendereProfil(_prev: Ergebnis, fd: FormData): Promise<Erge
     return { fehler: 'Gültig ab liegt mehr als ein Jahr in der Zukunft.' };
 
   const diff = profilDiff(alt, profil);
-  const risiken = await prisma.risiko.findMany({
+  const risiken = await db.risiko.findMany({
     where: { programmId: programm.id },
     select: { id: true, code: true, entscheidung: true, inaktivAb: true, neuBewerten: true },
   });
@@ -130,10 +131,18 @@ export async function aendereProfil(_prev: Ergebnis, fd: FormData): Promise<Erge
       throw new AufbauFehler(
         `Gültig ab muss nach dem Beginn des letzten Stands (${fmtDatum(letzter.gueltigAb)}) liegen.`,
       );
-    await tx.profilStand.update({ where: { id: letzter.id }, data: { gueltigBis: ab } });
+    // TS-05: nur den noch offenen Stand schließen (bedingtes Update); hat ihn eine
+    // parallele Änderung bereits geschlossen, bricht die Transaktion ab.
+    const zu = await tx.profilStand.updateMany({
+      where: { id: letzter.id, gueltigBis: null },
+      data: { gueltigBis: ab },
+    });
+    if (zu.count !== 1)
+      throw new AufbauFehler('Das Profil wurde inzwischen geändert. Bitte die Seite neu laden.');
     const stand = await tx.profilStand.create({
       data: {
         programmId: programm.id,
+        version: letzter.version + 1,
         antworten: profil as unknown as Prisma.InputJsonValue,
         gueltigAb: ab,
         erstelltVon: nutzer.id,
@@ -286,7 +295,7 @@ export async function nimmVorgeschlagenesRisikoAuf(
     };
 
   // Nur deterministische Vorschläge des jüngsten Profilstands (mit Grund).
-  const stand = await prisma.profilStand.findFirst({
+  const stand = await db.profilStand.findFirst({
     where: { programmId: programm.id, gueltigBis: null },
     orderBy: { gueltigAb: 'desc' },
   });

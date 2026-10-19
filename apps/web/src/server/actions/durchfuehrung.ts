@@ -21,6 +21,7 @@ import {
 } from '../durchfuehrung-daten';
 import type { Ergebnis } from '../ergebnis';
 import { naechsteFeststellungsnummer } from '../nummern';
+import { handelnde } from '../demo';
 import { brauchtKanzlei } from '../sitzung';
 import { heute } from '../zeit';
 
@@ -34,24 +35,24 @@ const NUR_AKTUELL = 'Änderungen nur im aktuellen Stand möglich';
 
 /** Fällig → In Durchführung. */
 export async function beginneDurchfuehrung(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  return kernBeginnen(await brauchtKanzlei(), fd);
+  return kernBeginnen(handelnde(await brauchtKanzlei()), fd);
 }
 
 /** Schritte abhaken, Werte und Ergebnisvorschlag speichern; optional einreichen. */
 export async function speichereDurchfuehrung(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  return kernSpeichern(await brauchtKanzlei(), fd);
+  return kernSpeichern(handelnde(await brauchtKanzlei()), fd);
 }
 
 export async function ladeNachweisHoch(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  return kernHochladen(await brauchtKanzlei(), fd);
+  return kernHochladen(handelnde(await brauchtKanzlei()), fd);
 }
 
 export async function entferneNachweis(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  return kernEntfernen(await brauchtKanzlei(), fd);
+  return kernEntfernen(handelnde(await brauchtKanzlei()), fd);
 }
 
 export async function weiseDurchfuehrungZurueck(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  return kernZurueckweisen(await brauchtKanzlei(), fd);
+  return kernZurueckweisen(handelnde(await brauchtKanzlei()), fd);
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +70,7 @@ const FeststellungSchema = z.object({
 });
 
 export async function gegenzeichneDurchfuehrung(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtKanzlei();
+  const nutzer = handelnde(await brauchtKanzlei());
   return fuehreAus(async () => {
     if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
     const d = await ladeFuerAktion(text(fd, 'id'));
@@ -209,7 +210,7 @@ function basisDetail(d: DurchfuehrungDetail) {
 }
 
 export async function beantrageEntfallen(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtKanzlei();
+  const nutzer = handelnde(await brauchtKanzlei());
   return fuehreAus(async () => {
     if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
     const begruendung = text(fd, 'begruendung').trim();
@@ -252,7 +253,7 @@ export async function beantrageEntfallen(_prev: Ergebnis, fd: FormData): Promise
 }
 
 export async function gibEntfallenFrei(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtKanzlei();
+  const nutzer = handelnde(await brauchtKanzlei());
   return fuehreAus(async () => {
     if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
     const d = await ladeFuerAktion(text(fd, 'id'));
@@ -291,7 +292,7 @@ export async function gibEntfallenFrei(_prev: Ergebnis, fd: FormData): Promise<E
 
 /** Antrag ablehnen (zweite Person, Begründung ≥ 30) oder als antragstellende Person zurückziehen. */
 export async function lehneEntfallenAb(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtKanzlei();
+  const nutzer = handelnde(await brauchtKanzlei());
   return fuehreAus(async () => {
     if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
     const d = await ladeFuerAktion(text(fd, 'id'));
@@ -336,7 +337,7 @@ export async function lehneEntfallenAb(_prev: Ergebnis, fd: FormData): Promise<E
 // ---------------------------------------------------------------------------
 
 export async function legeNachtragAn(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtKanzlei();
+  const nutzer = handelnde(await brauchtKanzlei());
   let ziel: string | null = null;
   const erg = await fuehreAus(async () => {
     if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };

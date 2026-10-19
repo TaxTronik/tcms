@@ -1,13 +1,15 @@
 import 'server-only';
 import { notFound } from 'next/navigation';
 import { isoDatum } from '@tcms/domain';
+import { kannBearbeiten, kannLesen, kannVertraulichLesen, kannWuerdigen } from '@tcms/service';
+import type { KanzleiAkteur } from './demo';
 import { ladeKontext, type TcmsKontext } from './kontext';
-import { kannBearbeiten, kannWuerdigen } from './rechte';
-import { brauchtKanzlei, type Nutzer } from './sitzung';
+import { brauchtKanzleiFuer } from './sitzung';
 import { leseStand } from './zeit';
 
 export interface StaffSeite {
-  nutzer: Nutzer;
+  /** Akteur mit Bezug auf diesen Mandanten (wie `cli` der Akteursbestätigung). */
+  nutzer: KanzleiAkteur;
   ctx: TcmsKontext;
   /** Aktuell schreibbar: Bearbeitungsrecht und kein historischer Stand. */
   darfBearbeiten: boolean;
@@ -24,7 +26,9 @@ export async function ladeStaffSeite(
   id: string,
   sp: Record<string, string | string[] | undefined>,
 ): Promise<StaffSeite> {
-  const nutzer = await brauchtKanzlei();
+  const nutzer = await brauchtKanzleiFuer(id);
+  // Ohne Bezug zum Mandanten: 404 statt 403, damit keine Existenz verraten wird (ADR 0001 §3.3).
+  if (!kannLesen(nutzer, id)) notFound();
   const { stand, historisch } = leseStand(sp['stand']);
   const ctx = await ladeKontext(id, isoDatum(stand), historisch);
   if (!ctx) notFound();
@@ -35,8 +39,8 @@ export async function ladeStaffSeite(
   return {
     nutzer,
     ctx: sicht,
-    darfBearbeiten: !historisch && kannBearbeiten(nutzer, ctx.mandant),
-    darfWuerdigen: !historisch && kannWuerdigen(nutzer, ctx.mandant),
+    darfBearbeiten: !historisch && kannBearbeiten(nutzer, id),
+    darfWuerdigen: !historisch && kannWuerdigen(nutzer, id),
     standIso,
     heuteIso: isoDatum(ctx.heute),
     basis: `/staff/clients/${id}/tcms`,
@@ -45,18 +49,12 @@ export async function ladeStaffSeite(
 }
 
 /**
- * Vertrauliche Feststellungen (Fachkonzept §13) nur für Beteiligte: Admin,
- * zuständige:r Berufsträger:in, Hauptbearbeitung, erfassende, würdigende und
- * verantwortliche Personen. Für alle anderen werden Titel und Sachverhalt ersetzt.
+ * Vertrauliche Feststellungen (Fachkonzept §13) nur für Beteiligte
+ * (`kannVertraulichLesen`). Für alle anderen werden Titel und Sachverhalt ersetzt.
  */
-export function maskiereVertraulich(ctx: TcmsKontext, n: Nutzer): TcmsKontext {
+export function maskiereVertraulich(ctx: TcmsKontext, n: KanzleiAkteur): TcmsKontext {
   const darf = (f: TcmsKontext['feststellungen'][number]) =>
-    !f.vertraulich ||
-    (n.art === 'KANZLEI' &&
-      (n.istAdmin ||
-        n.id === ctx.mandant.berufstraegerId ||
-        n.id === ctx.mandant.bearbeitungId ||
-        f.beteiligte.includes(n.id)));
+    !f.vertraulich || kannVertraulichLesen(n, ctx.mandant.id, f.beteiligte);
   if (ctx.feststellungen.every(darf)) return ctx;
   return {
     ...ctx,

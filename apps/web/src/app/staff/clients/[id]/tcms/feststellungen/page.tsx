@@ -92,7 +92,7 @@ export default async function FeststellungenSeite({
         p153EntschiedenVon: z.p153EntschiedenVon,
         massnahmenVerantwortlich: z.massnahmen.map((m) => m.verantwortlich),
       },
-      ctx.mandant,
+      ctx.mandant.id,
     );
   };
 

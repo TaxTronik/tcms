@@ -1,21 +1,24 @@
 import type { ReactNode } from 'react';
-import { prisma } from '@tcms/db';
 import { AppShell } from '@/components/shell/app-shell';
+import { demoPersonen, lies } from '@/server/demo';
 import { brauchtKanzlei } from '@/server/sitzung';
 import { heute } from '@/server/zeit';
 
 export default async function StaffLayout({ children }: { children: ReactNode }) {
-  const nutzer = await brauchtKanzlei();
+  const akteur = await brauchtKanzlei();
+  const person = demoPersonen.person(akteur.id)!;
   // Roter Punkt am Portfolio, wenn irgendwo eine Durchführung überfällig ist.
-  const ueberfaellig = await prisma.durchfuehrung.count({
-    where: {
-      faelligAm: { lt: heute() },
-      status: { in: ['GEPLANT', 'IN_DURCHFUEHRUNG', 'ZURUECKGEWIESEN'] },
-    },
-  });
+  const ueberfaellig = await lies((tx) =>
+    tx.durchfuehrung.count({
+      where: {
+        faelligAm: { lt: heute() },
+        status: { in: ['GEPLANT', 'IN_DURCHFUEHRUNG', 'ZURUECKGEWIESEN'] },
+      },
+    }),
+  );
   return (
     <AppShell
-      nutzer={nutzer}
+      nutzer={person}
       titel="Kanzlei Dr. Roth"
       untertitel="Tax-CMS · Kanzlei"
       gruppen={[

@@ -36,7 +36,7 @@ import {
 } from '@/server/actions/kontrollen';
 import { personName, type KontrolleView, type PersonKurz } from '@/server/kontext';
 import type { KontrolleDetail } from '@/server/kontrollen-daten';
-import { zweitePerson } from '@/server/rechte';
+import { zweitePerson } from '@tcms/service';
 import type { StaffSeite } from '@/server/seite';
 import { kurzName } from '../risiken/labels';
 import { DesignBadge, DurchfuehrungBadge, SchluesselBadge } from './badges';

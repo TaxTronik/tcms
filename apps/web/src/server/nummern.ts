@@ -1,22 +1,21 @@
 import 'server-only';
-import type { Tx } from '@tcms/db';
+import { tenantSperre, type Tx } from '@tcms/db';
 
 // =============================================================================
-// Nummernkreise. Alle Vergaben laufen in der Transaktion der jeweiligen Action
-// und serialisieren sich über einen gemeinsamen Advisory-Lock je Nummernkreis.
+// Nummernkreise je Kanzlei (Tenant, ADR 0001 §4). Alle Vergaben laufen in der
+// Transaktion der jeweiligen Action und serialisieren sich über einen
+// Advisory-Lock je Tenant und Nummernkreis (TS-08: kein globaler Lock). Unter
+// RLS sieht max + 1 nur die Nummern des eigenen Tenants; die eindeutigen
+// Schlüssel (tenant_id, nummer) bzw. (tenant_id, wiedervorlageNr) sichern ab.
 // =============================================================================
 
-const LOCK_EREIGNIS = 4_711_101;
-const LOCK_FESTSTELLUNG = 4_711_102;
-const LOCK_WIEDERVORLAGE = 4_711_103;
-
-/** `<Jahr>-T-<nnnn>`, global eindeutig (max + 1). Mehrere Nummern am Stück über `anzahl`. */
+/** `<Jahr>-T-<nnnn>`, je Kanzlei eindeutig (max + 1). Mehrere Nummern am Stück über `anzahl`. */
 export async function naechsteEreignisnummern(
   tx: Tx,
   jahr: number,
   anzahl: number,
 ): Promise<string[]> {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LOCK_EREIGNIS})`;
+  await tenantSperre(tx, 'nummer.ereignis');
   const praefix = `${jahr}-T-`;
   const vorhandene = await tx.ereignis.findMany({
     where: { nummer: { startsWith: praefix } },
@@ -39,7 +38,7 @@ export async function naechsteFeststellungsnummer(
   programmId: string,
   jahr: number,
 ): Promise<string> {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LOCK_FESTSTELLUNG})`;
+  await tenantSperre(tx, 'nummer.feststellung');
   const praefix = `F-${jahr}-`;
   const vorhandene = await tx.feststellung.findMany({
     where: { programmId, nummer: { startsWith: praefix } },
@@ -52,9 +51,9 @@ export async function naechsteFeststellungsnummer(
   return `${praefix}${String(max + 1).padStart(3, '0')}`;
 }
 
-/** Wiedervorlage-Nummer kanzleiweit (max + 1). */
+/** Wiedervorlage-Nummer kanzleiweit, also je Tenant (max + 1). */
 export async function naechsteWiedervorlageNr(tx: Tx): Promise<number> {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LOCK_WIEDERVORLAGE})`;
+  await tenantSperre(tx, 'nummer.wiedervorlage');
   const agg = await tx.massnahme.aggregate({ _max: { wiedervorlageNr: true } });
   return (agg._max.wiedervorlageNr ?? 0) + 1;
 }

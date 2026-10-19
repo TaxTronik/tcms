@@ -2,9 +2,9 @@
 
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
-import { prisma } from '@tcms/db';
 import { fmtDatumZeit } from '@tcms/domain';
 import { aktualisiereMandant, mitAudit } from '../aktion';
+import { db, demoPersonen, zustaendigkeit } from '../demo';
 import type { Ergebnis } from '../ergebnis';
 import {
   darfPortalMelden,
@@ -38,8 +38,8 @@ const Schema = z.object({
 });
 
 export async function meldeEreignis(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const n = await brauchtPortal();
-  if (!darfPortalMelden(n)) {
+  const { akteur: n, rollen } = await brauchtPortal();
+  if (!darfPortalMelden(n, rollen)) {
     return {
       fehler:
         'Ereignisse melden die Geschäftsführung und die bzw. der Tax-Compliance-Beauftragte. Bitte wenden Sie sich an diese Personen.',
@@ -62,7 +62,7 @@ export async function meldeEreignis(_prev: Ergebnis, fd: FormData): Promise<Erge
   if (Math.abs(p.data.datum.getTime() - tag.getTime()) > zweiJahre)
     return { fehler: 'Bitte prüfen Sie das Datum.' };
 
-  const programm = await prisma.tcmsProgramm.findFirst({
+  const programm = await db.tcmsProgramm.findFirst({
     where: { mandantId: n.mandantId },
     orderBy: { createdAt: 'desc' },
     include: { mandant: true },
@@ -88,7 +88,8 @@ export async function meldeEreignis(_prev: Ergebnis, fd: FormData): Promise<Erge
         fehler: `Der Dateityp von „${d.name}" wird nicht unterstützt (PDF, Bild, CSV, Excel, Word).`,
       };
   }
-  // Dateien inhaltsadressiert ablegen; Metadaten und Hash gehen in den Audit-Eintrag.
+  // Dateien über den Ablage-Port ablegen (Demo: lokal, inhaltsadressiert); Metadaten und
+  // Hash gehen in den Audit-Eintrag.
   const anlagen: {
     dateiname: string;
     mime: string;
@@ -97,13 +98,17 @@ export async function meldeEreignis(_prev: Ergebnis, fd: FormData): Promise<Erge
     speicherpfad: string;
   }[] = [];
   for (const d of dateien) {
-    const gespeichert = await legeAnlageAb(Buffer.from(await d.arrayBuffer()));
+    const v = await legeAnlageAb(
+      Buffer.from(await d.arrayBuffer()),
+      d.name.slice(0, 200),
+      d.type || 'application/octet-stream',
+    );
     anlagen.push({
-      dateiname: d.name.slice(0, 200),
-      mime: d.type || 'application/octet-stream',
-      groesse: gespeichert.groesse,
-      sha256: gespeichert.sha256,
-      speicherpfad: gespeichert.speicherpfad,
+      dateiname: v.dateiname,
+      mime: v.mime,
+      groesse: v.groesse,
+      sha256: v.sha256,
+      speicherpfad: v.dokumentId,
     });
   }
 
@@ -120,9 +125,7 @@ export async function meldeEreignis(_prev: Ergebnis, fd: FormData): Promise<Erge
       zeitpunkt,
     });
     // Benachrichtigung der Kanzlei (Postausgang der Entwicklungsumgebung).
-    const bearbeitung = await tx.person.findUnique({
-      where: { id: programm.mandant.bearbeitungId },
-    });
+    const bearbeitung = demoPersonen.person(zustaendigkeit(programm.mandantId).bearbeitungId);
     await tx.nachricht.create({
       data: {
         an: bearbeitung?.name ?? 'Kanzlei',

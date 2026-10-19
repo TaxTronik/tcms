@@ -7,8 +7,10 @@ Risikoinventar mit Brutto/Netto-Bewertung, Kontrollmatrix mit Häufigkeit aus Go
 Feststellungen mit §-153-Würdigung, Ereigniseingang, Länder-Monitor, CMS-Beschreibung mit
 Freigabe per E-Mail-Code und ein Mandantenportal.
 
-> Stand: lauffähiger Prototyp mit Demodaten. Vor einem Echtbetrieb fehlen u. a. eine echte
-> Anmeldung, Mailversand und revisionssichere Ablage (siehe „Grenzen").
+> Stand: Umbau zum headless Dienst der kanzleikonsole (ADR 0001, `docs/adr/0001-headless-dienst.md`).
+> Mandantentrennung per PostgreSQL-RLS, Rechte über den signierten Akteur und der Service-Kern
+> (`packages/service`) stehen; `apps/web` ist die Demo-Oberfläche bis zur Portierung in die
+> kanzleikonsole und wird nie produktiv ausgeliefert (siehe „Grenzen").
 
 ## Voraussetzungen
 
@@ -20,20 +22,28 @@ Freigabe per E-Mail-Code und ein Mandantenportal.
 
 ```powershell
 cd C:\Users\Rey\Documents\GitHub\tcms
-docker compose up -d                 # PostgreSQL auf Port 5433
-Copy-Item .env.example .env          # danach SESSION_SECRET in .env ersetzen
+docker compose up -d                 # PostgreSQL auf 127.0.0.1:5433, legt Rollen tcms_owner/tcms_app an
+Copy-Item .env.example .env          # danach SESSION_SECRET setzen (openssl rand -hex 32)
 pnpm install
 pnpm db:generate                     # Prisma-Client erzeugen
-pnpm db:deploy                       # Migration einspielen
-pnpm db:seed                         # Demodaten (Stichtag 16.10.2026)
+pnpm db:deploy                       # Migration einspielen (als tcms_owner, DATABASE_OWNER_URL)
+pnpm db:seed                         # Demodaten im Demo-Tenant (Stichtag 16.10.2026)
 pnpm dev                             # http://localhost:3100
 ```
 
-`pnpm db:seed` setzt die Datenbank jedes Mal vollständig zurück.
+`pnpm db:seed` setzt die Datenbank jedes Mal vollständig zurück (alle Tenants) und bricht mit
+`NODE_ENV=production` ab. Bestehende Volumes aus der Zeit vor dem Umbau einmal löschen
+(`docker compose down -v`), damit das Init-Skript die Rollen anlegt.
 
 ## Anmelden in der Demo
 
-`/anmelden` zeigt eine Personenauswahl (Entwicklungs-Anmeldung, `TCMS_DEV_LOGIN=1`).
+`/anmelden` zeigt eine Personenauswahl aus dem statischen Demo-Verzeichnis
+(`packages/db/seeds/demo.ts`, feste UUIDs, ein fester Demo-Tenant). Daraus bildet die Demo je
+Anfrage einen `Akteur` wie aus der Akteursbestätigung der kanzleikonsole: Kanzleipersonen erhalten
+den Bezug (`cli`) zum Mandanten, um den es geht, mit Zuständigkeit (BT, Hauptbearbeitung) aus dem
+Verzeichnis; Rollen der Mandantenseite kommen aus `MandantKontaktRolle`. Mit `NODE_ENV=production`
+ist die Demo-Anmeldung immer verweigert (TS-01); `SESSION_SECRET` muss ein eigener Zufallswert
+sein, bekannte Platzhalter weist die Demo ab (TS-02).
 
 | Person            | Rolle                                                | gut für                                                                |
 | ----------------- | ---------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -46,6 +56,7 @@ pnpm dev                             # http://localhost:3100
 
 Bestätigungscodes landen im **Postausgang (Entwicklung)** unter Administration; im Portal zeigt
 die Freigaben-Seite im Entwicklungsmodus zusätzlich die letzte Nachricht an die angemeldete Person.
+Eine Freigabe erteilt nur die adressierte Person (TS-06); Codefristen laufen auf echter Zeit.
 
 ## Demodaten
 
@@ -57,8 +68,9 @@ die Freigaben-Seite im Entwicklungsmodus zusätzlich die letzte Nachricht an die
 | Pixelhafen Electronics KG    | Phase 7: Wirksamkeitszeitraum 2025 abgeschlossen                                                                                                                                      |
 | Bergkamm Kaffeerösterei GmbH | noch kein Tax-CMS – Einrichtungsassistent starten                                                                                                                                     |
 
-`TCMS_DEMO_TODAY=2026-10-16` legt das fachliche „Heute" fest. Leer lassen, damit die App mit dem
-echten Datum rechnet. Über den Stichtag-Selektor (`?stand=JJJJ-MM-TT`) lassen sich frühere Stände
+`TCMS_DEMO_TODAY=2026-10-16` legt das fachliche „Heute" der Demo-Uhr fest (nur `apps/web`; der
+Dienst nutzt immer die echte Uhr). Audit-Zeitstempel sind immer echte Zeit. Leer lassen, damit die
+Demo mit dem echten Datum rechnet. Über den Stichtag-Selektor (`?stand=JJJJ-MM-TT`) lassen sich frühere Stände
 schreibgeschützt ansehen.
 
 ## Befehle
@@ -128,12 +140,18 @@ Verbindliche Arbeitsregeln (Audit, Vier-Augen, §-153, Stichtage, UI-Sprache): `
 
 ## Grenzen dieses Stands
 
-- **Anmeldung:** nur die Entwicklungs-Anmeldung per Personenauswahl. Für jeden Betrieb außerhalb
-  der Demo muss eine echte Authentifizierung ergänzt und `TCMS_DEV_LOGIN` entfernt werden.
+- **Anmeldung:** Die Demo-Oberfläche kennt nur die Personenauswahl (nie in Produktion). Im
+  Zielbild meldet die kanzleikonsole an und ruft das Tax-CMS mit Dienst-Token und signierter
+  Akteursbestätigung auf (ADR 0001 §3).
 - **E-Mail:** kein Versand; Nachrichten und Bestätigungscodes stehen im Entwicklungs-Postausgang.
-- **Nachweisablage:** Dateisystem unter `.data/nachweise`, Schutz nur anwendungsseitig (Sperre nach
-  Einreichung, SHA-256). Kein WORM-Speicher, kein Virenscan.
-- **Audit:** SHA-256-Hashkette über alle Ereignisse, ohne qualifizierten Zeitstempel.
+- **Nachweisablage:** Demo: Dateisystem unter `.data/nachweise`, Pfad nur in der Form
+  `<2 Hex>/<SHA-256>`, beim Lesen gegen den SHA-256 geprüft. Kein WORM-Speicher, kein Virenscan.
+  Der Dienst speichert nur Verweise; Dateien nimmt die kanzleikonsole an (ADR 0001 §6).
+- **Audit:** SHA-256-Hashkette je Tenant (Kettenversion 2), ohne qualifizierten Zeitstempel.
+- **Demo-Lader:** lesen über `db` aus `apps/web/src/server/demo.ts` (je Aufruf eine Transaktion im
+  Demo-Tenant, nur lesende Methoden); Prüfung und Änderung vieler Actions liegen noch nicht in
+  derselben Transaktion (TS-05 für die Fachoperationen folgt mit deren Umzug nach
+  `packages/service`). Eindeutige Schlüssel und bedingte Updates fangen Gabelungen ab.
 - **Katalog:** Risiken, Kontrollen, Normanker und Matrix-Startwerte sind ungeprüfte Entwürfe und vom
   Berufsträger zu kalibrieren.
 - **Prio-B-Bereiche schlank:** Kontrollkalender, Kommunikation, Prüfungsvorbereitung und Katalog nur

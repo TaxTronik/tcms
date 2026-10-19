@@ -181,12 +181,18 @@ importers:
       '@prisma/client':
         specifier: 7.9.1
         version: 7.9.1(prisma@7.9.1(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(typescript@6.0.3))(typescript@6.0.3)
+      '@tcms/contract':
+        specifier: workspace:*
+        version: link:../../packages/contract
       '@tcms/db':
         specifier: workspace:*
         version: link:../../packages/db
       '@tcms/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@tcms/service':
+        specifier: workspace:*
+        version: link:../../packages/service
       lucide-react:
         specifier: 1.16.0
         version: 1.16.0(react@19.2.6)

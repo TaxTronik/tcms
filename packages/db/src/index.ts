@@ -27,4 +27,3 @@ export {
   type Tx,
 } from './tenant';
 export { AUDIT_SPERRE, pruefeAuditKette, schreibeAudit, type AuditInput } from './audit';
-export { speichereDatei, leseDatei, speicherWurzel, type GespeicherteDatei } from './storage';

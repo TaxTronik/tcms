@@ -85,7 +85,7 @@ export default async function Kontrollaufgabe({
   params: Promise<{ id: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const nutzer = await brauchtPortal();
+  const nutzer = (await brauchtPortal()).handelnde;
   const { id } = await params;
   const sp = await searchParams;
   const { stand, historisch } = leseStand(sp['stand']);

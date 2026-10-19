@@ -1,6 +1,6 @@
 import Link from 'next/link';
-import { prisma } from '@tcms/db';
 import { EREIGNIS_STATUS_BADGE, fmtDatum, fmtDatumZeit, isoDatum } from '@tcms/domain';
+import { db, demoPersonen, zustaendigkeit } from '@/server/demo';
 import { Icon } from '@/components/icon';
 import { Leerzustand } from '@/components/ui/leer';
 import { PortalEreignisFormular } from '@/components/ereignisse/portal-formular';
@@ -18,21 +18,21 @@ export const metadata = { title: 'Ereignis melden' };
 type SP = Record<string, string | string[] | undefined>;
 
 export default async function PortalEreignisSeite({ searchParams }: { searchParams: Promise<SP> }) {
-  const nutzer = await brauchtPortal();
+  const { akteur: nutzer, rollen } = await brauchtPortal();
   const sp = await searchParams;
   const gemeldetNr = Array.isArray(sp['gemeldet']) ? sp['gemeldet'][0] : sp['gemeldet'];
 
-  const mandant = await prisma.mandant.findUnique({ where: { id: nutzer.mandantId } });
-  const programm = await prisma.tcmsProgramm.findFirst({
+  const mandant = await db.mandant.findUnique({ where: { id: nutzer.mandantId } });
+  const programm = await db.tcmsProgramm.findFirst({
     where: { mandantId: nutzer.mandantId },
     orderBy: { createdAt: 'desc' },
   });
   const bearbeitung = mandant
-    ? await prisma.person.findUnique({ where: { id: mandant.bearbeitungId } })
+    ? demoPersonen.person(zustaendigkeit(mandant.id).bearbeitungId)
     : null;
 
   const meldungen = programm
-    ? await prisma.ereignis.findMany({
+    ? await db.ereignis.findMany({
         where: { programmId: programm.id, quelle: 'PORTAL' },
         orderBy: { gemeldetAm: 'desc' },
         take: 20,
@@ -41,17 +41,10 @@ export default async function PortalEreignisSeite({ searchParams }: { searchPara
   const melderIds = [
     ...new Set(meldungen.map((m) => m.gemeldetVon).filter((x): x is string => !!x)),
   ];
-  const melder = new Map(
-    (
-      await prisma.person.findMany({
-        where: { id: { in: melderIds } },
-        select: { id: true, name: true },
-      })
-    ).map((p) => [p.id, p.name]),
-  );
+  const melder = await demoPersonen.namen(melderIds);
   const bestaetigt = gemeldetNr ? meldungen.find((m) => m.nummer === gemeldetNr) : undefined;
 
-  const darf = darfPortalMelden(nutzer);
+  const darf = darfPortalMelden(nutzer, rollen);
   const sperrHinweis = darf
     ? null
     : 'Ereignisse melden die Geschäftsführung und die bzw. der Tax-Compliance-Beauftragte Ihres Unternehmens.';

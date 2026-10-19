@@ -2,7 +2,7 @@
 
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
-import { prisma, Prisma } from '@tcms/db';
+import { Prisma } from '@tcms/db';
 import { PAKET } from '@tcms/domain';
 import {
   KontrollenSchema,
@@ -17,10 +17,11 @@ import {
   type SetupEntwurf,
 } from '@/components/setup/entwurf';
 import { gleich, leseProfil } from '@/components/profil/profil-logik';
+import { db } from '../demo';
 import { aktualisiereMandant, KEIN_RECHT, mitAudit, type Protokoll } from '../aktion';
 import type { Ergebnis } from '../ergebnis';
 import { berechnePlan, pruefeKontrollen, rollen, schreibeVersion1 } from '../programm-aufbau';
-import { kannBearbeiten } from '../rechte';
+import { kannBearbeiten } from '../berechtigung';
 import { ladeUmfeld } from '../setup-daten';
 import { brauchtKanzlei } from '../sitzung';
 import { heute, jetzt } from '../zeit';
@@ -32,7 +33,7 @@ import { heute, jetzt } from '../zeit';
 // =============================================================================
 
 const Basis = z.object({
-  mandantId: z.string().min(1),
+  mandantId: z.uuid(),
   schritt: z.coerce.number().int().min(1).max(5),
   ziel: z.enum(['speichern', 'weiter', 'zurueck', 'anlegen']),
   daten: z.string().min(2).max(400_000),
@@ -53,13 +54,13 @@ export async function speichereSchritt(_prev: Ergebnis, fd: FormData): Promise<E
   if (!b.success) return { fehler: 'Bitte die Eingaben prüfen.' };
   const { mandantId, schritt, ziel } = b.data;
 
-  const mandant = await prisma.mandant.findUnique({ where: { id: mandantId } });
+  const mandant = await db.mandant.findUnique({ where: { id: mandantId } });
   if (!mandant) return { fehler: 'Mandant nicht gefunden.' };
   if (!kannBearbeiten(nutzer, mandant)) return { fehler: KEIN_RECHT };
   if (ziel === 'anlegen' && schritt !== 5)
     return { fehler: 'Version 1 wird im letzten Schritt angelegt.' };
 
-  const programm = await prisma.tcmsProgramm.findFirst({
+  const programm = await db.tcmsProgramm.findFirst({
     where: { mandantId },
     orderBy: { createdAt: 'desc' },
   });
@@ -172,64 +173,74 @@ export async function speichereSchritt(_prev: Ergebnis, fd: FormData): Promise<E
   neu.gespeichertVon = nutzer.name;
 
   // ---- Speichern (und ggf. Version 1) ----
-  await mitAudit<{ programmId: string; version1: boolean }>(nutzer, async (tx, zeitpunkt) => {
-    const protokolle: Protokoll[] = [];
-    neu.gespeichertAm = zeitpunkt.toISOString();
-    let programmId = programm?.id ?? null;
-    if (!programmId) {
-      const p = await tx.tcmsProgramm.create({
-        data: {
-          mandantId,
-          paketId: PAKET.id,
-          paketVersion: PAKET.version,
-          status: 'ENTWURF',
-          erklaerungsTurnus: neu.zeitraum.erklaerungsTurnus,
-          setupEntwurf: neu as unknown as Prisma.InputJsonValue,
-          createdAt: zeitpunkt,
-        },
-      });
-      programmId = p.id;
+  const gespeichert = await mitAudit<{ programmId: string; version1: boolean }>(
+    nutzer,
+    async (tx, zeitpunkt) => {
+      const protokolle: Protokoll[] = [];
+      neu.gespeichertAm = zeitpunkt.toISOString();
+      let programmId = programm?.id ?? null;
+      if (!programmId) {
+        const p = await tx.tcmsProgramm.create({
+          data: {
+            mandantId,
+            paketId: PAKET.id,
+            paketVersion: PAKET.version,
+            status: 'ENTWURF',
+            erklaerungsTurnus: neu.zeitraum.erklaerungsTurnus,
+            setupEntwurf: neu as unknown as Prisma.InputJsonValue,
+            createdAt: zeitpunkt,
+          },
+        });
+        programmId = p.id;
+        protokolle.push({
+          aktion: 'tcms.programm.angelegt',
+          objektTyp: 'TcmsProgramm',
+          objektId: p.id,
+          programmId: p.id,
+          detail: {
+            paket: `${PAKET.name} ${PAKET.version}`,
+            status: 'ENTWURF',
+            quelle: 'Einrichtungsassistent',
+          },
+        });
+      } else {
+        await tx.tcmsProgramm.update({
+          where: { id: programmId },
+          data: {
+            setupEntwurf: neu as unknown as Prisma.InputJsonValue,
+            erklaerungsTurnus: neu.zeitraum.erklaerungsTurnus,
+          },
+        });
+      }
       protokolle.push({
-        aktion: 'tcms.programm.angelegt',
+        aktion: 'tcms.setup.entwurf_gespeichert',
         objektTyp: 'TcmsProgramm',
-        objektId: p.id,
-        programmId: p.id,
-        detail: {
-          paket: `${PAKET.name} ${PAKET.version}`,
-          status: 'ENTWURF',
-          quelle: 'Einrichtungsassistent',
-        },
-      });
-    } else {
-      await tx.tcmsProgramm.update({
-        where: { id: programmId },
-        data: {
-          setupEntwurf: neu as unknown as Prisma.InputJsonValue,
-          erklaerungsTurnus: neu.zeitraum.erklaerungsTurnus,
-        },
-      });
-    }
-    protokolle.push({
-      aktion: 'tcms.setup.entwurf_gespeichert',
-      objektTyp: 'TcmsProgramm',
-      objektId: programmId,
-      programmId,
-      detail: { schritt, aktion: ziel, abgeschlossen: neu.abgeschlossen, geaendert },
-    });
-    if (ziel === 'anlegen' && plan) {
-      const v1 = await schreibeVersion1(tx, {
+        objektId: programmId,
         programmId,
-        e: neu,
-        plan,
-        u: umfeld,
-        nutzer,
-        zeitpunkt,
+        detail: { schritt, aktion: ziel, abgeschlossen: neu.abgeschlossen, geaendert },
       });
-      protokolle.push(...v1.protokolle);
-      return { wert: { programmId, version1: true }, protokoll: protokolle };
-    }
-    return { wert: { programmId, version1: false }, protokoll: protokolle };
+      if (ziel === 'anlegen' && plan) {
+        const v1 = await schreibeVersion1(tx, {
+          programmId,
+          e: neu,
+          plan,
+          u: umfeld,
+          nutzer,
+          zeitpunkt,
+        });
+        protokolle.push(...v1.protokolle);
+        return { wert: { programmId, version1: true }, protokoll: protokolle };
+      }
+      return { wert: { programmId, version1: false }, protokoll: protokolle };
+    },
+  ).catch((e: unknown) => {
+    // TS-05: höchstens ein Programm je Mandant; ein paralleles Anlegen scheitert am
+    // eindeutigen Schlüssel (tenant_id, mandantId) statt ein zweites Programm zu erzeugen.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') return null;
+    throw e;
   });
+  if (gespeichert === null)
+    return { fehler: 'Das Programm wurde inzwischen angelegt. Bitte die Seite neu laden.' };
 
   aktualisiereMandant(mandantId);
   const basis = `/staff/clients/${mandantId}/tcms`;

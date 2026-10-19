@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { prisma, type Prisma } from '@tcms/db';
+import type { Prisma } from '@tcms/db';
 import { fmtDatumZeit } from '@tcms/domain';
 import { AdminKopf, NurAdmin, Seiten } from '@/components/admin/teile';
 import { Icon } from '@/components/icon';
@@ -7,6 +7,8 @@ import { Hash } from '@/components/ui/badges';
 import { AktionsForm, SubmitButton } from '@/components/ui/client';
 import { Leerzustand } from '@/components/ui/leer';
 import { pruefeHashkette } from '@/server/actions/admin';
+import { kannVerwalten } from '@tcms/service';
+import { lies } from '@/server/demo';
 import { brauchtKanzlei } from '@/server/sitzung';
 
 export const metadata = { title: 'Audit-Log' };
@@ -18,45 +20,50 @@ const eins = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v)
 
 export default async function AuditLog({ searchParams }: { searchParams: Promise<SP> }) {
   const nutzer = await brauchtKanzlei();
-  if (!nutzer.istAdmin) return <NurAdmin titel="Audit-Log" />;
+  if (!kannVerwalten(nutzer)) return <NurAdmin titel="Audit-Log" />;
   const sp = await searchParams;
   const mandantId = eins(sp['mandant']);
   const aktion = eins(sp['aktion']).trim();
   const seiteRoh = Number.parseInt(eins(sp['seite']) || '1', 10);
 
-  const [programme, mandanten, aktionen] = await Promise.all([
-    prisma.tcmsProgramm.findMany({
-      select: { id: true, mandant: { select: { id: true, name: true } } },
-    }),
-    prisma.mandant.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
-    prisma.auditEvent.findMany({
-      distinct: ['aktion'],
-      select: { aktion: true },
-      orderBy: { aktion: 'asc' },
-    }),
-  ]);
+  // Audit des Tenants (Kette je Kanzlei, ADR 0001 §4); alles in einer Transaktion.
+  const { programme, mandanten, aktionen, gesamt, seiten, seite, eintraege, letzter } = await lies(
+    async (tx) => {
+      const programme = await tx.tcmsProgramm.findMany({
+        select: { id: true, mandant: { select: { id: true, name: true } } },
+      });
+      const mandanten = await tx.mandant.findMany({
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true },
+      });
+      const aktionen = await tx.auditEvent.findMany({
+        distinct: ['aktion'],
+        select: { aktion: true },
+        orderBy: { aktion: 'asc' },
+      });
+      const where: Prisma.AuditEventWhereInput = {};
+      if (mandantId)
+        where.programmId = {
+          in: programme.filter((p) => p.mandant.id === mandantId).map((p) => p.id),
+        };
+      if (aktion) where.aktion = { startsWith: aktion };
+      const gesamt = await tx.auditEvent.count({ where });
+      const seiten = Math.max(1, Math.ceil(gesamt / PRO_SEITE));
+      const seite = Math.min(Math.max(1, Number.isFinite(seiteRoh) ? seiteRoh : 1), seiten);
+      const eintraege = await tx.auditEvent.findMany({
+        where,
+        orderBy: { seq: 'desc' },
+        skip: (seite - 1) * PRO_SEITE,
+        take: PRO_SEITE,
+      });
+      const letzter = await tx.auditEvent.findFirst({
+        orderBy: { seq: 'desc' },
+        select: { seq: true, hash: true, at: true },
+      });
+      return { programme, mandanten, aktionen, gesamt, seiten, seite, eintraege, letzter };
+    },
+  );
   const mandantJeProgramm = new Map(programme.map((p) => [p.id, p.mandant]));
-
-  const where: Prisma.AuditEventWhereInput = {};
-  if (mandantId)
-    where.programmId = { in: programme.filter((p) => p.mandant.id === mandantId).map((p) => p.id) };
-  if (aktion) where.aktion = { startsWith: aktion };
-
-  const gesamt = await prisma.auditEvent.count({ where });
-  const seiten = Math.max(1, Math.ceil(gesamt / PRO_SEITE));
-  const seite = Math.min(Math.max(1, Number.isFinite(seiteRoh) ? seiteRoh : 1), seiten);
-  const [eintraege, letzter] = await Promise.all([
-    prisma.auditEvent.findMany({
-      where,
-      orderBy: { seq: 'desc' },
-      skip: (seite - 1) * PRO_SEITE,
-      take: PRO_SEITE,
-    }),
-    prisma.auditEvent.findFirst({
-      orderBy: { seq: 'desc' },
-      select: { seq: true, hash: true, at: true },
-    }),
-  ]);
 
   const praefixe = [
     ...new Set(

@@ -27,16 +27,21 @@ für KI-Werkzeuge.
   - `src/server/seite.ts` (`ladeStaffSeite`) liefert Kontext, Rechte und
     Stichtag für Staff-Seiten.
   - `src/server/actions/*.ts` – Server Actions je Bereich.
-  - `src/server/aktion.ts` – `mitAudit` (Transaktion + Audit-Eintrag) und
-    `aktualisiereMandant` (Revalidierung).
-  - `src/server/rechte.ts` – reine Rechtefunktionen.
+  - `src/server/aktion.ts` – `mitAudit` der Demo (Dienstkontext aus
+    `@tcms/service` im Tenant des Akteurs) und `aktualisiereMandant`.
+  - `src/server/demo.ts` – Stellvertreterin der kanzleikonsole: Demo-Verzeichnis
+    (Personen, Zuständigkeit, Tenant), Akteur je Mandant, Demo-Uhr, Ablage,
+    `lies`/`db` für Lesezugriffe (nur lesend, je Aufruf im Demo-Tenant).
+  - `src/server/berechtigung.ts` – bindet die Rechte aus `@tcms/service` an den
+    Mandanten des Objekts (wie `cli`); Regeln stehen nur in `packages/service`.
   - `src/components/ui/*` – gemeinsame Bausteine (Badges, Heatmap, Drawer,
     Begründungsdialog, Stichtag-Selektor, Visualisierungen).
 
 ## Fachliche Regeln (verbindlich)
 
 1. Jede fachliche Änderung läuft über `mitAudit` und erzeugt ein
-   Audit-Ereignis (`tcms.<bereich>.<aktion>`). Keine Änderung ohne Protokoll.
+   Audit-Ereignis (`tcms.<bereich>.<aktion>`). Keine Änderung ohne Protokoll;
+   `mitAudit` weist ein leeres Protokoll ab.
 2. Bewertungen und Frequenzen werden berechnet, nie gespeichert-überschrieben.
    Eine Übersteuerung ist ein eigenes Objekt mit Begründung (≥ 30 Zeichen) und
    Freigabe durch eine zweite Person; der berechnete Wert bleibt sichtbar.
@@ -57,6 +62,18 @@ für KI-Werkzeuge.
    Geschäftsprofil) sind deterministisch und nennen ihren Grund.
 8. Normanker, Katalogwerte und Startwerte der Matrix sind ungeprüfte Entwürfe.
    Rechtsquellen und Norminhalte nie erfinden.
+
+## Mandantentrennung und Akteur (verbindlich, ADR 0001)
+
+- Jeder Datenbankzugriff zur Laufzeit läuft in `mitTenant` (bzw. `imDienst`);
+  der Tenant kommt aus dem Akteur, nie aus der Eingabe. Kein Code umgeht RLS.
+- Rechte nur über die Funktionen aus `@tcms/service` mit dem `Akteur`;
+  Kanzleipersonen handeln nur mit bestätigtem Mandantenbezug (`cli`),
+  Mandantenkontakte nur mit aktiver `MandantKontaktRolle`.
+- Fremde Mandanten und Objekte: `404` bzw. „nicht gefunden", nie ein Hinweis
+  auf ihre Existenz.
+- `TCMS_DEMO_TODAY` wirkt nur über die Demo-Uhr in `apps/web`; Audit-
+  Zeitstempel und Sicherheitsfristen (Codes) sind immer echte Zeit.
 
 ## UI-Sprache (verbindlich)
 
@@ -85,5 +102,6 @@ vorhandenen Tokens aufsetzen.
 ```
 pnpm typecheck
 pnpm test
+DB_TESTS=1 DATABASE_URL=… DATABASE_OWNER_URL=… pnpm --filter @tcms/db test
 pnpm build
 ```

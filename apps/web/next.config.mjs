@@ -13,7 +13,7 @@ const nextConfig = {
   reactStrictMode: true,
   outputFileTracingRoot: path.join(__dirname, '../../'),
   // Workspace-Pakete exportieren TypeScript-Quellen.
-  transpilePackages: ['@tcms/domain', '@tcms/db'],
+  transpilePackages: ['@tcms/domain', '@tcms/db', '@tcms/contract', '@tcms/service'],
   serverExternalPackages: ['@prisma/client', '@prisma/adapter-pg', 'pg'],
   experimental: {
     serverActions: {

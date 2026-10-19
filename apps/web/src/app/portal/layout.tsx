@@ -1,14 +1,15 @@
 import type { ReactNode } from 'react';
-import { prisma } from '@tcms/db';
 import { AppShell } from '@/components/shell/app-shell';
+import { demoPersonen, lies } from '@/server/demo';
 import { brauchtPortal } from '@/server/sitzung';
 
 export default async function PortalLayout({ children }: { children: ReactNode }) {
-  const nutzer = await brauchtPortal();
-  const mandant = await prisma.mandant.findUnique({ where: { id: nutzer.mandantId } });
+  const { akteur } = await brauchtPortal();
+  const person = demoPersonen.person(akteur.id)!;
+  const mandant = await lies((tx) => tx.mandant.findUnique({ where: { id: akteur.mandantId } }));
   return (
     <AppShell
-      nutzer={nutzer}
+      nutzer={person}
       titel={mandant?.name ?? 'Mandantenportal'}
       untertitel="Mandantenportal"
       gruppen={[

@@ -1,7 +1,7 @@
 'use server';
 
 import { z } from 'zod';
-import { prisma, type Prisma, type Tx } from '@tcms/db';
+import { type Prisma, type Tx } from '@tcms/db';
 import {
   brutto,
   BEWERTUNGSMODELL_VERSION,
@@ -18,6 +18,7 @@ import {
   WAHRSCHEINLICHKEIT_LABEL,
   type Klasse,
 } from '@tcms/domain';
+import { db, personImMandat, type KanzleiAkteur } from '../demo';
 import { aktualisiereMandant, KEIN_RECHT, mitAudit, type Protokoll } from '../aktion';
 import type { Ergebnis } from '../ergebnis';
 import { ladeKontext } from '../kontext';
@@ -28,9 +29,9 @@ import {
   planeDurchfuehrungenNeu,
   type Neuplanung,
 } from '../kontrollen-daten';
-import { kannBearbeiten, zweitePerson } from '../rechte';
+import { kannBearbeiten, zweitePerson } from '../berechtigung';
 import { NUR_AKTUELL } from '../seite';
-import { brauchtKanzlei, type Nutzer } from '../sitzung';
+import { brauchtKanzlei } from '../sitzung';
 import { heute, leseStand } from '../zeit';
 
 // =============================================================================
@@ -41,6 +42,9 @@ import { heute, leseStand } from '../zeit';
 // =============================================================================
 
 const KLASSEN = ['GERING', 'MITTEL', 'HOCH', 'KRITISCH'] as const;
+
+/** Der offene Risikostand wurde parallel geschlossen (TS-05). */
+class StandKonflikt extends Error {}
 const ZWEITE_PERSON =
   'Die Entscheidung trifft eine zweite Person – nicht die beantragende bzw. einreichende Person.';
 
@@ -56,7 +60,7 @@ function felder(fd: FormData): Record<string, string> {
 }
 
 async function ladeRisiko(id: string) {
-  return prisma.risiko.findUnique({
+  return db.risiko.findUnique({
     where: { id },
     include: { programm: { include: { mandant: true } }, staende: { where: { gueltigBis: null } } },
   });
@@ -64,7 +68,11 @@ async function ladeRisiko(id: string) {
 
 type RisikoMitProgramm = NonNullable<Awaited<ReturnType<typeof ladeRisiko>>>;
 
-function pruefeRisiko(nutzer: Nutzer, r: RisikoMitProgramm | null, jetzt: Date): string | null {
+function pruefeRisiko(
+  nutzer: KanzleiAkteur,
+  r: RisikoMitProgramm | null,
+  jetzt: Date,
+): string | null {
   if (!r) return 'Risiko nicht gefunden.';
   if (!kannBearbeiten(nutzer, r.programm.mandant)) return KEIN_RECHT;
   if (r.entscheidung !== 'UEBERNOMMEN' || (r.inaktivAb && r.inaktivAb.getTime() <= jetzt.getTime()))
@@ -195,10 +203,17 @@ export async function risikoNeuBewerten(_prev: Ergebnis, fd: FormData): Promise<
         );
     }
 
-    await tx.risikoStand.update({ where: { id: alt.id }, data: { gueltigBis: zeitpunkt } });
+    // TS-05: nur den noch offenen Stand schließen (bedingtes Update); hat ihn eine
+    // parallele Neubewertung bereits geschlossen, bricht die Transaktion ab.
+    const zu = await tx.risikoStand.updateMany({
+      where: { id: alt.id, gueltigBis: null },
+      data: { gueltigBis: zeitpunkt },
+    });
+    if (zu.count !== 1) throw new StandKonflikt();
     const neu = await tx.risikoStand.create({
       data: {
         risikoId: id,
+        version: alt.version + 1,
         titel: alt.titel,
         fehlerquelle: alt.fehlerquelle,
         folge: alt.folge,
@@ -332,7 +347,12 @@ export async function risikoNeuBewerten(_prev: Ergebnis, fd: FormData): Promise<
       }
     }
     return { wert: { planungen, frequenzHinweise }, protokoll: protokolle };
+  }).catch((e: unknown) => {
+    if (e instanceof StandKonflikt) return null;
+    throw e;
   });
+  if (!ergebnis)
+    return { fehler: 'Das Risiko wurde inzwischen neu bewertet. Bitte die Seite neu laden.' };
 
   aktualisiereMandant(programm.mandantId);
   const teile = [
@@ -372,7 +392,7 @@ export async function uebersteuerungBeantragen(_prev: Ergebnis, fd: FormData): P
   const risiko = await ladeRisiko(id);
   const fehler = pruefeRisiko(nutzer, risiko, heute());
   if (fehler || !risiko) return { fehler: fehler ?? 'Risiko nicht gefunden.' };
-  const offen = await prisma.uebersteuerung.count({
+  const offen = await db.uebersteuerung.count({
     where: { risikoId: id, sicht, status: 'BEANTRAGT' },
   });
   if (offen > 0) return { fehler: 'Für diese Sicht ist bereits eine Übersteuerung beantragt.' };
@@ -441,7 +461,7 @@ export async function uebersteuerungEntscheiden(_prev: Ergebnis, fd: FormData): 
   const begruendung = p.data.begruendung ?? '';
   if (entscheidung === 'ablehnen' && begruendung.length < 30)
     return { fehler: 'Die Ablehnung braucht eine Begründung (mindestens 30 Zeichen).' };
-  const u = await prisma.uebersteuerung.findUnique({
+  const u = await db.uebersteuerung.findUnique({
     where: { id },
     include: { risiko: { include: { programm: { include: { mandant: true } } } } },
   });
@@ -503,7 +523,7 @@ export async function risikenFreigabeSchritt(_prev: Ergebnis, fd: FormData): Pro
   const aktion = fd.get('aktion');
   if (ids.length === 0) return { fehler: 'Bitte mindestens ein Risiko auswählen.' };
   if (aktion !== 'einreichen' && aktion !== 'freigeben') return { fehler: 'Unbekannter Schritt.' };
-  const risiken = await prisma.risiko.findMany({
+  const risiken = await db.risiko.findMany({
     where: { id: { in: ids } },
     include: { programm: { include: { mandant: true } } },
   });
@@ -625,13 +645,8 @@ export async function risikoakzeptanzAnfordern(_prev: Ergebnis, fd: FormData): P
   const risiko = await ladeRisiko(id);
   const fehler = pruefeRisiko(nutzer, risiko, heute());
   if (fehler || !risiko) return { fehler: fehler ?? 'Risiko nicht gefunden.' };
-  const empf = await prisma.person.findUnique({ where: { id: empfaengerId } });
-  if (
-    !empf ||
-    !empf.aktiv ||
-    empf.mandantId !== risiko.programm.mandantId ||
-    empf.mandantRolle !== 'GESETZLICHER_VERTRETER'
-  ) {
+  const empf = await personImMandat(empfaengerId, risiko.programm.mandantId);
+  if (!empf || !empf.rollen.includes('GESETZLICHER_VERTRETER')) {
     return {
       fehler: 'Die Risikoakzeptanz geben nur gesetzliche Vertreter:innen des Mandanten frei.',
     };
@@ -642,7 +657,7 @@ export async function risikoakzeptanzAnfordern(_prev: Ergebnis, fd: FormData): P
     return {
       fehler: 'Eine Risikoakzeptanz ist nur für Risiken über dem Risikoappetit vorgesehen.',
     };
-  const offen = await prisma.freigabe.count({
+  const offen = await db.freigabe.count({
     where: { art: 'RISIKOAKZEPTANZ', refId: id, status: 'OFFEN' },
   });
   if (offen > 0)

@@ -1,7 +1,7 @@
 'use server';
 
 import { redirect } from 'next/navigation';
-import { prisma, type Tx } from '@tcms/db';
+import { type Tx } from '@tcms/db';
 import {
   bewerteSchwelle,
   ereignistyp,
@@ -12,11 +12,13 @@ import {
   istEuAusland,
   LAND_NAME,
 } from '@tcms/domain';
+import { db } from '../demo';
 import { aktualisiereMandant, KEIN_RECHT, mitAudit, type Protokoll } from '../aktion';
 import type { Ergebnis } from '../ergebnis';
 import { naechsteEreignisnummer } from '../nummern';
-import { kannBearbeiten } from '../rechte';
-import { brauchtKanzlei, type Nutzer } from '../sitzung';
+import { kannBearbeiten } from '../berechtigung';
+import type { KanzleiAkteur } from '../demo';
+import { brauchtKanzlei } from '../sitzung';
 import { heute } from '../zeit';
 
 // =============================================================================
@@ -97,7 +99,7 @@ function leseStand(fd: FormData): Date {
 }
 
 async function ladeProgramm(programmId: string) {
-  return prisma.tcmsProgramm.findUnique({ where: { id: programmId }, include: { mandant: true } });
+  return db.tcmsProgramm.findUnique({ where: { id: programmId }, include: { mandant: true } });
 }
 
 type Jeweils = Awaited<ReturnType<Tx['landStand']['findMany']>>;
@@ -136,7 +138,7 @@ function summen(
 async function schreibeStaende(
   tx: Tx,
   zeitpunkt: Date,
-  nutzer: Pick<Nutzer, 'id'>,
+  nutzer: Pick<KanzleiAkteur, 'id'>,
   programmId: string,
   stand: Date,
   eingaben: Eingabe[],
