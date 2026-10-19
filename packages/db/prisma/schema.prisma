@@ -854,8 +854,14 @@ model Nachricht {
 /// Nur anhängen: Die Laufzeitrolle hat SELECT und INSERT, kein UPDATE/DELETE.
 /// (tenant_id, prevHash) ist eindeutig: Die Kette eines Tenants kann nicht
 /// verzweigen, auch wenn die Sperre einmal fehlte.
+///
+/// `seq` ist ein technischer, globaler Schlüssel und verlässt den Dienst nie:
+/// Lücken darin verrieten die Audit-Aktivität anderer Kanzleien (RT-03).
+/// Nach außen gilt `pos`, die laufende Position je Tenant (1, 2, 3, …),
+/// vergeben unter der Tenant-Sperre in `schreibeAudit`.
 model AuditEvent {
   seq           Int      @id @default(autoincrement())
+  pos           Int
   tenantId      String   @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   kettenVersion Int
   at            DateTime
@@ -871,10 +877,10 @@ model AuditEvent {
 
   @@unique([tenantId, hash])
   @@unique([tenantId, prevHash])
-  @@index([tenantId, seq])
-  @@index([tenantId, programmId, seq])
+  @@unique([tenantId, pos])
+  @@index([tenantId, programmId, pos])
   @@index([tenantId, objektTyp, objektId])
-  @@index([tenantId, aktion, seq])
+  @@index([tenantId, aktion, pos])
 }
 
 // ---------------------------------------------------------------------------

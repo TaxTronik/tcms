@@ -105,7 +105,7 @@ describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
     const audit = await inWelt(w, (tx) =>
       tx.auditEvent.findMany({
         where: { aktion: 'tcms.nachricht.abgerufen' },
-        orderBy: { seq: 'asc' },
+        orderBy: { pos: 'asc' },
       }),
     );
     expect(audit).toHaveLength(2);

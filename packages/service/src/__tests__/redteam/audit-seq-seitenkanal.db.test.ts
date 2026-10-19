@@ -14,6 +14,11 @@
 // (sichere Erwartung: Nummerierung je Tenant, keine fremden Lücken). Solange
 // die Sequenz global ist, entsteht eine Lücke und der Test schlägt fehl.
 // Einordnung: niedrig/Hinweis (Metadaten-Leak über Aktivitätsvolumen).
+//
+// Angepasste Annahme (tcms-rtfix): Die nach außen gegebene Position ist jetzt
+// die Spalte `pos` (je Tenant); `seq` bleibt technischer, globaler Schlüssel
+// und verlässt den Dienst nicht mehr. Der Test liest daher `pos`; das
+// Schutzziel (aufeinanderfolgende eigene Positionen) ist unverändert.
 // =============================================================================
 
 import { describe, expect, it } from 'vitest';
@@ -38,9 +43,9 @@ describe.skipIf(!AKTIV)('RT-03 globale Audit-Sequenz als Tenant-Seitenkanal', ()
         });
         const row = await tx.auditEvent.findFirstOrThrow({
           where: { objektId },
-          select: { seq: true },
+          select: { pos: true },
         });
-        return row.seq;
+        return row.pos;
       });
 
     const a1 = await seqVon(w.tenant, `${obj}-A1`);

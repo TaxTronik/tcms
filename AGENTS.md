@@ -13,7 +13,8 @@ für KI-Werkzeuge.
 - `packages/db` – Prisma-Schema, Migrationen (Init mit RLS je Tabelle, danach
   Nachträge von Hand im Prisma-Format), Rollen-Bootstrap
   (`prisma/init/01_bootstrap.sql`), `mitTenant` (Prisma 7 mit `@prisma/adapter-pg`),
-  Audit-Hashkette je Tenant (`schreibeAudit`), Seed. Jeder Laufzeitzugriff läuft in
+  Audit-Hashkette je Tenant (`schreibeAudit`, Position `pos` je Tenant lückenlos;
+  der globale Schlüssel `seq` verlässt den Dienst nie – RT-03), Seed. Jeder Laufzeitzugriff läuft in
   `mitTenant`; einen ungebundenen Client gibt es nicht. Neue Tabellen brauchen
   `tenant_id`, RLS, die Policy `tcms_tenant`, Grants für `tcms_app` und einen
   Eintrag in der Tabellenliste der Migration – der generische DB-Test

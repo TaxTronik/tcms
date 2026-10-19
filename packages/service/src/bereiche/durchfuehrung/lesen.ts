@@ -111,7 +111,7 @@ function verlaufText(
 interface Gemeinsam {
   felder: Omit<Kontrollaufgabe, 'kontrolle' | 'namen' | 'rechte'>;
   kontrolle: Kontrollaufgabe['kontrolle'];
-  audit: { seq: number; at: Date; actorId: string | null; aktion: string; detail: unknown }[];
+  audit: { pos: number; at: Date; actorId: string | null; aktion: string; detail: unknown }[];
   ende: Date;
   personen: Set<string>;
 }
@@ -134,8 +134,8 @@ async function gemeinsam(
         { detail: { path: ['nachtragZuId'], equals: d.id } },
       ],
     },
-    orderBy: { seq: 'desc' },
-    select: { seq: true, at: true, actorId: true, aktion: true, detail: true },
+    orderBy: { pos: 'desc' },
+    select: { pos: true, at: true, actorId: true, aktion: true, detail: true },
   });
   // Audit-Zeitstempel sind echte Zeit (auditGrenze, kern/zeit.ts).
   const grenze = auditGrenze(stand, heute).getTime();
@@ -286,7 +286,7 @@ export async function ladeDurchfuehrung(
   const partei = ks.partei;
 
   const verlauf: DurchfuehrungDetail['verlauf'] = g.audit.map((x) => ({
-    seq: x.seq,
+    pos: x.pos,
     at: iso(x.at),
     actorId: x.actorId,
     aktion: x.aktion,
@@ -300,7 +300,7 @@ export async function ladeDurchfuehrung(
   // Abgeleitete Zustände (nicht gespeichert, daher „System").
   if (d.periodeBis.getTime() <= g.ende.getTime() && !d.ausserplanmaessig) {
     verlauf.push({
-      seq: -1,
+      pos: -1,
       at: iso(d.periodeBis),
       actorId: null,
       aktion: 'system.faellig',
@@ -310,7 +310,7 @@ export async function ladeDurchfuehrung(
   }
   if (g.felder.anzeige === 'UEBERFAELLIG') {
     verlauf.push({
-      seq: -2,
+      pos: -2,
       at: iso(addTage(d.faelligAm, 1)),
       actorId: null,
       aktion: 'system.ueberfaellig',
@@ -318,7 +318,7 @@ export async function ladeDurchfuehrung(
       system: true,
     });
   }
-  verlauf.sort((a, b) => b.at.localeCompare(a.at) || b.seq - a.seq);
+  verlauf.sort((a, b) => b.at.localeCompare(a.at) || b.pos - a.pos);
   const entfallenFrei = g.audit.find((x) => x.aktion === 'tcms.durchfuehrung.entfallen') ?? null;
 
   // Nacheinander: eine Transaktion, eine Verbindung.

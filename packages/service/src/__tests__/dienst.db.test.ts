@@ -93,7 +93,7 @@ describe.skipIf(!AKTIV)('Dienstkontext gegen PostgreSQL', () => {
       }),
     );
     const [letzter, kette] = await mitTenant(tenantA, async (tx) => [
-      await tx.auditEvent.findFirstOrThrow({ orderBy: { seq: 'desc' } }),
+      await tx.auditEvent.findFirstOrThrow({ orderBy: { pos: 'desc' } }),
       await pruefeAuditKette(tx),
     ]);
     expect(letzter).toMatchObject({

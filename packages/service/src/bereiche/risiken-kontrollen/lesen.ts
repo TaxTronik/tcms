@@ -280,12 +280,12 @@ async function auditSpur(
       programmId: k.programm!.id,
       at: { lte: auditGrenze(k.stand, k.heute) },
     },
-    orderBy: { seq: 'desc' },
+    orderBy: { pos: 'desc' },
     take: AUDIT_LIMIT,
-    select: { seq: true, at: true, actorId: true, aktion: true, detail: true },
+    select: { pos: true, at: true, actorId: true, aktion: true, detail: true },
   });
   return zeilen.map((a) => ({
-    seq: a.seq,
+    pos: a.pos,
     at: a.at.toISOString(),
     actorId: a.actorId,
     aktion: a.aktion,

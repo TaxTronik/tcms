@@ -173,7 +173,7 @@ describe.skipIf(!AKTIV)('Demo der Kontrolldurchführung gegen PostgreSQL', () =>
       ok: 'Gegengezeichnet – abgeschlossen ohne Befund.',
     });
     const ev = await imDemo((tx) =>
-      tx.auditEvent.findMany({ where: { objektId: did }, orderBy: { seq: 'asc' } }),
+      tx.auditEvent.findMany({ where: { objektId: did }, orderBy: { pos: 'asc' } }),
     );
     expect(ev.map((e) => e.aktion)).toEqual([
       'tcms.durchfuehrung.begonnen',

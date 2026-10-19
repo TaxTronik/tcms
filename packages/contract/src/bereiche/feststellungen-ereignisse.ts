@@ -324,8 +324,9 @@ export const FeststellungListeSchema = z
   })
   .strict();
 
+/** Verlaufseintrag; `pos` ist die Position im Audit des Tenants (RT-03). */
 export const VerlaufEintragSchema = z
-  .object({ seq: z.number().int(), at: iso, actorId: z.string().nullable(), text: z.string() })
+  .object({ pos: z.number().int(), at: iso, actorId: z.string().nullable(), text: z.string() })
   .strict();
 
 export const FeststellungDetailSchema = z.discriminatedUnion('maskiert', [

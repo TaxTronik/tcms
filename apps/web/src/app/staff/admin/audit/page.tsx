@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { MAX_AUDIT_SEQ } from '@tcms/contract';
+import { MAX_AUDIT_POS } from '@tcms/contract';
 import { DEMO_MANDANTEN } from '@tcms/db/demo';
 import { fmtDatumZeit } from '@tcms/domain';
 import { AdminKopf, NurAdmin } from '@/components/admin/teile';
@@ -30,8 +30,8 @@ export default async function AuditLog({ searchParams }: { searchParams: Promise
   const aktion = /^[a-z0-9._]{1,100}$/.test(aktionRoh) ? aktionRoh : '';
   const vorRoh = eins(sp['vor']);
   const vor = /^[0-9]{1,10}$/.test(vorRoh)
-    ? Math.min(Number(vorRoh), MAX_AUDIT_SEQ)
-    : MAX_AUDIT_SEQ;
+    ? Math.min(Number(vorRoh), MAX_AUDIT_POS)
+    : MAX_AUDIT_POS;
 
   // Audit des Tenants (Kette je Kanzlei, ADR 0001 §4) über @tcms/service, neueste zuerst.
   const seite = await imDienst(nutzer, DEMO_PORTS, (ctx) =>
@@ -65,7 +65,7 @@ export default async function AuditLog({ searchParams }: { searchParams: Promise
     const q = p.toString();
     return q ? `/staff/admin/audit?${q}` : '/staff/admin/audit';
   };
-  const ersteSeite = vor === MAX_AUDIT_SEQ;
+  const ersteSeite = vor === MAX_AUDIT_POS;
 
   return (
     <div className="page">
@@ -140,7 +140,7 @@ export default async function AuditLog({ searchParams }: { searchParams: Promise
               <div className="text-11 text-muted mt-1">
                 {letzter ? (
                   <>
-                    Kettenende #{letzter.seq} · <Hash wert={letzter.hash} />
+                    Kettenende #{letzter.pos} · <Hash wert={letzter.hash} />
                   </>
                 ) : (
                   'noch keine Einträge'
@@ -199,9 +199,9 @@ export default async function AuditLog({ searchParams }: { searchParams: Promise
                   const m = e.mandantId ? mandantName.get(e.mandantId) : undefined;
                   const detail = JSON.stringify(e.detail ?? {});
                   return (
-                    <tr key={e.seq} id={`seq-${e.seq}`}>
+                    <tr key={e.pos} id={`pos-${e.pos}`}>
                       <td style={TD} className="td-num text-xs">
-                        {e.seq}
+                        {e.pos}
                       </td>
                       <td style={{ ...TD, whiteSpace: 'nowrap' }} className="text-xs mono">
                         {fmtDatumZeit(new Date(e.at))}

@@ -4,8 +4,12 @@
 // Nur Admins/Partner der Kanzlei (`kannVerwalten`); der Tenant kommt aus dem
 // Akteur (RLS), nie aus der Eingabe.
 //
+// Position (RT-03): Einträge, Cursor, Kettenkopf und Fortsetzungspunkt nennen
+// `pos`, die laufende Position je Tenant. Der globale Schlüssel `seq` wird nie
+// gelesen oder ausgegeben – Lücken darin verrieten fremde Audit-Aktivität.
+//
 // Kosten: Lesen höchstens `MAX_AUDIT_JE_SEITE` Einträge je Aufruf (Cursor
-// über `seq`, Index (tenant_id, seq) bzw. (tenant_id, programmId, seq)). Die
+// über `pos`, Index (tenant_id, pos) bzw. (tenant_id, programmId, pos)). Die
 // Kettenprüfung liest in Seiten zu `PRUEF_SEITE` Einträgen (Speicher
 // begrenzt) und bricht nach `PRUEF_ZEITBUDGET_MS` mit Fortsetzungspunkt ab,
 // unter dem Transaktionslimit von 30 s.
@@ -58,15 +62,15 @@ export async function ladeAudit(
     where.programmId = { in: programme.map((p) => p.id) };
   }
   if (e.aktion) where.aktion = { startsWith: e.aktion };
-  if (absteigend) where.seq = { lt: e.vor };
-  else if (e.nach !== undefined) where.seq = { gt: e.nach };
+  if (absteigend) where.pos = { lt: e.vor };
+  else if (e.nach !== undefined) where.pos = { gt: e.nach };
 
   const zeilen = await ctx.tx.auditEvent.findMany({
     where,
-    orderBy: { seq: absteigend ? 'desc' : 'asc' },
+    orderBy: { pos: absteigend ? 'desc' : 'asc' },
     take: limit + 1,
     select: {
-      seq: true,
+      pos: true,
       at: true,
       actorId: true,
       actorName: true,
@@ -91,8 +95,8 @@ export async function ladeAudit(
     ).map((p) => [p.id, p.mandantId]),
   );
   const kopf = await ctx.tx.auditEvent.findFirst({
-    orderBy: { seq: 'desc' },
-    select: { seq: true, hash: true, at: true },
+    orderBy: { pos: 'desc' },
+    select: { pos: true, hash: true, at: true },
   });
   return antwortNach(
     AuditListeAntwortSchema,
@@ -102,7 +106,7 @@ export async function ladeAudit(
         ...z,
         mandantId: z.programmId ? (mandantJe.get(z.programmId) ?? null) : null,
       })),
-      weiter: zeilen.length > limit ? seite[seite.length - 1]!.seq : null,
+      weiter: zeilen.length > limit ? seite[seite.length - 1]!.pos : null,
       kopf,
     }),
   );
@@ -130,12 +134,12 @@ export async function pruefeAudit(
   let stand: KettenStand = KETTEN_ANFANG;
   if (e.ab !== undefined && e.ab > 0) {
     const start = await ctx.tx.auditEvent.findFirst({
-      where: { tenantId, seq: e.ab },
-      select: { seq: true, hash: true },
+      where: { tenantId, pos: e.ab },
+      select: { pos: true, hash: true },
     });
     if (!start)
       throw new DienstFehler('UNGUELTIG', 'Fortsetzungspunkt unbekannt.', { ab: ['unbekannt'] });
-    stand = { prevHash: start.hash, seq: start.seq };
+    stand = { prevHash: start.hash, pos: start.pos };
   }
 
   let geprueft = 0;
@@ -149,16 +153,32 @@ export async function pruefeAudit(
       geprueft,
       bruchBei,
       grund,
-      weiterAb: status === 'ABGEBROCHEN' ? stand.seq : null,
+      weiterAb: status === 'ABGEBROCHEN' ? stand.pos : null,
     });
 
   // Je Aufruf mindestens eine Seite (Fortschritt garantiert), dann höchstens bis zum Zeitbudget.
   for (;;) {
     const seite = await ctx.tx.auditEvent.findMany({
       // Explizit der Tenant der Transaktion (wie `pruefeAuditKette`), zusätzlich zu RLS.
-      where: { tenantId, seq: { gt: stand.seq } },
-      orderBy: { seq: 'asc' },
+      where: { tenantId, pos: { gt: stand.pos } },
+      orderBy: { pos: 'asc' },
       take: seiteGroesse,
+      // Ohne `seq`: Er gehört nicht zur Kette (RT-03).
+      select: {
+        pos: true,
+        kettenVersion: true,
+        tenantId: true,
+        at: true,
+        actorId: true,
+        actorName: true,
+        aktion: true,
+        objektTyp: true,
+        objektId: true,
+        programmId: true,
+        detail: true,
+        prevHash: true,
+        hash: true,
+      },
     });
     const r = pruefeKette(tenantId, seite, stand);
     geprueft += r.geprueft;

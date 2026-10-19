@@ -342,7 +342,8 @@ export const DurchfuehrungKurzSchema = z
 
 export const DurchfuehrungVerlaufSchema = z
   .object({
-    seq: z.number().int(),
+    /** Position im Audit des Tenants (RT-03); abgeleitete Einträge („System") negativ. */
+    pos: z.number().int(),
     at: Zeitpunkt,
     /** null bei abgeleiteten Einträgen („System"). */
     actorId: PersonId.nullable(),

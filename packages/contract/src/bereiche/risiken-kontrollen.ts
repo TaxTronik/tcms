@@ -471,7 +471,8 @@ export const KontrollFrequenzAbleitungSchema = z
 
 export const AuditSpurZeileSchema = z
   .object({
-    seq: z.number().int(),
+    /** Position im Audit des Tenants (RT-03). */
+    pos: z.number().int(),
     at: zeitpunkt,
     actorId: personRef,
     aktion: z.string(),

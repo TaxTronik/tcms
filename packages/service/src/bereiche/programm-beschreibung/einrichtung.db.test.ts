@@ -273,7 +273,7 @@ describe.skipIf(!AKTIV)('Einrichtungsassistent (Service, PostgreSQL)', () => {
       await pruefeAuditKette(tx),
       await tx.auditEvent.findMany({
         where: { programmId: r.programmId },
-        orderBy: { seq: 'asc' },
+        orderBy: { pos: 'asc' },
       }),
     ]);
     expect(programm).toMatchObject({ status: 'AKTIV', setupEntwurf: null });

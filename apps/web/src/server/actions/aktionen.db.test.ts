@@ -186,7 +186,7 @@ describe.skipIf(!AKTIV)('Demo-Actions gegen PostgreSQL', () => {
     const r = await codeAnfordern(null, form({ freigabeId: beschreibungsFreigabe }));
     expect(r).toMatchObject({ ok: expect.stringContaining('Bestätigungscode') });
     const [letzter, kette] = await imDemo(async (tx) => [
-      await tx.auditEvent.findFirstOrThrow({ orderBy: { seq: 'desc' } }),
+      await tx.auditEvent.findFirstOrThrow({ orderBy: { pos: 'desc' } }),
       await pruefeAuditKette(tx),
     ]);
     expect(letzter).toMatchObject({

@@ -3,8 +3,11 @@
 // TS-10). Der Tenant kommt ausschließlich aus dem Transaktionskontext
 // (`mitTenant`), nie aus der Eingabe. Parallele Schreiber desselben Tenants
 // serialisiert eine transaktionsgebundene Advisory-Lock je Tenant; andere
-// Tenants laufen ungehindert. Zusätzlich verhindert der eindeutige Schlüssel
-// (tenant_id, prevHash) eine Verzweigung in der Datenbank.
+// Tenants laufen ungehindert. Zusätzlich verhindern die eindeutigen Schlüssel
+// (tenant_id, prevHash) und (tenant_id, pos) eine Verzweigung in der Datenbank.
+//
+// Position (RT-03): `pos` zählt je Tenant lückenlos (Vorgänger + 1, unter der
+// Sperre vergeben). Der globale Schlüssel `seq` verlässt den Dienst nie.
 // =============================================================================
 
 import {
@@ -46,10 +49,12 @@ export async function haengeAuditAn(tx: Tx, input: AuditInput, at: Date): Promis
   const tenantId = await tenantSperre(tx, AUDIT_SPERRE);
   const letzter = await tx.auditEvent.findFirst({
     where: { tenantId },
-    orderBy: { seq: 'desc' },
-    select: { hash: true },
+    orderBy: { pos: 'desc' },
+    select: { hash: true, pos: true },
   });
   const prevHash = letzter?.hash ?? GENESIS_HASH;
+  // Unter der Tenant-Sperre: kein anderer Schreiber dieses Tenants dazwischen.
+  const pos = (letzter?.pos ?? 0) + 1;
   const detail = JSON.parse(JSON.stringify(input.detail ?? {})) as Record<string, unknown>;
   const inhalt = {
     tenantId,
@@ -65,6 +70,7 @@ export async function haengeAuditAn(tx: Tx, input: AuditInput, at: Date): Promis
   await tx.auditEvent.create({
     data: {
       ...inhalt,
+      pos,
       kettenVersion: KETTEN_VERSION,
       detail: detail as Prisma.InputJsonValue,
       prevHash,
@@ -76,11 +82,11 @@ export async function haengeAuditAn(tx: Tx, input: AuditInput, at: Date): Promis
 /** Prüft die vollständige Kette des aktuellen Tenants (lesend). */
 export async function pruefeAuditKette(tx: Tx): Promise<KettenPruefung> {
   const tenantId = await aktuellerTenant(tx);
-  const alle = await tx.auditEvent.findMany({ where: { tenantId }, orderBy: { seq: 'asc' } });
+  const alle = await tx.auditEvent.findMany({ where: { tenantId }, orderBy: { pos: 'asc' } });
   return pruefeKette(
     tenantId,
     alle.map((e) => ({
-      seq: e.seq,
+      pos: e.pos,
       kettenVersion: e.kettenVersion,
       tenantId: e.tenantId,
       at: e.at,

@@ -291,7 +291,7 @@ export function VerlaufKarte({ d, titel = 'Verlauf' }: { d: DurchfuehrungDetail;
         ) : null}
         {d.verlauf.map((e, i) => (
           <div
-            key={`${e.seq}-${i}`}
+            key={`${e.pos}-${i}`}
             className="p-3"
             style={{ borderBottom: i < d.verlauf.length - 1 ? RAND : undefined }}
           >

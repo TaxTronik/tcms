@@ -217,9 +217,9 @@ export async function ladeEreignis(
       ],
       programmId: e.programmId,
     },
-    orderBy: { seq: 'asc' },
+    orderBy: { pos: 'asc' },
     select: {
-      seq: true,
+      pos: true,
       at: true,
       actorId: true,
       aktion: true,
@@ -342,7 +342,7 @@ export async function ladeEreignis(
   const verlauf: VerlaufEintrag[] = audits
     .filter(bisEnde)
     .map((a) => ({
-      seq: a.seq,
+      pos: a.pos,
       at: isoZeit(a.at),
       actorId: a.actorId,
       text: verlaufText(a.aktion, det(a)),
@@ -417,7 +417,7 @@ export async function ladeEreignisAnlage(
       programmId: e.programmId,
       aktion: { in: MELDUNG_AKTIONEN },
     },
-    orderBy: { seq: 'asc' },
+    orderBy: { pos: 'asc' },
     select: { detail: true },
   });
   const anlage = meldung

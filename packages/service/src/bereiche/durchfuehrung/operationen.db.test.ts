@@ -57,7 +57,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
     durchfuehrungId,
   });
   const audit = (objektId: string, aktion: string) =>
-    f.tx((tx) => tx.auditEvent.findMany({ where: { objektId, aktion }, orderBy: { seq: 'asc' } }));
+    f.tx((tx) => tx.auditEvent.findMany({ where: { objektId, aktion }, orderBy: { pos: 'asc' } }));
   /** Durchführung mit den nicht entfernten Nachweisen (wie jeder Leser). */
   const zeile = (id: string) =>
     f.tx((tx) =>

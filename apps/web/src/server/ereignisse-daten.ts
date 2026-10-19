@@ -218,7 +218,7 @@ export async function ladeEreignisDetail(
         }
       : null,
     verlauf: d.verlauf.map((v) => ({
-      id: v.seq,
+      id: v.pos,
       at: datum(v.at),
       actorName: name(v.actorId),
       text: v.text,

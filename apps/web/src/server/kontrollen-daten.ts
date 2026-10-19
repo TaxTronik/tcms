@@ -40,7 +40,7 @@ export interface KontrolleStandView {
 }
 
 export interface AuditZeile {
-  seq: number;
+  pos: number;
   at: Date;
   actorName: string;
   aktion: string;
@@ -120,7 +120,7 @@ export async function ladeKontrollenZusatz(
             designAm: datumOder(s.designAm),
           })),
           audit: detail.audit.map((a) => ({
-            seq: a.seq,
+            pos: a.pos,
             at: new Date(a.at),
             actorName: (a.actorId && detail.namen[a.actorId]) || '—',
             aktion: a.aktion,

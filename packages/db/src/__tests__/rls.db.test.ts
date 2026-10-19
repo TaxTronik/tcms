@@ -13,7 +13,7 @@
 // zusammengesetzter Fremdschlüssel, Grants zu weit, Sperre global oder fehlend).
 // =============================================================================
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Prisma, type PrismaClient } from '@prisma/client';
@@ -259,7 +259,7 @@ async function baueFixture(client: PrismaClient, tenant: string): Promise<Fixtur
         objektId: programm.id,
         programmId: programm.id,
       });
-      const audit = await tx.auditEvent.findFirstOrThrow({ orderBy: { seq: 'desc' } });
+      const audit = await tx.auditEvent.findFirstOrThrow({ orderBy: { pos: 'desc' } });
       return {
         tenant,
         mandantId: mandant.id,
@@ -885,7 +885,7 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
         A.tenant,
         async (tx) => {
           await schreibeAudit(tx, eintrag('kontext'));
-          return tx.auditEvent.findFirstOrThrow({ orderBy: { seq: 'desc' } });
+          return tx.auditEvent.findFirstOrThrow({ orderBy: { pos: 'desc' } });
         },
         { client: app },
       );
@@ -962,10 +962,12 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
         mitTenant(
           A.tenant,
           async (tx) => {
-            const erster = await tx.auditEvent.findFirstOrThrow({ orderBy: { seq: 'asc' } });
+            const erster = await tx.auditEvent.findFirstOrThrow({ orderBy: { pos: 'asc' } });
             expect(erster.prevHash).toBe(GENESIS_HASH);
+            const letzter = await tx.auditEvent.findFirstOrThrow({ orderBy: { pos: 'desc' } });
             await tx.auditEvent.create({
               data: {
+                pos: letzter.pos + 1,
                 kettenVersion: 2,
                 at: new Date(),
                 actorName: 'Gabel',
@@ -982,6 +984,63 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
         ),
       );
       expect(meldung).toMatch(/Unique constraint/i);
+    });
+
+    // RT-03: Position je Tenant statt globaler Sequenz.
+    it('Position zählt je Tenant lückenlos ab 1; fremde Schreiber reißen keine Lücke', async () => {
+      const pos = (tenant: string, objektId: string) =>
+        mitTenant(
+          tenant,
+          async (tx) => {
+            await schreibeAudit(tx, eintrag(objektId));
+            return (
+              await tx.auditEvent.findFirstOrThrow({ where: { objektId }, select: { pos: true } })
+            ).pos;
+          },
+          { client: app },
+        );
+      const lauf = randomUUID().slice(0, 8);
+      const a1 = await pos(A.tenant, `rt03-a1-${lauf}`);
+      await pos(B.tenant, `rt03-b1-${lauf}`);
+      const a2 = await pos(A.tenant, `rt03-a2-${lauf}`);
+      expect(a2 - a1).toBe(1);
+      for (const t of [A.tenant, B.tenant]) {
+        const alle = await mitTenant(
+          t,
+          (tx) => tx.auditEvent.findMany({ orderBy: { pos: 'asc' }, select: { pos: true } }),
+          { client: app },
+        );
+        expect(alle.map((x) => x.pos)).toEqual(alle.map((_, i) => i + 1));
+      }
+    });
+
+    it('doppelte Position scheitert am eindeutigen (tenant_id, pos), Position < 1 am CHECK', async () => {
+      const anlegen = (pos: (letzter: number) => number) =>
+        fehlerVon(
+          mitTenant(
+            A.tenant,
+            async (tx) => {
+              const letzter = await tx.auditEvent.findFirstOrThrow({ orderBy: { pos: 'desc' } });
+              await tx.auditEvent.create({
+                data: {
+                  pos: pos(letzter.pos),
+                  kettenVersion: 2,
+                  at: new Date(),
+                  actorName: 'Doppelt',
+                  aktion: 'tcms.test.doppelt',
+                  objektTyp: 'Test',
+                  objektId: 'doppelt',
+                  detail: {},
+                  prevHash: randomBytes(32).toString('hex'),
+                  hash: randomBytes(32).toString('hex'),
+                },
+              });
+            },
+            { client: app },
+          ),
+        );
+      expect(await anlegen((letzter) => letzter)).toMatch(/Unique constraint/i);
+      expect(await anlegen(() => 0)).toMatch(/AuditEvent_pos_check|check constraint/i);
     });
   });
 

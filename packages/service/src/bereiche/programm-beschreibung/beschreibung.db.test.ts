@@ -410,7 +410,7 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
     expect(freigabe.fehlerCode).toBe('KONFLIKT');
     const [freigaben, audit, kette] = await inWelt(w, async (tx) => [
       await tx.freigabe.count({ where: { refId: id } }),
-      await tx.auditEvent.findMany({ where: { objektId: id }, orderBy: { seq: 'asc' } }),
+      await tx.auditEvent.findMany({ where: { objektId: id }, orderBy: { pos: 'asc' } }),
       await pruefeAuditKette(tx),
     ]);
     expect(freigaben).toBe(1);

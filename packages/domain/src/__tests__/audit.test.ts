@@ -13,7 +13,7 @@ import {
 const TENANT_A = '0b6f2a52-6c1e-4d5f-9a39-3f1f0c4a2b11';
 const TENANT_B = '7d0c1e9a-2f44-4b8e-8c5d-91a0e3f4b622';
 
-function kette(n: number, tenantId = TENANT_A, seqStart = 1): AuditEintrag[] {
+function kette(n: number, tenantId = TENANT_A, posStart = 1): AuditEintrag[] {
   const out: AuditEintrag[] = [];
   let prev = GENESIS_HASH;
   for (let i = 0; i < n; i++) {
@@ -29,7 +29,7 @@ function kette(n: number, tenantId = TENANT_A, seqStart = 1): AuditEintrag[] {
       detail: { i },
     };
     const hash = auditHash(prev, inhalt);
-    out.push({ ...inhalt, seq: seqStart + i, kettenVersion: KETTEN_VERSION, prevHash: prev, hash });
+    out.push({ ...inhalt, pos: posStart + i, kettenVersion: KETTEN_VERSION, prevHash: prev, hash });
     prev = hash;
   }
   return out;
@@ -107,7 +107,7 @@ describe('Audit-Hashkette (Kettenversion 2)', () => {
   });
 
   it('weist einen gültigen Eintrag eines anderen Tenants zurück', () => {
-    const fremd = kette(1, TENANT_B, 100);
+    const fremd = kette(1, TENANT_B);
     // Kette von B ist für sich gültig, aber nicht als Kette von A.
     expect(pruefeKette(TENANT_B, fremd).gueltig).toBe(true);
     expect(pruefeKette(TENANT_A, fremd)).toMatchObject({
@@ -126,7 +126,7 @@ describe('Audit-Hashkette (Kettenversion 2)', () => {
     expect(ganz).toMatchObject({
       gueltig: true,
       geprueft: 7,
-      stand: { seq: 7, prevHash: k[6]!.hash },
+      stand: { pos: 7, prevHash: k[6]!.hash },
     });
     let stand = KETTEN_ANFANG;
     let summe = 0;
@@ -147,10 +147,10 @@ describe('Audit-Hashkette (Kettenversion 2)', () => {
       geprueft: 2,
       bruchBei: 3,
       grund: 'Inhalt wurde verändert',
-      stand: { prevHash: k[1]!.hash, seq: 2 },
+      stand: { prevHash: k[1]!.hash, pos: 2 },
     });
     // Im Abschnitt ab Eintrag 3: kein gültiger Eintrag vor dem Bruch.
-    const ab = pruefeKette(TENANT_A, k.slice(2), { prevHash: k[1]!.hash, seq: 2 });
+    const ab = pruefeKette(TENANT_A, k.slice(2), { prevHash: k[1]!.hash, pos: 2 });
     expect(ab).toMatchObject({ gueltig: false, geprueft: 0, bruchBei: 3 });
   });
 
@@ -158,15 +158,49 @@ describe('Audit-Hashkette (Kettenversion 2)', () => {
     const k = kette(5);
     // Fortsetzung ohne Stand (Kettenanfang) oder mit falschem Hash: Bruch am ersten Eintrag.
     expect(pruefeKette(TENANT_A, k.slice(2))).toMatchObject({ gueltig: false, bruchBei: 3 });
-    expect(pruefeKette(TENANT_A, k.slice(2), { prevHash: k[0]!.hash, seq: 2 })).toMatchObject({
+    expect(pruefeKette(TENANT_A, k.slice(2), { prevHash: k[0]!.hash, pos: 2 })).toMatchObject({
       gueltig: false,
       bruchBei: 3,
       grund: 'Vorgänger-Hash passt nicht',
     });
-    // Stand hinter dem Abschnitt (seq zu groß): Reihenfolge passt nicht.
-    expect(pruefeKette(TENANT_A, k.slice(2), { prevHash: k[1]!.hash, seq: 3 })).toMatchObject({
+    // Stand hinter dem Abschnitt (Position zu groß): Reihenfolge passt nicht.
+    expect(pruefeKette(TENANT_A, k.slice(2), { prevHash: k[1]!.hash, pos: 3 })).toMatchObject({
       gueltig: false,
       grund: 'Reihenfolge der Einträge passt nicht',
+    });
+  });
+
+  // RT-03: Die Position zählt je Tenant lückenlos ab 1. Sie gehört nicht zum
+  // Hash (Kettenversion 2), daher prüft die Kette sie eigens.
+  it('Position: lückenlos ab 1, sonst Bruch an der ersten falschen Position', () => {
+    const k = kette(4);
+    const luecke = [k[0]!, k[1]!, { ...k[2]!, pos: 4 }, { ...k[3]!, pos: 5 }];
+    expect(pruefeKette(TENANT_A, luecke)).toMatchObject({
+      gueltig: false,
+      geprueft: 2,
+      bruchBei: 4,
+      grund: 'Lücke in den Positionen',
+      stand: { prevHash: k[1]!.hash, pos: 2 },
+    });
+    // Beginn nicht bei 1 (z. B. global vergebene Nummern): Bruch am ersten Eintrag.
+    expect(pruefeKette(TENANT_A, kette(2, TENANT_A, 2))).toMatchObject({
+      gueltig: false,
+      bruchBei: 2,
+      grund: 'Lücke in den Positionen',
+    });
+    // Doppelte oder rückläufige Position.
+    expect(pruefeKette(TENANT_A, [k[0]!, { ...k[1]!, pos: 1 }])).toMatchObject({
+      gueltig: false,
+      grund: 'Reihenfolge der Einträge passt nicht',
+    });
+    expect(pruefeKette(TENANT_A, [k[0]!, { ...k[1]!, pos: 1.5 }])).toMatchObject({
+      gueltig: false,
+      grund: 'Reihenfolge der Einträge passt nicht',
+    });
+    // Fortsetzung: die erste Position folgt unmittelbar auf den Stand.
+    expect(pruefeKette(TENANT_A, k.slice(2), { prevHash: k[1]!.hash, pos: 1 })).toMatchObject({
+      gueltig: false,
+      grund: 'Lücke in den Positionen',
     });
   });
 });

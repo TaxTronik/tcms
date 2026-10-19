@@ -106,11 +106,17 @@ auf ein Objekt eines anderen Tenants scheitert also schon in der Datenbank.
 - Zugriff nur über `mitTenant(tenantId, fn)` aus `@tcms/db`: prüft die UUID, öffnet eine Transaktion
   und setzt `tcms.tenant_id` transaktionslokal. Ohne Kontext sieht `tcms_app` keine Zeile.
 - Audit: Hashkette je Tenant (Kettenversion 2), Advisory-Lock je Tenant, `(tenant_id, prevHash)`
-  eindeutig. `schreibeAudit(tx, …)` nimmt den Tenant aus dem Kontext.
+  eindeutig. `schreibeAudit(tx, …)` nimmt den Tenant aus dem Kontext und vergibt unter der Sperre
+  die Position `pos` (je Tenant lückenlos 1, 2, 3, …, `(tenant_id, pos)` eindeutig). Alle Ausgaben
+  (Audit-Liste, Cursor, Kettenkopf, Kettenprüfung, Verläufe) nennen `pos`; der globale Schlüssel
+  `seq` verlässt den Dienst nicht, weil Lücken darin fremde Audit-Aktivität verrieten (RT-03). Die
+  Kettenprüfung verlangt zusätzlich lückenlose Positionen.
 - Die Migrationshistorie beginnt mit `20261019000000_init` neu (kein Bestandsschutz).
   `20261019120000_welle2_nachtraege` ergänzt Spalten, Teilindizes, den Einfrier-Trigger der
   CMS-Beschreibung und den Schlüssel `(tenant_id, id)` für `Mandant` (keine neuen Tabellen; setzt
   eine Datenbank ohne Bestandsdaten voraus und scheitert sonst an NOT NULL/CHECK).
+  `20261019200000_audit_pos` ergänzt die Audit-Position `pos` je Tenant (RT-03; ebenfalls ohne
+  Bestandsdaten).
 
 DB-Tests (RLS je Tabelle aus dem Katalog, Rechte, Tenantgrenzen, Audit-Kette bei parallelen
 Schreibern) laufen gegen eine migrierte Datenbank:
@@ -245,7 +251,7 @@ und Zuständigkeit ergänzt die kanzleikonsole):
 | PUT     | `/v1/mandanten/:mandantId`                                   | `kannBearbeiten`; Anker anlegen/aktualisieren, auditiert               |
 | GET     | `/v1/mandanten/:mandantId/kontakte`                          | Kanzleiperson mit `cli`                                                |
 | PUT     | `/v1/mandanten/:mandantId/kontakte`                          | `kannBearbeiten`; Rollen eines Kontakts setzen/deaktivieren, auditiert |
-| GET     | `/v1/audit?programmId=&mandantId=&aktion=&nach=&vor=&limit=` | Admin/Partner; höchstens 500 je Seite                                  |
+| GET     | `/v1/audit?programmId=&mandantId=&aktion=&nach=&vor=&limit=` | Admin/Partner; höchstens 500 je Seite; Cursor = Position `pos`         |
 | POST    | `/v1/audit/pruefen`                                          | Admin/Partner; Kette seitenweise, Zeitbudget 20 s, Fortsetzung `ab`    |
 
 **Endpunkte Kontrolldurchführung** (`durchfuehrung`, Pfade unter `/v1/mandanten/:mandantId/`;

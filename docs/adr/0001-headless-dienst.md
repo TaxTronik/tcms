@@ -118,6 +118,11 @@ wird der Body geparst.
   Löschen abgelaufener Einträge.
 - Audit: Kette **je Tenant**; Advisory-Lock je Tenant (nicht global); der Hash
   umfasst zusätzlich `tenant_id`, `actorName` und `programmId` (Kettenversion 2).
+  Nach außen zählt die Position `pos` je Tenant lückenlos (1, 2, 3, …, unter der
+  Sperre vergeben, `(tenant_id, pos)` eindeutig); Liste, Cursor, Kettenkopf,
+  Kettenprüfung und Verläufe nennen nur `pos`. Der globale technische Schlüssel
+  `seq` verlässt den Dienst nie: Lücken darin verrieten die Audit-Aktivität
+  anderer Kanzleien (RT-03). Die Kettenprüfung verlangt lückenlose Positionen.
 
 Es gibt noch keinen Echtbetrieb und keine Bestandsdaten. Die Migrationshistorie
 beginnt mit dieser Stufe neu (eine neue Init-Migration ersetzt die bisherige).

@@ -761,7 +761,7 @@ export function KontrolleDrawer({
             </p>
           ) : null}
           {(detail?.audit ?? []).map((a) => (
-            <div key={a.seq} className="row" style={{ alignItems: 'flex-start' }}>
+            <div key={a.pos} className="row" style={{ alignItems: 'flex-start' }}>
               <span className="text-xs mono text-muted shrink0">{datumZeit(a.at)}</span>
               <span className="text-xs text-secondary shrink0">{a.actorName}</span>
               <span className="text-sm grow">

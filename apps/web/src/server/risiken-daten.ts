@@ -44,7 +44,7 @@ export interface RisikoStandView {
 }
 
 export interface AuditZeile {
-  seq: number;
+  pos: number;
   at: Date;
   actorName: string;
   aktion: string;
@@ -118,7 +118,7 @@ export async function ladeRisikoDetail(
       erstelltVon: s.erstelltVon,
     })),
     audit: d.audit.map((a) => ({
-      seq: a.seq,
+      pos: a.pos,
       at: datum(a.at),
       actorName: (a.actorId && d.namen[a.actorId]) || '—',
       aktion: a.aktion,

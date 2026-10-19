@@ -340,7 +340,7 @@ export async function ladeFeststellungDetail(
       ? { ...nachkontrolle, faelligAm: datum(nachkontrolle.faelligAm) }
       : null,
     verlauf: verlauf.map((v) => ({
-      id: v.seq,
+      id: v.pos,
       at: datum(v.at),
       actorName: (v.actorId && namen.get(v.actorId)) || '—',
       text: v.text,

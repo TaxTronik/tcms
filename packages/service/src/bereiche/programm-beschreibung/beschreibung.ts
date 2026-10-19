@@ -86,7 +86,7 @@ async function letzteBearbeitungVon(
 ): Promise<string | null> {
   const letzte = await tx.auditEvent.findFirst({
     where: { objektTyp: 'BeschreibungVersion', objektId: v.id, aktion: AKTION_ABSCHNITT },
-    orderBy: { seq: 'desc' },
+    orderBy: { pos: 'desc' },
     select: { actorId: true },
   });
   return letzte?.actorId ?? v.erstelltVon;
@@ -152,7 +152,7 @@ export async function ladeBeschreibung(
           objektId: { in: ids },
           aktion: { in: [AKTION_ABSCHNITT, AKTION_ZURUECK] },
         },
-        orderBy: { seq: 'asc' },
+        orderBy: { pos: 'asc' },
         select: { at: true, aktion: true, actorId: true, objektId: true, detail: true },
       })
     : [];

@@ -204,7 +204,7 @@ export async function alsEigentuemerOhneTrigger(
 /** Audit-Einträge zu einem Objekt (neueste zuletzt). */
 export function auditZu(w: Welt, objektId: string) {
   return inWelt(w, (tx) =>
-    tx.auditEvent.findMany({ where: { objektId }, orderBy: { seq: 'asc' } }),
+    tx.auditEvent.findMany({ where: { objektId }, orderBy: { pos: 'asc' } }),
   );
 }
 

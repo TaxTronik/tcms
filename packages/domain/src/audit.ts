@@ -66,26 +66,30 @@ export function auditHash(prevHash: string, inhalt: AuditInhalt): string {
 }
 
 export interface AuditEintrag extends AuditInhalt {
-  seq: number;
+  /**
+   * Laufende Position im Tenant (1, 2, 3, …, RT-03). Der globale technische
+   * Schlüssel `seq` gehört nicht zur Kette und verlässt den Dienst nie.
+   */
+  pos: number;
   kettenVersion: number;
   prevHash: string;
   hash: string;
 }
 
-/** Stand einer Kette: Hash und seq des zuletzt gültig geprüften Eintrags. */
+/** Stand einer Kette: Hash und Position des zuletzt gültig geprüften Eintrags. */
 export interface KettenStand {
   prevHash: string;
-  seq: number;
+  pos: number;
 }
 
-/** Anfang jeder Kette (vor dem ersten Eintrag; seq beginnt bei 1). */
-export const KETTEN_ANFANG: KettenStand = Object.freeze({ prevHash: GENESIS_HASH, seq: 0 });
+/** Anfang jeder Kette (vor dem ersten Eintrag; die Position beginnt bei 1). */
+export const KETTEN_ANFANG: KettenStand = Object.freeze({ prevHash: GENESIS_HASH, pos: 0 });
 
 export interface KettenPruefung {
   gueltig: boolean;
   /** Anzahl der in diesem Aufruf gültig geprüften Einträge (bei Bruch: vor dem Bruch). */
   geprueft: number;
-  /** Erste Position (seq), an der die Kette bricht. */
+  /** Erste Position (`pos`), an der die Kette bricht. */
   bruchBei: number | null;
   grund: string | null;
   /** Stand nach dem letzten gültigen Eintrag: Fortsetzungspunkt für den nächsten Abschnitt. */
@@ -94,10 +98,10 @@ export interface KettenPruefung {
 
 /**
  * Prüft die Kette eines Tenants – vollständig oder fortsetzbar in Abschnitten.
- * `eintraege` sind Einträge dieses Tenants in Schreibreihenfolge (seq
+ * `eintraege` sind Einträge dieses Tenants in Schreibreihenfolge (`pos`
  * aufsteigend), die unmittelbar auf `start` folgen (Standard: Kettenanfang).
- * Einzige Implementierung der Kettenregeln: Reihenfolge, Kettenversion,
- * Tenant, Vorgänger-Hash, Inhalt.
+ * Einzige Implementierung der Kettenregeln: lückenlose Position (RT-03),
+ * Kettenversion, Tenant, Vorgänger-Hash, Inhalt.
  */
 export function pruefeKette(
   tenantId: string,
@@ -105,24 +109,27 @@ export function pruefeKette(
   start: KettenStand = KETTEN_ANFANG,
 ): KettenPruefung {
   let prev = start.prevHash;
-  let letzteSeq = start.seq;
+  let letztePos = start.pos;
   let geprueft = 0;
-  const stand = () => ({ prevHash: prev, seq: letzteSeq });
+  const stand = () => ({ prevHash: prev, pos: letztePos });
   const bruch = (e: AuditEintrag, grund: string): KettenPruefung => ({
     gueltig: false,
     geprueft,
-    bruchBei: e.seq,
+    bruchBei: e.pos,
     grund,
     stand: stand(),
   });
   for (const e of eintraege) {
-    if (e.seq <= letzteSeq) return bruch(e, 'Reihenfolge der Einträge passt nicht');
+    if (!Number.isInteger(e.pos) || e.pos <= letztePos)
+      return bruch(e, 'Reihenfolge der Einträge passt nicht');
+    // Lückenlos (RT-03): Jede Position folgt unmittelbar auf ihre Vorgängerin.
+    if (e.pos !== letztePos + 1) return bruch(e, 'Lücke in den Positionen');
     if (e.kettenVersion !== KETTEN_VERSION) return bruch(e, 'Unbekannte Kettenversion');
     if (e.tenantId !== tenantId) return bruch(e, 'Eintrag gehört zu einem anderen Tenant');
     if (e.prevHash !== prev) return bruch(e, 'Vorgänger-Hash passt nicht');
     if (auditHash(prev, e) !== e.hash) return bruch(e, 'Inhalt wurde verändert');
     prev = e.hash;
-    letzteSeq = e.seq;
+    letztePos = e.pos;
     geprueft++;
   }
   return { gueltig: true, geprueft, bruchBei: null, grund: null, stand: stand() };

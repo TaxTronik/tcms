@@ -347,8 +347,8 @@ export async function ladeFeststellung(
       ],
       programmId: f.programmId,
     },
-    orderBy: { seq: 'asc' },
-    select: { seq: true, at: true, actorId: true, aktion: true, objektId: true, detail: true },
+    orderBy: { pos: 'asc' },
+    select: { pos: true, at: true, actorId: true, aktion: true, objektId: true, detail: true },
   });
   const detail = (x: (typeof audits)[number]) => (x.detail ?? {}) as Record<string, unknown>;
   const bisStand = (x: { at: Date }) => x.at.getTime() <= auditEnde.getTime();
@@ -431,7 +431,7 @@ export async function ladeFeststellung(
   const verlauf: VerlaufEintrag[] = audits
     .filter((a) => bisStand(a) && VERLAUF_AKTIONEN.has(a.aktion))
     .map((a) => ({
-      seq: a.seq,
+      pos: a.pos,
       at: isoZeit(a.at),
       actorId: a.actorId,
       text: verlaufText(a.aktion, detail(a)),

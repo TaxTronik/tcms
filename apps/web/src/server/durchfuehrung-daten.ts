@@ -79,7 +79,7 @@ export interface NachweisZeile {
 }
 
 export interface VerlaufEintrag {
-  seq: number;
+  pos: number;
   at: Date;
   actorId: string | null;
   actorName: string;
@@ -322,7 +322,7 @@ function alsDetail(d: DienstDetail | DienstAufgabe): DurchfuehrungDetail {
     nachtraege: (kanzlei?.nachtraege ?? []).map(kurz),
     original: d.original,
     verlauf: (kanzlei?.verlauf ?? []).map((v) => ({
-      seq: v.seq,
+      pos: v.pos,
       at: zeit(v.at),
       actorId: v.actorId,
       actorName: v.system ? 'System' : ((v.actorId && personen[v.actorId]?.name) ?? '—'),
