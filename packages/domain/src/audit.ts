@@ -72,35 +72,58 @@ export interface AuditEintrag extends AuditInhalt {
   hash: string;
 }
 
+/** Stand einer Kette: Hash und seq des zuletzt gültig geprüften Eintrags. */
+export interface KettenStand {
+  prevHash: string;
+  seq: number;
+}
+
+/** Anfang jeder Kette (vor dem ersten Eintrag; seq beginnt bei 1). */
+export const KETTEN_ANFANG: KettenStand = Object.freeze({ prevHash: GENESIS_HASH, seq: 0 });
+
 export interface KettenPruefung {
   gueltig: boolean;
+  /** Anzahl der in diesem Aufruf gültig geprüften Einträge (bei Bruch: vor dem Bruch). */
   geprueft: number;
   /** Erste Position (seq), an der die Kette bricht. */
   bruchBei: number | null;
   grund: string | null;
+  /** Stand nach dem letzten gültigen Eintrag: Fortsetzungspunkt für den nächsten Abschnitt. */
+  stand: KettenStand;
 }
 
 /**
- * Prüft die Kette eines Tenants. `eintraege` sind alle Einträge dieses
- * Tenants in Schreibreihenfolge (seq aufsteigend).
+ * Prüft die Kette eines Tenants – vollständig oder fortsetzbar in Abschnitten.
+ * `eintraege` sind Einträge dieses Tenants in Schreibreihenfolge (seq
+ * aufsteigend), die unmittelbar auf `start` folgen (Standard: Kettenanfang).
+ * Einzige Implementierung der Kettenregeln: Reihenfolge, Kettenversion,
+ * Tenant, Vorgänger-Hash, Inhalt.
  */
-export function pruefeKette(tenantId: string, eintraege: readonly AuditEintrag[]): KettenPruefung {
+export function pruefeKette(
+  tenantId: string,
+  eintraege: readonly AuditEintrag[],
+  start: KettenStand = KETTEN_ANFANG,
+): KettenPruefung {
+  let prev = start.prevHash;
+  let letzteSeq = start.seq;
+  let geprueft = 0;
+  const stand = () => ({ prevHash: prev, seq: letzteSeq });
   const bruch = (e: AuditEintrag, grund: string): KettenPruefung => ({
     gueltig: false,
-    geprueft: e.seq,
+    geprueft,
     bruchBei: e.seq,
     grund,
+    stand: stand(),
   });
-  let prev = GENESIS_HASH;
-  let letzteSeq = -Infinity;
   for (const e of eintraege) {
     if (e.seq <= letzteSeq) return bruch(e, 'Reihenfolge der Einträge passt nicht');
-    letzteSeq = e.seq;
     if (e.kettenVersion !== KETTEN_VERSION) return bruch(e, 'Unbekannte Kettenversion');
     if (e.tenantId !== tenantId) return bruch(e, 'Eintrag gehört zu einem anderen Tenant');
     if (e.prevHash !== prev) return bruch(e, 'Vorgänger-Hash passt nicht');
     if (auditHash(prev, e) !== e.hash) return bruch(e, 'Inhalt wurde verändert');
     prev = e.hash;
+    letzteSeq = e.seq;
+    geprueft++;
   }
-  return { gueltig: true, geprueft: eintraege.length, bruchBei: null, grund: null };
+  return { gueltig: true, geprueft, bruchBei: null, grund: null, stand: stand() };
 }

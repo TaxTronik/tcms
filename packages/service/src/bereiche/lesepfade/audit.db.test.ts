@@ -149,7 +149,7 @@ describe.skipIf(!AKTIV)('Audit gegen PostgreSQL', () => {
     it('erkennt einen manipulierten Eintrag wie pruefeKette (auch in der Fortsetzung)', async () => {
       const t = randomUUID();
       const a = kanzlei(randomUUID(), null, { tenantId: t, admin: true });
-      const gefaelscht = await mitTenant(t, async (tx) => {
+      const { gefaelscht, davor } = await mitTenant(t, async (tx) => {
         for (let i = 0; i < 3; i++) await schreibe(tx, `tcms.test.ok${i}`);
         const letzter = await tx.auditEvent.findFirstOrThrow({ orderBy: { seq: 'desc' } });
         // Ein angehängter Eintrag mit passendem Vorgänger, aber falschem Inhalts-Hash.
@@ -168,7 +168,8 @@ describe.skipIf(!AKTIV)('Audit gegen PostgreSQL', () => {
           },
         });
         await schreibe(tx, 'tcms.test.danach');
-        return z.seq;
+        // seq ist tenantübergreifend: der Vorgänger ist nicht zwingend seq − 1.
+        return { gefaelscht: z.seq, davor: letzter.seq };
       });
       const r = await pruefe(undefined, {}, a);
       expect(r).toMatchObject({ status: 'GEBROCHEN', bruchBei: gefaelscht, geprueft: 3 });
@@ -180,8 +181,8 @@ describe.skipIf(!AKTIV)('Audit gegen PostgreSQL', () => {
         grund: domain.grund,
       });
       // Fortsetzung direkt vor dem gefälschten Eintrag erkennt ihn ebenso.
-      const fort = await pruefe(gefaelscht - 1, { seite: 1 }, a);
-      expect(fort).toMatchObject({ status: 'GEBROCHEN', bruchBei: gefaelscht });
+      const fort = await pruefe(davor, { seite: 1 }, a);
+      expect(fort).toMatchObject({ status: 'GEBROCHEN', bruchBei: gefaelscht, geprueft: 0 });
     });
 
     it('nur Admins; unbekannter Fortsetzungspunkt ungültig', async () => {

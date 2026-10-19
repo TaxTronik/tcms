@@ -23,7 +23,7 @@ import {
   type AuditPruefenEingabe,
 } from '@tcms/contract';
 import { aktuellerTenant, type Prisma } from '@tcms/db';
-import { auditHash, GENESIS_HASH, KETTEN_VERSION } from '@tcms/domain/audit';
+import { KETTEN_ANFANG, pruefeKette, type KettenStand } from '@tcms/domain/audit';
 import type { DienstKontext } from '../../kontext';
 import { kannVerwalten } from '../../rechte';
 import { alsJson, antwortNach, pruefeEingabe } from './hilfen';
@@ -109,11 +109,11 @@ export async function ladeAudit(
 }
 
 /**
- * Prüft die Hashkette des Tenants seitenweise (gleiche Regeln wie
- * `pruefeKette` aus `@tcms/domain/audit`, dort für eine vollständige Liste):
- * Reihenfolge, Kettenversion, Tenant, Vorgänger-Hash, Inhalt. Nach Ablauf des
- * Zeitbudgets `ABGEBROCHEN` mit `weiterAb`; die Fortsetzung verkettet mit dem
- * gespeicherten Hash an dieser Position.
+ * Prüft die Hashkette des Tenants seitenweise mit `pruefeKette` aus
+ * `@tcms/domain/audit` (einzige Implementierung der Kettenregeln), jede Seite
+ * ab dem Stand der vorherigen. Nach Ablauf des Zeitbudgets `ABGEBROCHEN` mit
+ * `weiterAb`; die Fortsetzung verkettet mit dem gespeicherten Hash an dieser
+ * Position.
  */
 export async function pruefeAudit(
   ctx: DienstKontext,
@@ -127,8 +127,7 @@ export async function pruefeAudit(
   const ende = Date.now() + budget;
   const tenantId = await aktuellerTenant(ctx.tx);
 
-  let prev = GENESIS_HASH;
-  let letzteSeq = 0;
+  let stand: KettenStand = KETTEN_ANFANG;
   if (e.ab !== undefined && e.ab > 0) {
     const start = await ctx.tx.auditEvent.findFirst({
       where: { tenantId, seq: e.ab },
@@ -136,8 +135,7 @@ export async function pruefeAudit(
     });
     if (!start)
       throw new DienstFehler('UNGUELTIG', 'Fortsetzungspunkt unbekannt.', { ab: ['unbekannt'] });
-    prev = start.hash;
-    letzteSeq = start.seq;
+    stand = { prevHash: start.hash, seq: start.seq };
   }
 
   let geprueft = 0;
@@ -151,31 +149,21 @@ export async function pruefeAudit(
       geprueft,
       bruchBei,
       grund,
-      weiterAb: status === 'ABGEBROCHEN' ? letzteSeq : null,
+      weiterAb: status === 'ABGEBROCHEN' ? stand.seq : null,
     });
 
   // Je Aufruf mindestens eine Seite (Fortschritt garantiert), dann höchstens bis zum Zeitbudget.
   for (;;) {
     const seite = await ctx.tx.auditEvent.findMany({
       // Explizit der Tenant der Transaktion (wie `pruefeAuditKette`), zusätzlich zu RLS.
-      where: { tenantId, seq: { gt: letzteSeq } },
+      where: { tenantId, seq: { gt: stand.seq } },
       orderBy: { seq: 'asc' },
       take: seiteGroesse,
     });
-    for (const z of seite) {
-      if (z.seq <= letzteSeq)
-        return ergebnis('GEBROCHEN', z.seq, 'Reihenfolge der Einträge passt nicht');
-      if (z.kettenVersion !== KETTEN_VERSION)
-        return ergebnis('GEBROCHEN', z.seq, 'Unbekannte Kettenversion');
-      if (z.tenantId !== tenantId)
-        return ergebnis('GEBROCHEN', z.seq, 'Eintrag gehört zu einem anderen Tenant');
-      if (z.prevHash !== prev) return ergebnis('GEBROCHEN', z.seq, 'Vorgänger-Hash passt nicht');
-      if (auditHash(prev, z) !== z.hash)
-        return ergebnis('GEBROCHEN', z.seq, 'Inhalt wurde verändert');
-      prev = z.hash;
-      letzteSeq = z.seq;
-      geprueft++;
-    }
+    const r = pruefeKette(tenantId, seite, stand);
+    geprueft += r.geprueft;
+    stand = r.stand;
+    if (!r.gueltig) return ergebnis('GEBROCHEN', r.bruchBei, r.grund);
     if (seite.length < seiteGroesse) return ergebnis('INTAKT');
     if (Date.now() >= ende) return ergebnis('ABGEBROCHEN');
   }

@@ -3,6 +3,7 @@ import {
   auditHash,
   GENESIS_HASH,
   kanonisch,
+  KETTEN_ANFANG,
   KETTEN_VERSION,
   pruefeKette,
   type AuditEintrag,
@@ -117,5 +118,55 @@ describe('Audit-Hashkette (Kettenversion 2)', () => {
 
   it('gleicher Inhalt in zwei Tenants ergibt verschiedene Hashes', () => {
     expect(kette(1, TENANT_A)[0]!.hash).not.toBe(kette(1, TENANT_B)[0]!.hash);
+  });
+
+  it('fortsetzbar: Abschnitte ab dem Stand des vorherigen ergeben dasselbe wie die ganze Kette', () => {
+    const k = kette(7);
+    const ganz = pruefeKette(TENANT_A, k);
+    expect(ganz).toMatchObject({
+      gueltig: true,
+      geprueft: 7,
+      stand: { seq: 7, prevHash: k[6]!.hash },
+    });
+    let stand = KETTEN_ANFANG;
+    let summe = 0;
+    for (const abschnitt of [k.slice(0, 3), k.slice(3, 5), k.slice(5)]) {
+      const r = pruefeKette(TENANT_A, abschnitt, stand);
+      expect(r.gueltig).toBe(true);
+      summe += r.geprueft;
+      stand = r.stand;
+    }
+    expect(summe).toBe(7);
+    expect(stand).toEqual(ganz.stand);
+  });
+
+  it('Bruch: geprüft zählt die gültigen Einträge davor, der Stand bleibt beim letzten gültigen', () => {
+    const k = manipuliert('detail', { i: 99 });
+    expect(pruefeKette(TENANT_A, k)).toEqual({
+      gueltig: false,
+      geprueft: 2,
+      bruchBei: 3,
+      grund: 'Inhalt wurde verändert',
+      stand: { prevHash: k[1]!.hash, seq: 2 },
+    });
+    // Im Abschnitt ab Eintrag 3: kein gültiger Eintrag vor dem Bruch.
+    const ab = pruefeKette(TENANT_A, k.slice(2), { prevHash: k[1]!.hash, seq: 2 });
+    expect(ab).toMatchObject({ gueltig: false, geprueft: 0, bruchBei: 3 });
+  });
+
+  it('ein Abschnitt passt nur zu seinem Stand (Vorgänger-Hash und Reihenfolge)', () => {
+    const k = kette(5);
+    // Fortsetzung ohne Stand (Kettenanfang) oder mit falschem Hash: Bruch am ersten Eintrag.
+    expect(pruefeKette(TENANT_A, k.slice(2))).toMatchObject({ gueltig: false, bruchBei: 3 });
+    expect(pruefeKette(TENANT_A, k.slice(2), { prevHash: k[0]!.hash, seq: 2 })).toMatchObject({
+      gueltig: false,
+      bruchBei: 3,
+      grund: 'Vorgänger-Hash passt nicht',
+    });
+    // Stand hinter dem Abschnitt (seq zu groß): Reihenfolge passt nicht.
+    expect(pruefeKette(TENANT_A, k.slice(2), { prevHash: k[1]!.hash, seq: 3 })).toMatchObject({
+      gueltig: false,
+      grund: 'Reihenfolge der Einträge passt nicht',
+    });
   });
 });
