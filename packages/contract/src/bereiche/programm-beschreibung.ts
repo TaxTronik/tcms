@@ -20,8 +20,8 @@
 // =============================================================================
 
 import { z } from 'zod';
-import { StandSchema } from './lesepfade';
-import { ProfilAntwortenSchema } from './risiken-kontrollen';
+import { einzeilig, StandSchema } from './lesepfade';
+import { ProfilAntwortenGespeichertSchema, ProfilAntwortenSchema } from './risiken-kontrollen';
 import { FreigabeZustellungSchema, NachrichtUnzustellbarGrundSchema } from './zustellung';
 
 const uuid = z.uuid();
@@ -38,8 +38,12 @@ const governanceTyp = z.enum(['FP', 'FF', 'IN']);
 const turnus = z.enum(['KEIN', 'JAEHRLICH', 'QUARTALSWEISE', 'MONATLICH']);
 const partei = z.enum(['KANZLEI', 'MANDANT']);
 
-/** Person der kanzleikonsole mit Anzeigenamen (nur Anzeige, nie für Rechte). */
-const namensEintrag = z.object({ id: uuid, name: z.string().trim().min(1).max(200) }).strict();
+/**
+ * Person der kanzleikonsole mit Anzeigenamen (nur Anzeige, nie für Rechte).
+ * Einzeilig (RT4-T-03): Der Name wird in eingefrorene Beschreibungen
+ * übernommen, deren Anzeige dem gehashten Inhalt entsprechen muss.
+ */
+const namensEintrag = z.object({ id: uuid, name: einzeilig(1, 200) }).strict();
 
 // -----------------------------------------------------------------------------
 // Freigabearten (vor dem Postausgang: Nachrichten nennen die Art)
@@ -103,7 +107,13 @@ export const NACHRICHT_EMPFAENGER = {
   EREIGNIS_GEMELDET: 'KANZLEI',
 } as const satisfies Record<NachrichtZweck, NachrichtEmpfaengerArt>;
 
-const nachrichtTitel = z.string().min(1).max(500);
+/**
+ * Titel in Vorlagendaten (z. B. für einen Betreff): einzeilig (RT4-T-03), ohne
+ * CR/LF (Header-Injektion) und ohne Richtungs- oder unsichtbare Zeichen. Gilt
+ * beim Anlegen und beim Ausliefern; ältere offene Nachrichten, die die Regel
+ * verletzen, liefert der Abruf nicht aus (verworfen, `DATEN_UNGUELTIG`).
+ */
+const nachrichtTitel = einzeilig(1, 500);
 /** Versionsnummer einer CMS-Beschreibung (z. B. `1.2`), sonst null. */
 const nachrichtVersion = z
   .string()
@@ -145,10 +155,10 @@ export const NachrichtDatenFreigabeNeuAdressiertSchema = NachrichtDatenFreigabeA
 export const NachrichtDatenEreignisGemeldetSchema = z
   .object({
     ereignisId: objektId,
-    nummer: z.string().min(1).max(40),
+    nummer: einzeilig(1, 40),
     titel: nachrichtTitel,
     /** Anzeigename der Ereignisart (Katalog bzw. „Sonstiges"). */
-    typ: z.string().min(1).max(200),
+    typ: einzeilig(1, 200),
     /** Meldende Person (Kontakt-ID der kanzleikonsole). */
     gemeldetVonId: uuid,
   })
@@ -252,14 +262,15 @@ const katalogCode = z
   .min(3)
   .max(20)
   .regex(/^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$/);
-const kurz = z.string().trim().max(200);
+/** Einträge der Ein- und Ausschlüsse: einzeilig (Kanäle bzw. Grenzen im Snapshot, RT4-T-03). */
+const kurz = einzeilig(0, 200);
 const tagOderLeer = isoTag.or(z.literal(''));
 
 export const TeilbereichSchrittSchema = z
   .object({
     teilbereich: z
       .object({
-        name: z.string().trim().min(1).max(200),
+        name: einzeilig(1, 200),
         abgrenzung: z.string().trim().max(4000),
         einschluesse: z.array(kurz).max(30),
         ausschluesse: z.array(kurz).max(30),
@@ -331,7 +342,7 @@ export const SetupEntwurfSchema = z
     abgeschlossen: z.number().int().min(0).max(5),
     teilbereich: TeilbereichSchrittSchema.shape.teilbereich,
     zeitraum: TeilbereichSchrittSchema.shape.zeitraum,
-    profil: ProfilAntwortenSchema,
+    profil: ProfilAntwortenGespeichertSchema,
     ziele: ZieleSchrittSchema.shape.ziele,
     freigabe: ZieleSchrittSchema.shape.freigabe,
     risiken: RisikenSchrittSchema.shape.risiken,

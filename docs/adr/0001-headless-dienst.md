@@ -293,7 +293,9 @@ Logs oder Audit). Zustellung leert `code` und `text`; gilt ein Code nicht mehr
 Freigabe eines anderen Mandanten), liefert der Abruf die Nachricht nicht mehr
 aus und leert sie (`verworfenAm`, Audit `tcms.nachricht.verworfen` mit Grund).
 Ausgeliefert wird nur, was geprüft ist (Kandidaten und je Abruf die ältesten
-1 000 offenen Code-Nachrichten). CHECKs in der Datenbank erzwingen
+1 000 offenen Code-Nachrichten); eine Nachricht, deren gespeicherte
+Vorlagendaten den Vertrag verletzen (Titel sind einzeilig, RT4-T-03), wird
+ebenso verworfen (Grund `DATEN_UNGUELTIG`). CHECKs in der Datenbank erzwingen
 Empfängerart je Zweck, Codeformat, leeren Klartext nach Zustellung,
 Unzustellbarkeit oder Verwerfen, den Grund genau bei „unzustellbar" und den
 Ausschluss von zugestellt und unzustellbar. Pfadparameter prüft er nach der

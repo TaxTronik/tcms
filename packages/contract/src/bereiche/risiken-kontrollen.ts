@@ -21,7 +21,12 @@
 // =============================================================================
 
 import { z } from 'zod';
-import { BearbeitenRechteSchema, PflichtattributLueckeSchema, StandSchema } from './lesepfade';
+import {
+  BearbeitenRechteSchema,
+  einzeilig,
+  PflichtattributLueckeSchema,
+  StandSchema,
+} from './lesepfade';
 import { FreigabeZustellungSchema } from './zustellung';
 
 // -----------------------------------------------------------------------------
@@ -265,86 +270,106 @@ export const VerantwortlicheAendernSchema = z
 
 const monat = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 const land = z.string().regex(/^[A-Z]{2}$/);
-const text = (max = 120) => z.string().trim().max(max);
 const betrag = z.number().finite().min(0).max(1e12);
+type Bezeichnung = (max?: number) => z.ZodType<string, string>;
+/** Bezeichnung einer Eingabe (Shop, Marktplatz, Warengruppe, System …): einzeilig, darf leer sein. */
+const bezeichnung: Bezeichnung = (max = 120) => einzeilig(0, max);
+/** Gespeicherte Bezeichnung: nur Länge, damit Profile vor RT4-T-03 lesbar bleiben. */
+const bezeichnungGespeichert: Bezeichnung = (max = 120) => z.string().trim().max(max);
 
-/** Geschäftsprofil P1–P12 (Fachkonzept §4); Zusatzfelder werden abgewiesen. */
-export const ProfilAntwortenSchema = z
-  .object({
-    p1: z
-      .object({
-        eigenerShop: z.boolean(),
-        shopSystem: text(),
-        marktplaetze: z.array(text(40)).max(20),
-      })
-      .strict(),
-    p2: z
-      .object({
-        eigenversandDE: z.boolean(),
-        lager: z
-          .array(
-            z
-              .object({
-                land,
-                seit: monat,
-                art: z.enum(['EIGEN', 'FBA', 'PAN-EU', 'CEE', '3PL']),
-              })
-              .strict(),
-          )
-          .max(40),
-      })
-      .strict(),
-    p3: z
-      .object({
-        laender: z.array(land).max(40),
-        b2bAnteilProzent: z.number().finite().min(0).max(100),
-        b2bEU: z.boolean(),
-        b2bInland: z.boolean(),
-      })
-      .strict(),
-    p4: z
-      .object({
-        warengruppen: z
-          .array(z.object({ name: text(), abweichenderSatz: z.boolean() }).strict())
-          .max(40),
-        gebrauchtware: z.boolean(),
-      })
-      .strict(),
-    p5: z
-      .object({
-        drittlandImport: z.boolean(),
-        laender: z.array(land).max(40),
-        zollabwicklung: text(200),
-      })
-      .strict(),
-    p6: z.object({ zahlungswege: z.array(text(40)).max(20) }).strict(),
-    p7: z.object({ gutscheine: z.boolean(), abos: z.boolean(), bundles: z.boolean() }).strict(),
-    p8: z
-      .object({
-        systeme: z
-          .array(z.object({ art: text(60), name: text(), version: text(40) }).strict())
-          .max(30),
-      })
-      .strict(),
-    p9: z
-      .object({
-        ossSeit: monat.nullable(),
-        ioss: z.boolean(),
-        lokaleUstNr: z.array(land).max(40),
-        dauerfrist: z.boolean(),
-      })
-      .strict(),
-    p10: z
-      .object({
-        vorjahresumsatzEur: betrag,
-        euFernverkaeufeVorjahrEur: betrag,
-        euFernverkaeufeLfdEur: betrag,
-      })
-      .strict(),
-    p11: z.object({ vorhanden: z.boolean(), anbieter: z.array(text()).max(30) }).strict(),
-    p12: z.object({ buchhaltung: z.enum(['KANZLEI', 'INTERN']) }).strict(),
-  })
-  .strict();
+/** Geschäftsprofil P1–P12 (Fachkonzept §4) mit der Regel `text` für Bezeichnungen. */
+function profilSchema(text: Bezeichnung) {
+  return z
+    .object({
+      p1: z
+        .object({
+          eigenerShop: z.boolean(),
+          shopSystem: text(),
+          marktplaetze: z.array(text(40)).max(20),
+        })
+        .strict(),
+      p2: z
+        .object({
+          eigenversandDE: z.boolean(),
+          lager: z
+            .array(
+              z
+                .object({
+                  land,
+                  seit: monat,
+                  art: z.enum(['EIGEN', 'FBA', 'PAN-EU', 'CEE', '3PL']),
+                })
+                .strict(),
+            )
+            .max(40),
+        })
+        .strict(),
+      p3: z
+        .object({
+          laender: z.array(land).max(40),
+          b2bAnteilProzent: z.number().finite().min(0).max(100),
+          b2bEU: z.boolean(),
+          b2bInland: z.boolean(),
+        })
+        .strict(),
+      p4: z
+        .object({
+          warengruppen: z
+            .array(z.object({ name: text(), abweichenderSatz: z.boolean() }).strict())
+            .max(40),
+          gebrauchtware: z.boolean(),
+        })
+        .strict(),
+      p5: z
+        .object({
+          drittlandImport: z.boolean(),
+          laender: z.array(land).max(40),
+          zollabwicklung: text(200),
+        })
+        .strict(),
+      p6: z.object({ zahlungswege: z.array(text(40)).max(20) }).strict(),
+      p7: z.object({ gutscheine: z.boolean(), abos: z.boolean(), bundles: z.boolean() }).strict(),
+      p8: z
+        .object({
+          systeme: z
+            .array(z.object({ art: text(60), name: text(), version: text(40) }).strict())
+            .max(30),
+        })
+        .strict(),
+      p9: z
+        .object({
+          ossSeit: monat.nullable(),
+          ioss: z.boolean(),
+          lokaleUstNr: z.array(land).max(40),
+          dauerfrist: z.boolean(),
+        })
+        .strict(),
+      p10: z
+        .object({
+          vorjahresumsatzEur: betrag,
+          euFernverkaeufeVorjahrEur: betrag,
+          euFernverkaeufeLfdEur: betrag,
+        })
+        .strict(),
+      p11: z.object({ vorhanden: z.boolean(), anbieter: z.array(text()).max(30) }).strict(),
+      p12: z.object({ buchhaltung: z.enum(['KANZLEI', 'INTERN']) }).strict(),
+    })
+    .strict();
+}
+
+/**
+ * Geschäftsprofil P1–P12 als Eingabe (Profiländerung, Einrichtung);
+ * Zusatzfelder werden abgewiesen, Bezeichnungen sind einzeilig (RT4-T-03:
+ * Shop-System und Marktplätze erscheinen als Kanäle in eingefrorenen
+ * Beschreibungen).
+ */
+export const ProfilAntwortenSchema = profilSchema(bezeichnung);
+/**
+ * Gespeichertes Geschäftsprofil (Antworten, gespeicherte Entwürfe, Lesen im
+ * Dienst): dieselbe Struktur, Bezeichnungen nur mit Längengrenze, damit vor
+ * RT4-T-03 gespeicherte Profile lesbar bleiben.
+ */
+export const ProfilAntwortenGespeichertSchema = profilSchema(bezeichnungGespeichert);
 
 export type ProfilAntworten = z.infer<typeof ProfilAntwortenSchema>;
 
@@ -370,7 +395,7 @@ export const ProfilAendernSchema = z.object({ mandantId, ...profilAendern }).str
  * dient nur der Anzeige beim Aufrufer und wird nicht gespeichert.
  */
 export const AufnahmePersonSchema = z
-  .object({ id: PersonIdSchema, name: z.string().trim().min(1).max(200) })
+  .object({ id: PersonIdSchema, name: einzeilig(1, 200) })
   .strict();
 
 /**
@@ -905,7 +930,7 @@ export const ProfilDatenSchema = z
         .object({
           id: z.string(),
           version: z.number().int(),
-          antworten: ProfilAntwortenSchema,
+          antworten: ProfilAntwortenGespeichertSchema,
           gueltigAb: zeitpunkt,
           gueltigBis: zeitpunkt.nullable(),
           erstelltVon: personRef,

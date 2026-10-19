@@ -193,7 +193,9 @@ für KI-Werkzeuge.
   kanzleikonsole mit Grund aus `NACHRICHT_UNZUSTELLBAR_GRUENDE`) setzt `unzustellbarAm` und
   `unzustellbarGrund` und leert ebenso; beide schließen sich aus (`409` unter Zeilensperre, CHECK) und
   sind idempotent (unzustellbar nur mit demselben Grund). Gilt ein Code nicht mehr, verwirft der
-  nächste Abruf die Nachricht (`verworfenAm`, leert `code` und Text) und liefert sie nicht aus.
+  nächste Abruf die Nachricht (`verworfenAm`, leert `code` und Text) und liefert sie nicht aus;
+  ebenso eine Nachricht, deren gespeicherte Vorlagendaten den Vertrag verletzen (Grund
+  `DATEN_UNGUELTIG`, etwa Titel aus der Zeit vor RT4-T-03).
   Abholen, Zustellung und Unzustellbarkeit melden darf ausschließlich der Systemakteur (Stufe 4).
 - Die Kanzlei sieht an Freigaben (Historie, Beschreibung, Risikoakzeptanz) den Zustellstatus
   `zustellung` der jüngsten Nachricht an den aktuellen Empfänger (`kern/zustellung.ts`): nur
@@ -285,7 +287,12 @@ vorhandenen Tokens aufsetzen.
 - Einzeilige Texte und Dateinamen in Eingaben prüfen nur über die eine Regel
   `UNZULAESSIGE_ZEICHEN` bzw. `DATEINAME_UNZULAESSIG`
   (`packages/contract/src/bereiche/lesepfade.ts`); keine eigenen Zeichenklassen
-  in Vertrag, Dienst oder Demo. Einzige Ausnahme: gespeicherte Ereignis-Anlagen
+  in Vertrag, Dienst oder Demo. Jeder Titel und jeder Name einer Eingabe (auch
+  Vorlagendaten der Nachrichten, Namen eingefrorener Beschreibungen,
+  Teilbereich und Bezeichnungen des Geschäftsprofils) nutzt `einzeilig(min, max)`
+  (RT4-T-03); `__tests__/eingabetexte.test.ts` prüft das für jedes Feld des
+  Endpunktregisters. Gespeicherte Texte in Antworten prüfen nur die Länge
+  (Altbestände, z. B. `ProfilAntwortenGespeichertSchema`). Einzige Ausnahme: gespeicherte Ereignis-Anlagen
   in Antworten (`DATEINAME_GESPEICHERT_UNZULAESSIG`, frühere Regel, weil das
   Meldungs-Audit unveränderlich ist). Die Regel folgt aus Unicode-Eigenschaften
   (`UNZULAESSIG_KLASSE`: Cc, Cf, Zl, Zp, Default_Ignorable_Code_Point, Cs), nie

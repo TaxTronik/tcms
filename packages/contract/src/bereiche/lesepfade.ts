@@ -976,20 +976,29 @@ export const DATEINAME_GESPEICHERT_UNZULAESSIG = new RegExp(
   'u',
 );
 
-/** Einzeiliger Text ohne Steuer-, Richtungs- und unsichtbare Zeichen (Anzeige-Spoofing). */
-const einzeilig = (max: number) =>
-  z
+/**
+ * Einzeiliger Text einer Eingabe: getrimmt, Längengrenzen und die
+ * Zeichenregel – also auch ohne CR, LF und TAB (Header-Injektion in Betreffs,
+ * Anzeige-Spoofing). Gilt für die Stammdaten des Ankers und für alle Titel und
+ * Namen (RT4-T-03), auch in den Vorlagendaten der Nachrichten
+ * (`nachrichtTitel`) und den Namen eingefrorener Beschreibungen
+ * (`namensEintrag`). Antworten mit gespeicherten Texten prüfen weiter nur die
+ * Länge, damit Altbestände lesbar bleiben (wie `DATEINAME_GESPEICHERT_UNZULAESSIG`).
+ */
+export function einzeilig(min: number, max: number, meldungMin?: string) {
+  return z
     .string()
     .trim()
-    .min(1)
+    .min(min, meldungMin)
     .max(max)
     .refine((s) => !UNZULAESSIGE_ZEICHEN.test(s), 'Unzulässige Zeichen');
+}
 
 /** Body von `PUT /v1/mandanten/:mandantId`: Stammdaten des Mandantenankers. */
 export const MandantAnkerBodySchema = z
   .object({
-    name: einzeilig(200),
-    rechtsform: einzeilig(50),
+    name: einzeilig(1, 200),
+    rechtsform: einzeilig(1, 50),
     datevNr: z
       .string()
       .regex(/^[0-9]{1,20}$/)
@@ -1057,7 +1066,7 @@ export const KontaktRollenBodySchema = z
       .array(mandantRolle)
       .max(3)
       .refine((r) => new Set(r).size === r.length, 'Rolle doppelt'),
-    funktion: einzeilig(200).nullable().default(null),
+    funktion: einzeilig(1, 200).nullable().default(null),
   })
   .strict();
 

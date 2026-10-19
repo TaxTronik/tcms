@@ -16,7 +16,7 @@
 
 import { z } from 'zod';
 import { VERWEIGERUNG_GRUENDE } from '../fehler';
-import { DATEINAME_UNZULAESSIG, StandSchema } from './lesepfade';
+import { DATEINAME_UNZULAESSIG, einzeilig, StandSchema } from './lesepfade';
 
 // ---------------------------------------------------------------------------
 // Grenzen und Bausteine
@@ -261,7 +261,7 @@ const AuswirkungSchema = z.enum(['JA', 'NEIN', 'UNKLAR'], {
  */
 export const GegenzeichnungFeststellungSchema = z
   .object({
-    titel: z.string().trim().min(5, 'Titel: mindestens 5 Zeichen').max(200),
+    titel: einzeilig(5, 200, 'Titel: mindestens 5 Zeichen'),
     sachverhalt: z.string().trim().min(20, 'Sachverhalt: mindestens 20 Zeichen').max(4000),
     klasse: FeststellungKlasseSchema,
     schwere: KlasseSchema,

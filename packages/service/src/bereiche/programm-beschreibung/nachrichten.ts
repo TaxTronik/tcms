@@ -125,7 +125,12 @@ export async function legeNachrichtAn(tx: Tx, n: NeueNachricht): Promise<string>
   return z.id;
 }
 
-/** Gespeicherte Zeile → offene Nachricht des Vertrags; Abweichung = Fehler (fail closed). */
+/**
+ * Gespeicherte Zeile → offene Nachricht des Vertrags; `null`, wenn sie den
+ * Vertrag nicht (mehr) erfüllt – etwa ein Titel aus der Zeit vor RT4-T-03 mit
+ * Zeilenumbruch oder Richtungszeichen. Solche Nachrichten werden nicht
+ * ausgeliefert, sondern verworfen (fail closed je Nachricht).
+ */
 function alsOffeneNachricht(z: {
   id: string;
   mandantId: string;
@@ -137,7 +142,7 @@ function alsOffeneNachricht(z: {
   daten: Prisma.JsonValue;
   code: string | null;
   createdAt: Date;
-}): OffeneNachricht {
+}): OffeneNachricht | null {
   const daten =
     z.zweck === 'FREIGABE_CODE' && z.daten && typeof z.daten === 'object' && !Array.isArray(z.daten)
       ? { ...z.daten, code: z.code }
@@ -153,8 +158,7 @@ function alsOffeneNachricht(z: {
     erstelltAm: z.createdAt.toISOString(),
     daten,
   });
-  if (!n.success) throw new Error('[service] Gespeicherte Nachricht verletzt den Vertrag');
-  return n.data;
+  return n.success ? n.data : null;
 }
 
 /**
@@ -167,8 +171,16 @@ function brauchtSystem(ctx: SystemKontext): void {
   if (a?.art !== 'SYSTEM') throw new DienstFehler('NICHT_GEFUNDEN');
 }
 
-/** Grund, aus dem eine Code-Nachricht nicht mehr ausgeliefert wird (nur IDs und Codes im Audit). */
-export type VerwerfGrund = 'FREIGABE_NICHT_OFFEN' | 'CODE_ABGELAUFEN' | 'CODE_UNGUELTIG';
+/**
+ * Grund, aus dem eine Nachricht nicht mehr ausgeliefert wird (nur IDs und Codes
+ * im Audit): Code-Nachrichten, deren Code nicht mehr gilt, und Nachrichten,
+ * deren gespeicherte Vorlagendaten den Vertrag verletzen (`DATEN_UNGUELTIG`).
+ */
+export type VerwerfGrund =
+  | 'FREIGABE_NICHT_OFFEN'
+  | 'CODE_ABGELAUFEN'
+  | 'CODE_UNGUELTIG'
+  | 'DATEN_UNGUELTIG';
 
 /**
  * Prüft, ob der Code einer offenen Code-Nachricht noch der aktive Code ihrer
@@ -269,7 +281,10 @@ async function veralteteCodes(
  * danach werden die Kandidaten gelesen; Code-Kandidaten außerhalb dieser
  * Prüfung (nur bei sehr vielen offenen Codes) werden ebenso geprüft und
  * gegebenenfalls nicht ausgeliefert (die Antwort enthält dann weniger als
- * `limit`). Der Abruf wird protokolliert (IDs, kein Text).
+ * `limit`). Kandidaten, deren gespeicherte Vorlagendaten den Vertrag
+ * verletzen (etwa ein Titel mit Zeilenumbruch aus der Zeit vor RT4-T-03),
+ * werden ebenso verworfen (`DATEN_UNGUELTIG`), statt den Abruf zu blockieren.
+ * Der Abruf wird protokolliert (IDs, kein Text).
  */
 export async function ladeOffeneNachrichten(
   ctx: SystemKontext,
@@ -286,24 +301,33 @@ export async function ladeOffeneNachrichten(
   const protokoll: Protokoll[] = [];
   const geprueft = new Set<string>();
   const ausgeschlossen = new Set<string>();
-  /** Prüft Code-Nachrichten und verwirft die veralteten (bedingt, mit Audit je Nachricht). */
+  /** Verwirft eine offene Nachricht (bedingt, mit Audit; leert Code und Text). */
+  async function verwirf(v: {
+    id: string;
+    empfaengerId: string;
+    zweck: NachrichtZweck;
+    grund: VerwerfGrund;
+  }): Promise<void> {
+    ausgeschlossen.add(v.id);
+    // Bedingt: Eine gleichzeitige Zustellung oder ein anderer Abruf verwirft nicht doppelt.
+    const r = await ctx.tx.nachricht.updateMany({
+      where: { id: v.id, ...offen },
+      data: { verworfenAm: jetzt, code: null, text: '' },
+    });
+    if (r.count !== 1) return;
+    protokoll.push({
+      aktion: 'tcms.nachricht.verworfen',
+      objektTyp: 'Nachricht',
+      objektId: v.id,
+      programmId: null,
+      detail: { zweck: v.zweck, empfaengerId: v.empfaengerId, grund: v.grund },
+    });
+  }
+  /** Prüft Code-Nachrichten und verwirft die veralteten. */
   async function pruefeUndVerwirf(zeilen: readonly CodeZeile[]): Promise<void> {
     for (const z of zeilen) geprueft.add(z.id);
     for (const v of await veralteteCodes(ctx.tx, zeilen, jetzt)) {
-      ausgeschlossen.add(v.id);
-      // Bedingt: Eine gleichzeitige Zustellung oder ein anderer Abruf verwirft nicht doppelt.
-      const r = await ctx.tx.nachricht.updateMany({
-        where: { id: v.id, ...offen },
-        data: { verworfenAm: jetzt, code: null, text: '' },
-      });
-      if (r.count !== 1) continue;
-      protokoll.push({
-        aktion: 'tcms.nachricht.verworfen',
-        objektTyp: 'Nachricht',
-        objektId: v.id,
-        programmId: null,
-        detail: { zweck: 'FREIGABE_CODE', empfaengerId: v.empfaengerId, grund: v.grund },
-      });
+      await verwirf({ ...v, zweck: 'FREIGABE_CODE' });
     }
   }
   // 1. Die ältesten offenen Code-Nachrichten prüfen und verfallene leeren (Sparsamkeit).
@@ -326,7 +350,15 @@ export async function ladeOffeneNachrichten(
   await pruefeUndVerwirf(
     kandidaten.filter((k) => k.zweck === 'FREIGABE_CODE' && !geprueft.has(k.id)),
   );
-  const nachrichten = kandidaten.filter((z) => !ausgeschlossen.has(z.id)).map(alsOffeneNachricht);
+  // 4. Nur vertragsgemäße Vorlagendaten ausliefern; ältere Zeilen, die den Vertrag
+  //    verletzen (RT4-T-03), werden verworfen statt den ganzen Abruf zu blockieren.
+  const nachrichten: OffeneNachricht[] = [];
+  for (const k of kandidaten) {
+    if (ausgeschlossen.has(k.id)) continue;
+    const n = alsOffeneNachricht(k);
+    if (n) nachrichten.push(n);
+    else await verwirf({ ...k, grund: 'DATEN_UNGUELTIG' });
+  }
   if (nachrichten.length > 0) {
     protokoll.push({
       aktion: 'tcms.nachricht.abgerufen',

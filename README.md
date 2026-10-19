@@ -330,7 +330,9 @@ nicht erlaubter oder gleichzeitig geänderter Status `409`, Mängel beim Einreic
 
 Nachweise sind Verweise der kanzleikonsole (`{ verweis: { dokumentId (UUID), dateiname, mime,
 groesse, sha256 } }`); eine Dokument-ID gehört zu genau einem Mandanten und einem Inhalt.
-Einzeilige Texte (`einzeilig`: Mandantenname, Rechtsform, Kontaktfunktion) und Dateinamen
+Einzeilige Texte (`einzeilig`: Mandantenname, Rechtsform, Kontaktfunktion, alle Titel und Namen
+einschließlich der Vorlagendaten von Nachrichten und der Namen eingefrorener Beschreibungen,
+Teilbereich und Bezeichnungen des Geschäftsprofils – RT4-T-03) und Dateinamen
 (Nachweis, Ereignis-Anlage) folgen einer Zeichenregel (`UNZULAESSIGE_ZEICHEN`,
 `DATEINAME_UNZULAESSIG` in `packages/contract/src/bereiche/lesepfade.ts`), gebildet aus
 Unicode-Eigenschaften (`UNZULAESSIG_KLASSE`: `\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\p{Cs}`,

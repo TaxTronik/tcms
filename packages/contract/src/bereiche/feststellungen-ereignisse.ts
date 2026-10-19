@@ -24,6 +24,7 @@ import {
   BearbeitenRechteSchema,
   DATEINAME_GESPEICHERT_UNZULAESSIG,
   DATEINAME_UNZULAESSIG,
+  einzeilig,
   StandSchema,
 } from './lesepfade';
 
@@ -232,7 +233,7 @@ export const VertraulichSchema = VertraulichBodySchema.extend(feststellung).stri
 // ---- Feststellung erfassen ----
 export const FeststellungErfassenBodySchema = z
   .object({
-    titel: freitext(5, 200),
+    titel: einzeilig(5, 200),
     sachverhalt: freitext(20, 4000),
     quelle: FeststellungQuelleSchema,
     quelleText: freitext(2, 200),
@@ -496,7 +497,7 @@ export const FolgeAnlegenSchema = z
     /** Pflicht bei „Feststellung anlegen". „NEIN" nur mit Würdigungsrecht (TS-04). */
     feststellung: z
       .object({
-        titel: freitext(5, 200),
+        titel: einzeilig(5, 200),
         klasse: FeststellungKlasseSchema,
         schwere: SchwereSchema,
         auswirkung: AuswirkungSchema,
@@ -546,7 +547,7 @@ export const EreignisErfassenBodySchema = z
   .object({
     typ: EreignistypCodeSchema,
     quelle: z.enum(['MANUELL', 'KONTROLLE', 'STAMMDATEN', 'RSS']),
-    titel: freitext(5, 200),
+    titel: einzeilig(5, 200),
     beschreibung: freitext(10, 4000),
     datum: TagSchema,
   })
@@ -611,7 +612,7 @@ export const AnlageGespeichertSchema = AnlageVerweisSchema.extend({
 export const PortalMeldungBodySchema = z
   .object({
     typ: EreignistypCodeSchema,
-    titel: freitext(5, 200),
+    titel: einzeilig(5, 200),
     beschreibung: freitext(10, 4000),
     datum: TagSchema,
     anlagen: z
@@ -625,7 +626,7 @@ export const PortalMeldungBodySchema = z
      * nur für den Postausgang; begründet kein Recht).
      */
     benachrichtigen: z
-      .object({ id: z.uuid(), name: freitext(1, 200) })
+      .object({ id: z.uuid(), name: einzeilig(1, 200) })
       .strict()
       .nullable()
       .optional(),
