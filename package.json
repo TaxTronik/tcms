@@ -9,10 +9,12 @@
   "packageManager": "pnpm@12.4.1",
   "scripts": {
     "dev": "pnpm --filter @tcms/web dev",
-    "build": "pnpm --filter @tcms/web build",
+    "build": "pnpm --filter @tcms/web --filter @tcms/api run build",
     "start": "pnpm --filter @tcms/web start",
     "api": "pnpm --filter @tcms/api start",
     "akteur:schluessel": "node scripts/akteur-schluessel.mjs",
+    "vertrag:export": "node scripts/vertrag-export.mjs",
+    "image:pruefen": "node scripts/pruefe-dockerfile.mjs",
     "typecheck": "pnpm -r --parallel run typecheck",
     "test": "pnpm -r run test",
     "db:generate": "pnpm --filter @tcms/db generate",

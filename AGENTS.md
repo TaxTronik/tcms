@@ -11,8 +11,12 @@ für KI-Werkzeuge.
   Grundelemente, Prüflast, Formatierung. Änderungen hier brauchen Tests
   (`pnpm --filter @tcms/domain test`).
 - `packages/db` – Prisma-Schema, Migrationen (Init mit RLS je Tabelle, danach
-  Nachträge von Hand im Prisma-Format), Rollen-Bootstrap
-  (`prisma/init/01_bootstrap.sql`), `mitTenant` (Prisma 7 mit `@prisma/adapter-pg`),
+  Nachträge von Hand im Prisma-Format; ohne psql-Metabefehle und ohne eigene
+  Transaktionssteuerung, der Läufer `betrieb/migrate.sh` weist sie ab),
+  Rollen-Bootstrap (Attribute und Rechte nur in `prisma/init/rollen.psql`, eingebunden
+  von `01_bootstrap.sql` und vom Produktions-Bootstrap `betrieb/bootstrap.sql`),
+  Migrationsläufer des Images `tcms-migrate` (`betrieb/`, psql, ADR 0001 §8),
+  `mitTenant` (Prisma 7 mit `@prisma/adapter-pg`),
   Audit-Hashkette je Tenant (`schreibeAudit`, Position `pos` je Tenant lückenlos;
   der globale Schlüssel `seq` verlässt den Dienst nie – RT-03), Seed. Jeder Laufzeitzugriff läuft in
   `mitTenant`; einen ungebundenen Client gibt es nicht. Neue Tabellen brauchen
@@ -40,15 +44,22 @@ für KI-Werkzeuge.
 - `packages/contract` – gemeinsamer Vertrag mit der kanzleikonsole (ADR 0001
   §3, §7): Claims-Schema und `Akteur`, Signieren und Prüfen der
   Akteursbestätigung (`signiereAkteur`, `pruefeAkteur`, nur `node:crypto`),
-  strenges JSON (`parseJsonStrikt`), Fehlercodes und Antwortumschlag. Beide
+  strenges JSON (`parseJsonStrikt`), Fehlercodes und Antwortumschlag,
+  Endpunktregister `ENDPUNKTE` (`endpunkte.ts`: je Endpunkt Methode, Muster,
+  `portal`, Schemas für Pfadparameter, Query, Body und Antwort, Status). Beide
   Seiten nutzen denselben Code; Änderungen hier brauchen Positiv- und
   Negativtests (`pnpm --filter @tcms/contract test`).
 - `apps/api` – interner HTTP-Dienst (Hono auf Node 24) für die kanzleikonsole:
   `erzeugeApp(deps)` mit Authentifizierungskette, Routentabelle
-  (`routen.ts`, Mandantenbindung), jti-Speicher (`jti.ts`), Konfiguration
-  (`konfiguration.ts`), Start (`server.ts`). Keine Fachregeln: Routen rufen
-  `packages/service`. Tests ohne Netz über `app.request(...)`, dazu Socket-
-  und DB-Tests.
+  (`routen.ts`, Mandantenbindung, Abgleich mit dem Endpunktregister),
+  `erzeugeDienst` (`dienst.ts`, alle Routen wie in Produktion), jti-Speicher
+  (`jti.ts`), Konfiguration (`konfiguration.ts`), Start (`server.ts`),
+  geordnetes Beenden (`beenden.ts`), Container-Healthcheck (`healthcheck.mjs`),
+  Bundle (`scripts/build.mjs`) und Laufzeitbaum (`scripts/laufzeit.mjs`) des
+  Images `tcms-api`. Keine Fachregeln: Routen rufen `packages/service`. Tests
+  ohne Netz über `app.request(...)`, dazu Socket- und DB-Tests; jede Antwort
+  einer Test-App aus `aufbau()` wird gegen den Vertrag geprüft
+  (`__tests__/vertrag.ts`).
 - `apps/web` – Next.js 16 (App Router, Server Components, Server Actions).
   - `src/server/kontext.ts` – dünne Hülle um `ladeKontext` aus
     `@tcms/service` (im Dienstkontext der angemeldeten Person, `demoAkteur`)
@@ -184,9 +195,14 @@ für KI-Werkzeuge.
   Authentifizierungsfehler ergibt dieselbe Antwort
   `401 NICHT_AUTHENTIFIZIERT` (mit `Connection: close`); der Grund steht nur
   im Log.
-- Fachrouten nur über `Routen.route(...)`; jede verlangt Token und
-  Bestätigung. Pfade unter `/v1/mandanten/:mandantId/…` sind an `cli.id`
-  gebunden, `MANDANT`-Personen nur auf Routen mit `portal: true`.
+- Fachrouten nur über `Routen.endpunkt(ENDPUNKTE.<name>, handler)`; Methode,
+  Muster, `portal`, Schemas und Erfolgsstatus stehen nur im Endpunktregister
+  (`packages/contract/src/endpunkte.ts`). Ein neuer Endpunkt entsteht zuerst
+  dort; weichen Routentabelle und Register ab, startet der Dienst nicht. Jede
+  Fachroute verlangt Token und Bestätigung. Pfade unter
+  `/v1/mandanten/:mandantId/…` sind an `cli.id` gebunden, `MANDANT`-Personen nur
+  auf Routen mit `portal: true` (nur `/v1/ich` und `…/portal/…`).
+  Pfadparameter werden nach Body und Query eingesetzt.
 - Logs: JSON-Zeilen ohne Header-Werte, Bodys, Namen und rohe Pfade, nur IDs
   und Codes. Keine Secrets in Logs, Fehlermeldungen, Tests oder Commits.
 - Jede Sicherheitsannahme hat einen Negativtest, der ohne die Schutzmaßnahme
@@ -214,12 +230,29 @@ Keine eigene Designsprache: ausschließlich die TaxTronik-Klassen aus
 die Bausteine unter `src/components`. Neue Muster nur, wenn sie auf den
 vorhandenen Tokens aufsetzen.
 
+## Betrieb und Lieferkette (verbindlich, ADR 0001 §8)
+
+- Images nur aus dem `Dockerfile` (Ziele `api`, `migrate`), Basisimages per
+  Digest; der Laufzeit-Stage enthält keine Werkzeuge (pnpm, npm, tsx, esbuild,
+  Prisma-CLI) und läuft nicht als root. Was in den Build-Kontext darf, regelt
+  die Positivliste `.dockerignore`; `pnpm image:pruefen` prüft beides.
+- Passwörter und Tokens nie als Kommandozeilenargument, nie in Logs oder
+  Ausgaben (auch nicht in Skripten, Tests und CI).
+- Neue Abhängigkeiten nur mit exakter Version; `pnpm-workspace.yaml` bleibt so
+  streng, wie `scripts/pruefe-lieferkette.sh` verlangt.
+
 ## Prüfen vor Abschluss
 
 ```
+sh scripts/pruefe-lieferkette.sh
 pnpm typecheck
 pnpm test
 DB_TESTS=1 DATABASE_URL=… DATABASE_OWNER_URL=… pnpm --filter @tcms/db test
 DB_TESTS=1 DATABASE_URL=… DATABASE_OWNER_URL=… pnpm --filter @tcms/api test
 pnpm build
+pnpm image:pruefen
 ```
+
+Änderungen am Migrationsläufer zusätzlich mit
+`TCMS_MIGRATE_TESTS=1 TCMS_MIGRATE_TEST_SUPERUSER_URL=…` gegen eine Testinstanz
+(setzt clusterweite Rollenpasswörter).

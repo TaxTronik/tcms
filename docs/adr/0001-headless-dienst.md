@@ -185,6 +185,19 @@ mit lokaler Dateiablage, der Dienst einen Port, der nur Verweise annimmt.
   Keine CORS-Freigaben.
 - `GET /v1/health`: nur Dienst-Token, liefert `{ ok, version, datenbank }`.
 
+**Endpunktregister (Stufe 2).** `packages/contract/src/endpunkte.ts` (`ENDPUNKTE`)
+führt jeden Endpunkt genau einmal: Name, Methode, Pfadmuster, `portal`,
+`mandantenbezogen`, `akteur` (nur `health` ohne Bestätigung), `paramsSchema`,
+`querySchema`/`bodySchema` (oder `null`), `antwortSchema` (Schema von `daten`)
+und `erfolgStatus`. Der Dienst registriert jede Route aus dem Register
+(`Routen.endpunkt`) und prüft beim Start, dass Routentabelle und Register genau
+übereinstimmen; sonst startet er nicht. Pfadparameter prüft er nach der
+Mandantenbindung mit `paramsSchema` (`400`). Die API-Tests prüfen jede Antwort
+gegen `antwortSchema` bzw. `FehlerSchema`. Antwortschemas sind streng
+(unbekannte Felder abgewiesen), außer dem Inhalt eingefrorener
+CMS-Beschreibungen (Snapshot). Die kanzleikonsole speist ihren Client direkt
+aus einem Eintrag.
+
 ## 8. Betrieb (Stufe 2, in der kanzleikonsole)
 
 Wie Signal (`TCMS_DEPLOYMENT=managed|external|disabled`, Compose-Profil,
@@ -194,17 +207,61 @@ Image per Digest gepinnt plus Signaturprüfung, Antwortgrößen begrenzt,
 Token- und Schlüsselrotation mit Überlappung, ein Vertragstest gegen den echten
 Dienst.
 
-Produktions-Image (RT-04, Advisories in Werkzeugen): Das Image des Dienstes
-enthält nur Laufzeitabhängigkeiten (`pnpm deploy --prod` o. ä. für
-`@tcms/api`), keine Prisma-CLI (`prisma`), kein `tsx`/`esbuild` und keine
-Test- oder Build-Werkzeuge. Der Prisma-Client wird im Build-Schritt erzeugt und
-übernommen; der Dienst wird dort übersetzt (heute startet `pnpm api` noch über
-`tsx`, das dafür in die devDependencies wandert). Migrationen laufen in einem
-getrennten, kurzlebigen Schritt mit eigenem Image als `tcms_owner`
-(`DATABASE_OWNER_URL` nur dort); der laufende Dienst kennt nur `DATABASE_URL`
-der Rolle `tcms_app`. Damit erreichen Advisories in Entwicklungswerkzeugen
-(CLI, Bundler, Testläufer) den Produktionsbetrieb nicht. Die Umsetzung des
-Images folgt in Stufe 2.
+Produktions-Images (RT-04, Advisories in Werkzeugen; Betriebsschnittstelle
+Stufe 2). Ein `Dockerfile` mit zwei Zielen, Basisimages per Digest gepinnt
+(dieselben wie in der kanzleikonsole), ohne `# syntax=`-Zeile:
+
+- **`tcms-api`** (Node 24 Alpine): Der Build-Schritt bündelt `apps/api` mit allen
+  Workspace-Paketen zu `dist/server.mjs` (esbuild, nur dort), erzeugt den
+  Prisma-Client und stellt mit `pnpm deploy --prod --no-optional` die
+  Laufzeitabhängigkeiten zusammen; `apps/api/scripts/laufzeit.mjs` bricht ab,
+  wenn `tsx`, `esbuild`, die Prisma-CLI oder -Engines, TypeScript, Vitest,
+  Workspace-Kopien (Seeds, Demo) oder eine `.env` im Baum liegen. Das Image
+  enthält weder pnpm, npm, Corepack noch Yarn, läuft als UID/GID 10001 mit
+  schreibgeschützten Dateien (Root-Dateisystem schreibgeschützt möglich), lauscht
+  auf 3200 und bringt `node /app/healthcheck.mjs` mit (Token aus der Umgebung,
+  Exit 0/1, keine Werte). `TCMS_VERSION` (Image-Tag) ist die Version von
+  `/v1/health`. Der Start bricht bei ungültiger Konfiguration oder unsicherer
+  Laufzeitverbindung (`pruefeLaufzeitverbindung`) ab und nennt keine Werte;
+  `SIGTERM` lässt laufende Anfragen höchstens 20 s zu Ende laufen.
+  `TCMS_LOG_LEVEL` (`info|warn|error`) ist optional. `pnpm api` startet in der
+  Entwicklung weiter über `tsx` (devDependency).
+- **`tcms-migrate`** (`postgres:18-alpine`, ohne Node und Prisma-CLI, UID 70):
+  `packages/db/betrieb/migrate.sh` ohne Argumente, idempotent, Abbruch bei jedem
+  Fehler. (1) Bootstrap als Superuser (`TCMS_DB_SUPERUSER_URL`) aus
+  `prisma/init/rollen.psql` – derselben Datei, die `01_bootstrap.sql` in der
+  Entwicklung einbindet; psql liest `TCMS_DB_OWNER_PASSWORD` und
+  `TCMS_DB_APP_PASSWORD` selbst (`\getenv`) und setzt sie mit `format('%L')`,
+  nachdem die Transaktion Anweisungsprotokoll und `pg_stat_statements`
+  abgeschaltet hat. (2) Migrationen als `tcms_owner` (`TCMS_DB_OWNER_URL`) in
+  einer psql-Sitzung unter Advisory-Lock, Ledger `_prisma_migrations` mit den
+  Spalten von Prisma und SHA-256 der `migration.sql`; abweichende Prüfsumme,
+  unvollständige oder dem Image unbekannte Migration → Abbruch; jede Migration
+  mit ihrem Ledger-Eintrag in einer Transaktion, Migrationsdateien ohne
+  psql-Metabefehle und ohne eigene Transaktionssteuerung. (3) Prüfung
+  (`betrieb/pruefung.sql`): `tcms_app` kein Superuser, NOBYPASSRLS, keine
+  Mitgliedschaft, besitzt nichts, kein TRUNCATE/REFERENCES/TRIGGER, Audit nur
+  anhängen; ENABLE+FORCE RLS mit Policy auf allen Tabellen außer Ledger und
+  `akteur_jti`. Kein Passwort steht je in einer Kommandozeile (URLs werden in der
+  Shell zerlegt und als `PG*`-Umgebung übergeben) oder in der Ausgabe. Kein Seed.
+
+Migrationen laufen damit in einem getrennten, kurzlebigen Schritt als
+`tcms_owner`; der laufende Dienst kennt nur `DATABASE_URL` der Rolle
+`tcms_app`. CI (`.forgejo/workflows/ci.yml`): Lieferketten-Prüfung vor jeder
+Installation, frozen Lockfile, Typecheck, Tests (mit PostgreSQL 18 zweimal auf
+derselben Datenbank, aufgebaut mit `tcms-migrate`), Laufzeit-Simulation des
+Images, gitleaks, `pnpm audit --prod`, Build beider Ziele; nur auf Tags
+Trivy-Gate, SBOM, Push nach `${REGISTRY}/taxtronik/tcms-{api,migrate}` und
+Ausgabe der Digests für das signierte Release-Manifest der kanzleikonsole.
+`scripts/vertrag-export.mjs` liefert Commit und SHA-256 je Vertragsdatei im
+Format von `VENDOR.json` der kanzleikonsole.
+
+Bekannte Grenzen der Images: Das Migrations-Image erbt vom PostgreSQL-Image
+dessen Server-Programme und dessen `VOLUME` (eine anonyme Volume je Container,
+ohne Inhalt). Der Laufzeitbaum des Dienstes ist rund 100 MB groß, überwiegend
+die Laufzeit von `@prisma/client` für alle Datenbanktypen. Antworten prüft zur
+Laufzeit nur der Bereich `lesepfade` gegen den Vertrag; für alle übrigen
+sichern die API-Tests die Übereinstimmung.
 
 ## 9. Sicherheitsbefunde des Prototyps, die diese Stufe behebt
 

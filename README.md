@@ -75,15 +75,19 @@ schreibgeschützt ansehen.
 
 ## Befehle
 
-| Befehl                      | Zweck                                           |
-| --------------------------- | ----------------------------------------------- |
-| `pnpm dev`                  | Entwicklungsserver auf Port 3100                |
-| `pnpm build` / `pnpm start` | Produktionsbuild und -server                    |
-| `pnpm typecheck`            | TypeScript in allen Paketen                     |
-| `pnpm test`                 | Fachlogik- und Rechtetests (Vitest)             |
-| `pnpm db:migrate`           | neue Migration aus Schemaänderung (Entwicklung) |
-| `pnpm db:deploy`            | Migrationen einspielen                          |
-| `pnpm db:seed`              | Datenbank leeren und Demodaten laden            |
+| Befehl                | Zweck                                                                     |
+| --------------------- | ------------------------------------------------------------------------- |
+| `pnpm dev`            | Entwicklungsserver der Demo auf Port 3100                                 |
+| `pnpm build`          | Builds von `apps/web` (Next.js) und `apps/api` (Bundle `dist/server.mjs`) |
+| `pnpm start`          | Produktionsserver der Demo                                                |
+| `pnpm api`            | Dienst in der Entwicklung (tsx); Produktion: Image `tcms-api`             |
+| `pnpm typecheck`      | TypeScript in allen Paketen                                               |
+| `pnpm test`           | Fachlogik- und Rechtetests (Vitest)                                       |
+| `pnpm db:migrate`     | neue Migration aus Schemaänderung (Entwicklung)                           |
+| `pnpm db:deploy`      | Migrationen einspielen                                                    |
+| `pnpm db:seed`        | Datenbank leeren und Demodaten laden                                      |
+| `pnpm image:pruefen`  | Dockerfile und Build-Kontext statisch prüfen                              |
+| `pnpm vertrag:export` | Commit und SHA-256 der Vertragsdateien (Format `VENDOR.json`)             |
 
 ## Datenbank
 
@@ -97,9 +101,10 @@ auf ein Objekt eines anderen Tenants scheitert also schon in der Datenbank.
 | `tcms_owner` | Eigentümer der Tabellen, Migrationen und Seed | kein Superuser, kein `BYPASSRLS` (auch der Seed arbeitet im Tenant-Kontext)                      |
 | `tcms_app`   | Laufzeit (Dienst und Demo)                    | `NOBYPASSRLS`, nur DML; Audit nur `SELECT`/`INSERT`; `akteur_jti` nur `SELECT`/`INSERT`/`DELETE` |
 
-- `packages/db/prisma/init/01_bootstrap.sql` legt beide Rollen idempotent an (als Superuser, vor der
-  ersten Migration; Compose bindet das Verzeichnis als Init-Skript ein). Feste Passwörter = Rollenname,
-  nur für Entwicklung und Tests.
+- `packages/db/prisma/init/01_bootstrap.sql` legt beide Rollen idempotent an (als Superuser mit psql,
+  vor der ersten Migration; Compose bindet das Verzeichnis als Init-Skript ein). Feste Passwörter =
+  Rollenname, nur für Entwicklung und Tests. Attribute und Rechte stehen nur in `rollen.psql`, das auch
+  der Produktions-Bootstrap des Images `tcms-migrate` einbindet (siehe „Betrieb").
 - Verbindungen: `DATABASE_URL` (Laufzeit, `tcms_app`), `DATABASE_OWNER_URL` (Migration und Seed).
   `mitTenant` weist eine Laufzeitverbindung ab, deren Rolle Superuser ist, `BYPASSRLS` hat oder
   Tabellen besitzt; `pruefeLaufzeitverbindung()` prüft das beim Start des Dienstes.
@@ -147,9 +152,10 @@ Tax-CMS" zurückgesetzt) und sind damit wiederholbar.
 ```
 packages/domain   Fachlogik ohne I/O: Katalog E-Commerce, Bewertung, Häufigkeitsmatrix,
                   Statusmodelle, Phasen, Grundelemente, Formatierung (mit Tests)
-packages/contract Vertrag mit der kanzleikonsole: Akteursbestätigung, Fehlercodes (ADR 0001)
+packages/contract Vertrag mit der kanzleikonsole: Akteursbestätigung, Fehlercodes,
+                  Endpunktregister mit allen Schemas (ADR 0001)
 packages/db       Prisma-Schema, Migrationen (Init mit RLS), Rollen-Bootstrap, mitTenant,
-                  Audit-Hashkette je Tenant, Seed
+                  Audit-Hashkette je Tenant, Seed, Migrationsläufer des Betriebs (betrieb/)
 packages/service  Kern der Fachoperationen: Dienstkontext (Transaktion, Akteur, Uhr, Ports),
                   Rechte über den Akteur, mitAudit, Nachweis-Ablage des Dienstes
 apps/api          HTTP-Dienst für die kanzleikonsole (Hono): Dienst-Token, Akteursbestätigung,
@@ -183,6 +189,7 @@ pnpm api                               # Dienst auf HOST:PORT, Standard 0.0.0.0:
 | `TCMS_ACTOR_PUBLIC_KEYS` | `kid=<base64 SPKI-DER>`, kommagetrennt, nur Ed25519 (Ausgabe von `pnpm akteur:schluessel`) |
 | `DATABASE_URL`           | Laufzeitrolle `tcms_app`; Start verweigert bei Superuser, BYPASSRLS oder Tabelleneigentum  |
 | `HOST`, `PORT`           | Bindung, Standard `0.0.0.0` und `3200`; nur im internen Netz erreichbar machen             |
+| `TCMS_LOG_LEVEL`         | optional `info` (Standard), `warn` oder `error`; andere Werte verhindern den Start         |
 
 Der Dienst prüft die Konfiguration beim Start und startet nicht bei fehlenden Werten, Platzhaltern
 (`.env.example`), doppelten Einträgen oder anderen Schlüsseltypen; mit `NODE_ENV=production` auch
@@ -190,6 +197,18 @@ nicht mit bekannten Standardpasswörtern. Danach prüft er mit `pruefeLaufzeitve
 `@tcms/db`, dass `DATABASE_URL` weder Superuser noch `BYPASSRLS` noch Tabelleneigentümer ist. Den
 Mandantenkontext setzt nur `mitTenant` aus `@tcms/db`; der Dienst nutzt `pg` direkt nur für
 `akteur_jti` und den Ping von `/v1/health` (ohne Tenant). `TCMS_DEMO_TODAY` wirkt im Dienst nicht.
+
+Start fehlgeschlagen heißt Exit 1 mit einer JSON-Zeile ohne Werte. Auf `SIGTERM` nimmt der Dienst
+keine Verbindungen mehr an, lässt laufende Anfragen höchstens 20 s zu Ende laufen und endet dann
+(Exit 0; nach Fristablauf Exit 1).
+
+**Endpunktregister.** Jeder Endpunkt steht genau einmal in `packages/contract/src/endpunkte.ts`
+(`ENDPUNKTE`: Methode, Pfadmuster, `portal`, `mandantenbezogen`, Schemas für Pfadparameter, Query, Body
+und Antwort, Erfolgsstatus). Die Routen in `apps/api/src/routen/*` liefern nur Handler
+(`r.endpunkt(ENDPUNKTE.risikoLesen, …)`); beim Start vergleicht der Dienst seine Routentabelle mit dem
+Register und startet bei jeder Abweichung nicht. Die API-Tests prüfen jede Antwort gegen den Vertrag
+(`apps/api/src/__tests__/vertrag.ts`). Die kanzleikonsole kann ihren Client direkt aus einem Eintrag
+speisen.
 
 **Rotation mit Überlappung**
 
@@ -364,6 +383,51 @@ DB_TESTS=1 \
 
 `DATABASE_OWNER_URL` und `DATABASE_SUPERUSER_URL` (beide optional) prüfen zusätzlich, dass der Dienst
 mit diesen Rollen nicht startet.
+
+## Betrieb: Images, Migration, CI (Stufe 2)
+
+Die kanzleikonsole betreibt das Tax-CMS mit zwei Images aus diesem Repository (Schnittstelle in
+ADR 0001 §8). Basisimages sind per Digest gepinnt; Docker-Daemon und Registry braucht nur der Build.
+
+```bash
+docker build --target api --build-arg TCMS_VERSION=1.2.3 -t <praefix>/tcms-api:1.2.3 .
+docker build --target migrate -t <praefix>/tcms-migrate:1.2.3 .
+```
+
+| Image          | Inhalt und Verhalten                                                                                                                                                                                                                                                   |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tcms-api`     | Node 24 Alpine, `dist/server.mjs`, Produktionsabhängigkeiten, erzeugter Prisma-Client; kein pnpm/npm/tsx/esbuild, keine Prisma-CLI, keine Seeds/Demo/Tests. UID/GID 10001, Port 3200, Healthcheck `node /app/healthcheck.mjs`. Umgebung wie unter „Dienst (headless)". |
+| `tcms-migrate` | PostgreSQL 18 Alpine (psql), ohne Node. Ohne Argumente: Bootstrap der Rollen, Migrationen mit Ledger `_prisma_migrations` (SHA-256), Prüfung von Rollen und RLS. UID 70.                                                                                               |
+
+`tcms-migrate` (`packages/db/betrieb/migrate.sh`) braucht `TCMS_DB_SUPERUSER_URL`, `TCMS_DB_OWNER_URL`
+(Rolle `tcms_owner`, Passwort darf fehlen), `TCMS_DB_OWNER_PASSWORD` und `TCMS_DB_APP_PASSWORD`. Er ist
+idempotent und bricht ab, wenn eine angewandte Migration eine andere Prüfsumme hat, eine Migration
+unvollständig ist, die Datenbank Migrationen kennt, die das Image nicht kennt, oder die Prüfung scheitert
+(Exit 64 Konfiguration, 2 Bootstrap, 3 Migration, 4 Prüfung). Passwörter gehen nur über die Umgebung an
+psql, nie in eine Kommandozeile oder die Ausgabe. Lokal genügt dafür psql ≥ 15:
+
+```bash
+TCMS_DB_SUPERUSER_URL=postgresql://postgres@localhost:5433/tcms \
+  TCMS_DB_OWNER_URL=postgresql://tcms_owner@localhost:5433/tcms \
+  TCMS_DB_OWNER_PASSWORD=… TCMS_DB_APP_PASSWORD=… bash packages/db/betrieb/migrate.sh
+```
+
+Ohne Docker prüfbar: `pnpm image:pruefen` (Regeln für Dockerfile und `.dockerignore`) und
+`DATABASE_URL=<tcms_app> scripts/simuliere-image.sh <verzeichnis>` (Build-Schritte auf dem
+Build-Kontext, Start des Bundles mit `node`, Health, signierte Anfrage, `SIGTERM`). Die Tests des
+Läufers setzen clusterweite Rollenpasswörter und laufen daher nur auf Anforderung gegen eine
+Testinstanz: `TCMS_MIGRATE_TESTS=1 TCMS_MIGRATE_TEST_SUPERUSER_URL=<superuser>/postgres pnpm --filter
+@tcms/db exec vitest run src/__tests__/migrate.db.test.ts`.
+
+CI (`.forgejo/workflows/ci.yml`): Lieferketten-Prüfung (`scripts/pruefe-lieferkette.sh`) vor jeder
+Installation, frozen Lockfile, Format, Typecheck, Tests ohne und mit PostgreSQL 18 (Datenbank aus
+`tcms-migrate`, zweimal), Laufzeit-Simulation, gitleaks, `pnpm audit --prod`, Build beider Images; auf
+Tags `v*` (gleich der Version von `apps/api`) Trivy-Gate, SBOM und Push nach
+`${REGISTRY}/taxtronik/tcms-api` bzw. `…/tcms-migrate` mit Digests in der Zusammenfassung. Forgejo:
+Variable `REGISTRY`, Secrets `REGISTRY_USER` und `REGISTRY_TOKEN`.
+
+`pnpm vertrag:export` gibt bei sauberem Baum Commit und SHA-256 je Datei von `packages/contract/src`
+(ohne Tests) im Format von `packages/tcms-contract/VENDOR.json` der kanzleikonsole aus.
 
 ## Grenzen dieses Stands
 
