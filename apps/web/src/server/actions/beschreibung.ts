@@ -2,61 +2,59 @@
 
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
-import { type Prisma } from '@tcms/db';
+import { DienstFehler } from '@tcms/contract';
+import { BAUSTEIN_LABEL, type Abschnitt, type BausteinArt } from '@tcms/domain';
 import {
-  ABSCHNITTE,
-  BAUSTEIN_LABEL,
-  isoDatum,
-  naechsteVersion,
-  type Abschnitt,
-  type BausteinArt,
-} from '@tcms/domain';
-import { db, demoPersonen, kontakteMitRolle } from '../demo';
-import { aktualisiereMandant, KEIN_RECHT, mitAudit, type Protokoll } from '../aktion';
-import {
-  baueSnapshot,
-  geruestAbschnitte,
-  letzteBearbeitung,
-  normalisiereAbschnitte,
-  type VerlaufEintrag,
-} from '../beschreibung-daten';
+  fordereBeschreibungsfreigabeAn,
+  gibBeschreibungZurReview,
+  imDienst,
+  legeBeschreibungsversionAn,
+  schliesseBeschreibungsreviewAb,
+  speichereBeschreibungsabschnitt,
+  weiseBeschreibungsreviewZurueck,
+  type DienstKontext,
+} from '@tcms/service';
+import { aktualisiereMandant, KEIN_RECHT } from '../aktion';
+import { DEMO_PORTS, demoPersonen, kontakteMitRolle, zustaendigkeit } from '../demo';
 import type { Ergebnis } from '../ergebnis';
-import { adresse, codeNachricht, erzeugeCode } from '../freigaben-daten';
-import { ladeKontext } from '../kontext';
-import { kannBearbeiten } from '../berechtigung';
-import { brauchtKanzlei } from '../sitzung';
-import { heute } from '../zeit';
+import { demoAkteur } from '../sitzung';
 
 // =============================================================================
-// CMS-Beschreibung (Fachkonzept S14, §9): Entwurf bearbeiten, Kanzlei-Review im
-// Vier-Augen-Prinzip, Freigabe beim Mandanten mit Snapshot und SHA-256.
-// Freigegebene Versionen sind unveränderlich; Änderungen nur als neue Version.
+// CMS-Beschreibung (Fachkonzept S14, §9): dünne Hüllen um @tcms/service.
+// Formular → Eingabe → Service (Rechte, Vier-Augen, Sperren, Snapshot) →
+// Meldung. Empfänger, Zuständigkeit und Namen übergibt die Demo wie die
+// kanzleikonsole.
 // =============================================================================
 
-class Abbruch extends Error {}
+const Ids = z.object({ mandantId: z.uuid(), versionId: z.string().min(1).max(64) });
 
-const ABSCHNITT_KEYS = ABSCHNITTE.map((a) => a.key) as [string, ...string[]];
-const BAUSTEINE = Object.keys(BAUSTEIN_LABEL) as BausteinArt[];
-const MAX_TEXT = 20_000;
-
-async function ladeVersion(id: string) {
-  return db.beschreibungVersion.findUnique({
-    where: { id },
-    include: { programm: { include: { mandant: true } } },
-  });
+function meldung(e: DienstFehler): string {
+  if (e.code === 'NICHT_GEFUNDEN') return 'Version nicht gefunden.';
+  if (
+    e.code === 'NICHT_BERECHTIGT' &&
+    e.message === 'Dieser Schritt ist zuständigen Personen vorbehalten.'
+  )
+    return KEIN_RECHT;
+  if (e.code === 'UNGUELTIG') {
+    const zeilen = Object.values(e.felder ?? {}).flat();
+    return e.message === 'Eingabe ungültig.' || !zeilen.length
+      ? 'Bitte die Eingaben prüfen.'
+      : [e.message, ...zeilen].join('\n');
+  }
+  return e.message;
 }
 
-function versionsZahl(n: string): [number, number] {
-  const [a, b] = n.split('.').map((x) => Number.parseInt(x, 10));
-  return [a ?? 0, b ?? 0];
-}
-
-async function fuehreAus(fn: () => Promise<unknown>): Promise<Ergebnis | null> {
+/** Führt die Service-Operation im Dienstkontext der angemeldeten Person aus. */
+async function imDemo<T>(
+  mandantId: string,
+  fn: (ctx: DienstKontext) => Promise<T>,
+): Promise<{ wert: T } | { fehler: string }> {
+  const akteur = await demoAkteur(mandantId);
+  if (!akteur) redirect('/anmelden');
   try {
-    await fn();
-    return null;
+    return { wert: await imDienst(akteur, DEMO_PORTS, fn) };
   } catch (e) {
-    if (e instanceof Abbruch) return { fehler: e.message };
+    if (e instanceof DienstFehler) return { fehler: meldung(e) };
     throw e;
   }
 }
@@ -65,47 +63,59 @@ async function fuehreAus(fn: () => Promise<unknown>): Promise<Ergebnis | null> {
 // Abschnitt im Entwurf bearbeiten
 // ---------------------------------------------------------------------------
 
-const AbschnittSchema = z.object({
-  versionId: z.string().min(1),
-  key: z.enum(ABSCHNITT_KEYS),
+const BAUSTEINE = Object.keys(BAUSTEIN_LABEL) as BausteinArt[];
+const Struktur = z
+  .array(
+    z.discriminatedUnion('typ', [
+      z.object({ typ: z.literal('text') }),
+      z.object({
+        typ: z.literal('baustein'),
+        art: z.enum(BAUSTEINE as [BausteinArt, ...BausteinArt[]]),
+      }),
+    ]),
+  )
+  .max(40);
+
+const AbschnittForm = z.object({
+  mandantId: z.uuid(),
+  versionId: z.string().min(1).max(64),
+  key: z.string().min(1).max(40),
+  struktur: z.string().max(10_000),
   neuerBaustein: z.string().optional(),
 });
 
+/**
+ * Baut die Blöcke des Abschnitts aus dem Formular (Textfelder je Block,
+ * Entfernen-Haken für Bausteine, neuer Baustein); prüfen und speichern
+ * übernimmt der Service.
+ */
 export async function speichereAbschnitt(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtKanzlei();
-  const p = AbschnittSchema.safeParse({
+  const p = AbschnittForm.safeParse({
+    mandantId: fd.get('mandantId'),
     versionId: fd.get('versionId'),
     key: fd.get('key'),
+    struktur: fd.get('struktur'),
     neuerBaustein: fd.get('neuerBaustein') || undefined,
   });
   if (!p.success) return { fehler: 'Bitte die Eingaben prüfen.' };
-  const v = await ladeVersion(p.data.versionId);
-  if (!v) return { fehler: 'Version nicht gefunden.' };
-  if (!kannBearbeiten(nutzer, v.programm.mandant)) return { fehler: KEIN_RECHT };
-  if (v.status !== 'ENTWURF')
-    return {
-      fehler:
-        'Nur Entwürfe sind bearbeitbar. Änderungen an dieser Version entstehen als neue Version.',
-    };
-
-  const abschnitte = normalisiereAbschnitte(v.abschnitte);
-  const idx = abschnitte.findIndex((a) => a.key === p.data.key);
-  const alt = abschnitte[idx]!;
+  let struktur: z.infer<typeof Struktur>;
+  try {
+    struktur = Struktur.parse(JSON.parse(p.data.struktur));
+  } catch {
+    return { fehler: 'Bitte die Eingaben prüfen.' };
+  }
   const bloecke: Abschnitt['bloecke'] = [];
-  for (const [i, b] of alt.bloecke.entries()) {
+  for (const [i, b] of struktur.entries()) {
     if (b.typ === 'text') {
       const t = fd.get(`text_${i}`);
-      bloecke.push({
-        typ: 'text',
-        text: typeof t === 'string' ? t.replace(/\r\n/g, '\n').trimEnd() : b.text,
-      });
+      bloecke.push({ typ: 'text', text: typeof t === 'string' ? t : '' });
     } else if (fd.get(`entfernen_${i}`) !== 'on') {
-      bloecke.push(b);
+      bloecke.push({ typ: 'baustein', art: b.art });
     }
   }
   const neu = fd.get('text_neu');
   if (typeof neu === 'string' && neu.trim() && !bloecke.some((b) => b.typ === 'text')) {
-    bloecke.unshift({ typ: 'text', text: neu.replace(/\r\n/g, '\n').trimEnd() });
+    bloecke.unshift({ typ: 'text', text: neu });
   }
   if (p.data.neuerBaustein) {
     const art = p.data.neuerBaustein as BausteinArt;
@@ -116,47 +126,17 @@ export async function speichereAbschnitt(_prev: Ergebnis, fd: FormData): Promise
       };
     bloecke.push({ typ: 'baustein', art });
   }
-  if (bloecke.some((b) => b.typ === 'text' && b.text.length > MAX_TEXT))
-    return {
-      fehler: `Ein Textblock darf höchstens ${MAX_TEXT.toLocaleString('de-DE')} Zeichen haben.`,
-    };
-  if (JSON.stringify(bloecke) === JSON.stringify(alt.bloecke)) return { ok: 'Keine Änderungen.' };
-
-  const zeichen = (bl: Abschnitt['bloecke']) =>
-    bl.reduce((s, b) => s + (b.typ === 'text' ? b.text.trim().length : 0), 0);
-  const arten = (bl: Abschnitt['bloecke']) =>
-    bl.filter((b) => b.typ === 'baustein').map((b) => (b as { art: BausteinArt }).art);
-  abschnitte[idx] = { key: alt.key, bloecke };
-
-  const fehler = await fuehreAus(() =>
-    mitAudit(nutzer, async (tx) => {
-      const r = await tx.beschreibungVersion.updateMany({
-        where: { id: v.id, status: 'ENTWURF' },
-        data: { abschnitte: abschnitte as unknown as Prisma.InputJsonValue },
-      });
-      if (r.count !== 1) throw new Abbruch('Die Version ist inzwischen kein Entwurf mehr.');
-      return {
-        wert: null,
-        protokoll: {
-          aktion: 'tcms.beschreibung.abschnitt_geaendert',
-          objektTyp: 'BeschreibungVersion',
-          objektId: v.id,
-          programmId: v.programmId,
-          detail: {
-            nummer: v.nummer,
-            abschnitt: alt.key,
-            zeichenVorher: zeichen(alt.bloecke),
-            zeichenNachher: zeichen(bloecke),
-            bausteineVorher: arten(alt.bloecke),
-            bausteineNachher: arten(bloecke),
-          },
-        },
-      };
-    }),
+  if (bloecke.length === 0) bloecke.push({ typ: 'text', text: '' });
+  if (bloecke.some((b) => b.typ === 'text' && b.text.length > 20_000))
+    return { fehler: 'Ein Textblock darf höchstens 20.000 Zeichen haben.' };
+  const { mandantId, versionId, key } = p.data;
+  const r = await imDemo(mandantId, (ctx) =>
+    speichereBeschreibungsabschnitt(ctx, { mandantId, versionId, key, bloecke } as never),
   );
-  if (fehler) return fehler;
-  aktualisiereMandant(v.programm.mandantId);
-  return { ok: `Abschnitt in v${v.nummer} gespeichert.` };
+  if ('fehler' in r) return { fehler: r.fehler };
+  if (!r.wert.geaendert) return { ok: 'Keine Änderungen.' };
+  aktualisiereMandant(mandantId);
+  return { ok: `Abschnitt in v${r.wert.nummer} gespeichert.` };
 }
 
 // ---------------------------------------------------------------------------
@@ -164,206 +144,48 @@ export async function speichereAbschnitt(_prev: Ergebnis, fd: FormData): Promise
 // ---------------------------------------------------------------------------
 
 export async function neueVersion(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtKanzlei();
-  const programmId = String(fd.get('programmId') ?? '');
-  const programm = await db.tcmsProgramm.findUnique({
-    where: { id: programmId },
-    include: { mandant: true },
-  });
-  if (!programm) return { fehler: 'Tax-CMS nicht gefunden.' };
-  if (!kannBearbeiten(nutzer, programm.mandant)) return { fehler: KEIN_RECHT };
-
-  let neueId = '';
-  const fehler = await fuehreAus(async () => {
-    neueId = await mitAudit(nutzer, async (tx, zeitpunkt) => {
-      const versionen = await tx.beschreibungVersion.findMany({
-        where: { programmId },
-        orderBy: { createdAt: 'asc' },
-      });
-      const offen = versionen.find((x) => x.status === 'ENTWURF' || x.status === 'KANZLEI_REVIEW');
-      if (offen)
-        throw new Abbruch(
-          `Version ${offen.nummer} ist noch in Bearbeitung (${offen.status === 'ENTWURF' ? 'Entwurf' : 'Kanzlei-Review'}).`,
-        );
-      const hoechste = versionen
-        .map((x) => x.nummer)
-        .sort((a, b) => {
-          const [a1, a2] = versionsZahl(a);
-          const [b1, b2] = versionsZahl(b);
-          return a1 - b1 || a2 - b2;
-        })
-        .at(-1);
-      const basis = versionen.at(-1) ?? null;
-      const nummer = naechsteVersion(hoechste ?? null);
-      const abschnitte = basis ? normalisiereAbschnitte(basis.abschnitte) : geruestAbschnitte();
-      const v = await tx.beschreibungVersion.create({
-        data: {
-          programmId,
-          nummer,
-          status: 'ENTWURF',
-          abschnitte: abschnitte as unknown as Prisma.InputJsonValue,
-          createdAt: zeitpunkt,
-          erstelltVon: nutzer.id,
-        },
-      });
-      return {
-        wert: v.id,
-        protokoll: {
-          aktion: 'tcms.beschreibung.version_angelegt',
-          objektTyp: 'BeschreibungVersion',
-          objektId: v.id,
-          programmId,
-          detail: { nummer, basis: basis?.nummer ?? null },
-        },
-      };
-    });
-  });
-  if (fehler) return fehler;
-  aktualisiereMandant(programm.mandantId);
-  redirect(`/staff/clients/${programm.mandantId}/tcms/beschreibung?version=${neueId}`);
+  const p = z.uuid().safeParse(fd.get('mandantId'));
+  if (!p.success) return { fehler: 'Tax-CMS nicht gefunden.' };
+  const mandantId = p.data;
+  const r = await imDemo(mandantId, (ctx) => legeBeschreibungsversionAn(ctx, { mandantId }));
+  if ('fehler' in r) return { fehler: r.fehler };
+  aktualisiereMandant(mandantId);
+  redirect(`/staff/clients/${mandantId}/tcms/beschreibung?version=${r.wert.versionId}`);
 }
 
 // ---------------------------------------------------------------------------
 // Kanzlei-Review
 // ---------------------------------------------------------------------------
 
-const IdSchema = z.object({ versionId: z.string().min(1) });
-
 export async function zurReview(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtKanzlei();
-  const p = IdSchema.safeParse(Object.fromEntries(fd));
+  const p = Ids.safeParse({ mandantId: fd.get('mandantId'), versionId: fd.get('versionId') });
   if (!p.success) return { fehler: 'Bitte die Eingaben prüfen.' };
-  const v = await ladeVersion(p.data.versionId);
-  if (!v) return { fehler: 'Version nicht gefunden.' };
-  if (!kannBearbeiten(nutzer, v.programm.mandant)) return { fehler: KEIN_RECHT };
-  if (v.status !== 'ENTWURF')
-    return { fehler: 'Nur ein Entwurf kann zur Kanzlei-Review gegeben werden.' };
-  const fehler = await fuehreAus(() =>
-    mitAudit(nutzer, async (tx, zeitpunkt) => {
-      const r = await tx.beschreibungVersion.updateMany({
-        where: { id: v.id, status: 'ENTWURF' },
-        data: {
-          status: 'KANZLEI_REVIEW',
-          reviewAngefordertVon: nutzer.id,
-          reviewAngefordertAm: zeitpunkt,
-          reviewVon: null,
-          reviewAm: null,
-        },
-      });
-      if (r.count !== 1) throw new Abbruch('Die Version ist inzwischen kein Entwurf mehr.');
-      return {
-        wert: null,
-        protokoll: {
-          aktion: 'tcms.beschreibung.review_angefordert',
-          objektTyp: 'BeschreibungVersion',
-          objektId: v.id,
-          programmId: v.programmId,
-          detail: { nummer: v.nummer },
-        },
-      };
-    }),
-  );
-  if (fehler) return fehler;
-  aktualisiereMandant(v.programm.mandantId);
-  return { ok: `v${v.nummer} liegt zur Kanzlei-Review vor.` };
-}
-
-async function verlaufVon(versionId: string): Promise<VerlaufEintrag[]> {
-  const rows = await db.auditEvent.findMany({
-    where: { objektTyp: 'BeschreibungVersion', objektId: versionId },
-    orderBy: { seq: 'asc' },
-  });
-  return rows.map((a) => ({
-    at: a.at,
-    aktion: a.aktion,
-    actorId: a.actorId,
-    actorName: a.actorName,
-    objektId: a.objektId,
-    detail: (a.detail as Record<string, unknown>) ?? {},
-  }));
+  const r = await imDemo(p.data.mandantId, (ctx) => gibBeschreibungZurReview(ctx, p.data));
+  if ('fehler' in r) return { fehler: r.fehler };
+  aktualisiereMandant(p.data.mandantId);
+  return { ok: `v${r.wert.nummer} liegt zur Kanzlei-Review vor.` };
 }
 
 export async function reviewAbschliessen(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtKanzlei();
-  const p = IdSchema.safeParse(Object.fromEntries(fd));
+  const p = Ids.safeParse({ mandantId: fd.get('mandantId'), versionId: fd.get('versionId') });
   if (!p.success) return { fehler: 'Bitte die Eingaben prüfen.' };
-  const v = await ladeVersion(p.data.versionId);
-  if (!v) return { fehler: 'Version nicht gefunden.' };
-  if (!kannBearbeiten(nutzer, v.programm.mandant)) return { fehler: KEIN_RECHT };
-  if (v.status !== 'KANZLEI_REVIEW' || v.reviewVon)
-    return { fehler: 'Für diese Version ist keine Kanzlei-Review offen.' };
-  const letzte = letzteBearbeitung(v, await verlaufVon(v.id));
-  if (letzte && letzte === nutzer.id)
-    return {
-      fehler:
-        'Die Review schließt eine zweite Person ab – nicht die letzte Bearbeitung des Textes.',
-    };
-  const fehler = await fuehreAus(() =>
-    mitAudit(nutzer, async (tx, zeitpunkt) => {
-      const r = await tx.beschreibungVersion.updateMany({
-        where: { id: v.id, status: 'KANZLEI_REVIEW', reviewVon: null },
-        data: { reviewVon: nutzer.id, reviewAm: zeitpunkt },
-      });
-      if (r.count !== 1) throw new Abbruch('Die Review wurde inzwischen bereits abgeschlossen.');
-      return {
-        wert: null,
-        protokoll: {
-          aktion: 'tcms.beschreibung.review_abgeschlossen',
-          objektTyp: 'BeschreibungVersion',
-          objektId: v.id,
-          programmId: v.programmId,
-          detail: { nummer: v.nummer, letzteBearbeitung: letzte },
-        },
-      };
-    }),
-  );
-  if (fehler) return fehler;
-  aktualisiereMandant(v.programm.mandantId);
-  return { ok: `Kanzlei-Review für v${v.nummer} abgeschlossen.` };
+  const r = await imDemo(p.data.mandantId, (ctx) => schliesseBeschreibungsreviewAb(ctx, p.data));
+  if ('fehler' in r) return { fehler: r.fehler };
+  aktualisiereMandant(p.data.mandantId);
+  return { ok: `Kanzlei-Review für v${r.wert.nummer} abgeschlossen.` };
 }
 
-const ZurueckSchema = z.object({
-  versionId: z.string().min(1),
-  begruendung: z.string().trim().min(30),
-});
-
 export async function reviewZurueckweisen(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtKanzlei();
-  const p = ZurueckSchema.safeParse(Object.fromEntries(fd));
+  const p = Ids.extend({ begruendung: z.string().trim().min(30) }).safeParse({
+    mandantId: fd.get('mandantId'),
+    versionId: fd.get('versionId'),
+    begruendung: fd.get('begruendung'),
+  });
   if (!p.success) return { fehler: 'Bitte eine Begründung mit mindestens 30 Zeichen angeben.' };
-  const v = await ladeVersion(p.data.versionId);
-  if (!v) return { fehler: 'Version nicht gefunden.' };
-  if (!kannBearbeiten(nutzer, v.programm.mandant)) return { fehler: KEIN_RECHT };
-  if (v.status !== 'KANZLEI_REVIEW')
-    return { fehler: 'Für diese Version ist keine Kanzlei-Review offen.' };
-  const fehler = await fuehreAus(() =>
-    mitAudit(nutzer, async (tx) => {
-      const r = await tx.beschreibungVersion.updateMany({
-        where: { id: v.id, status: 'KANZLEI_REVIEW' },
-        data: {
-          status: 'ENTWURF',
-          reviewAngefordertVon: null,
-          reviewAngefordertAm: null,
-          reviewVon: null,
-          reviewAm: null,
-        },
-      });
-      if (r.count !== 1) throw new Abbruch('Die Version ist nicht mehr in der Kanzlei-Review.');
-      return {
-        wert: null,
-        protokoll: {
-          aktion: 'tcms.beschreibung.review_zurueckgewiesen',
-          objektTyp: 'BeschreibungVersion',
-          objektId: v.id,
-          programmId: v.programmId,
-          detail: { nummer: v.nummer, begruendung: p.data.begruendung },
-        },
-      };
-    }),
-  );
-  if (fehler) return fehler;
-  aktualisiereMandant(v.programm.mandantId);
-  return { ok: `v${v.nummer} ist zurück im Entwurf.` };
+  const r = await imDemo(p.data.mandantId, (ctx) => weiseBeschreibungsreviewZurueck(ctx, p.data));
+  if ('fehler' in r) return { fehler: r.fehler };
+  aktualisiereMandant(p.data.mandantId);
+  return { ok: `v${r.wert.nummer} ist zurück im Entwurf.` };
 }
 
 // ---------------------------------------------------------------------------
@@ -371,119 +193,33 @@ export async function reviewZurueckweisen(_prev: Ergebnis, fd: FormData): Promis
 // ---------------------------------------------------------------------------
 
 export async function freigabeAnfordern(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtKanzlei();
-  const p = IdSchema.safeParse(Object.fromEntries(fd));
+  const p = Ids.safeParse({ mandantId: fd.get('mandantId'), versionId: fd.get('versionId') });
   if (!p.success) return { fehler: 'Bitte die Eingaben prüfen.' };
-  const v = await ladeVersion(p.data.versionId);
-  if (!v) return { fehler: 'Version nicht gefunden.' };
-  const mandant = v.programm.mandant;
-  if (!kannBearbeiten(nutzer, mandant)) return { fehler: KEIN_RECHT };
-  if (v.status !== 'KANZLEI_REVIEW' || !v.reviewVon)
-    return {
-      fehler: 'Die Freigabe kann erst nach abgeschlossener Kanzlei-Review angefordert werden.',
-    };
-  const [gv] = await kontakteMitRolle(mandant.id, 'GESETZLICHER_VERTRETER');
+  const { mandantId, versionId } = p.data;
+  // Wie die kanzleikonsole: Empfänger (erste gesetzliche Vertretung), Zuständigkeit und Namen.
+  const [gv] = await kontakteMitRolle(mandantId, 'GESETZLICHER_VERTRETER');
   if (!gv) return { fehler: 'Beim Mandanten ist keine gesetzliche Vertretung erfasst.' };
-  const ctx = await ladeKontext(mandant.id, isoDatum(heute()), false);
-  if (!ctx) return { fehler: 'Tax-CMS nicht gefunden.' };
-  const titel = `CMS-Beschreibung v${v.nummer}`;
-
-  let ergebnis = { zurueckgezogen: [] as string[] };
-  const fehler = await fuehreAus(async () => {
-    ergebnis = await mitAudit(nutzer, async (tx, zeitpunkt) => {
-      const { snapshot, sha256: hash } = baueSnapshot(
-        { nummer: v.nummer, abschnitte: normalisiereAbschnitte(v.abschnitte) },
-        ctx,
-        zeitpunkt,
-      );
-      const r = await tx.beschreibungVersion.updateMany({
-        where: { id: v.id, status: 'KANZLEI_REVIEW', reviewVon: { not: null } },
-        data: {
-          status: 'BEIM_MANDANTEN',
-          freigabeAngefordertAm: zeitpunkt,
-          snapshot: snapshot as unknown as Prisma.InputJsonValue,
-          snapshotSha256: hash,
-        },
-      });
-      if (r.count !== 1) throw new Abbruch('Die Version hat ihren Status inzwischen geändert.');
-
-      // Eine noch offene Anforderung einer älteren Version wird zurückgezogen.
-      const aeltere = await tx.beschreibungVersion.findMany({
-        where: { programmId: v.programmId, status: 'BEIM_MANDANTEN', id: { not: v.id } },
-      });
-      const protokoll: Protokoll[] = [];
-      for (const a of aeltere) {
-        await tx.beschreibungVersion.update({ where: { id: a.id }, data: { status: 'ABGELOEST' } });
-        await tx.freigabe.updateMany({
-          where: { programmId: v.programmId, art: 'BESCHREIBUNG', refId: a.id, status: 'OFFEN' },
-          data: {
-            status: 'ABGELEHNT',
-            anmerkung: `Zurückgezogen: ersetzt durch Anforderung v${v.nummer}`,
-            erledigtAm: zeitpunkt,
-            codeHash: null,
-          },
-        });
-        protokoll.push({
-          aktion: 'tcms.beschreibung.freigabe_zurueckgezogen',
-          objektTyp: 'BeschreibungVersion',
-          objektId: a.id,
-          programmId: v.programmId,
-          detail: { nummer: a.nummer, ersetztDurch: v.nummer },
-        });
-      }
-
-      // Codefrist auf echter Zeit (Sicherheitsfrist, nicht Demo-Uhr).
-      const { code, codeHash, codeAblauf } = erzeugeCode(new Date());
-      const freigabe = await tx.freigabe.create({
-        data: {
-          programmId: v.programmId,
-          art: 'BESCHREIBUNG',
-          refId: v.id,
-          titel,
-          angefordertVon: nutzer.id,
-          angefordertAm: zeitpunkt,
-          empfaengerId: gv.id,
-          codeHash,
-          codeAblauf,
-          status: 'OFFEN',
-        },
-      });
-      const n = codeNachricht({
-        empfaenger: gv.name,
-        mandant: mandant.name,
-        titel,
-        code,
-        codeAblauf,
-        sha256: hash,
-      });
-      await tx.nachricht.create({
-        data: {
-          an: adresse(demoPersonen.person(gv.id)!),
-          betreff: n.betreff,
-          text: n.text,
-          createdAt: zeitpunkt,
-        },
-      });
-      protokoll.push({
-        aktion: 'tcms.beschreibung.freigabe_angefordert',
-        objektTyp: 'BeschreibungVersion',
-        objektId: v.id,
-        programmId: v.programmId,
-        detail: {
-          nummer: v.nummer,
-          freigabeId: freigabe.id,
-          empfaenger: gv.name,
-          snapshotSha256: hash,
-          codeAblauf: codeAblauf.toISOString(),
-        },
-      });
-      return { wert: { zurueckgezogen: aeltere.map((a) => a.nummer) }, protokoll };
-    });
-  });
-  if (fehler) return fehler;
-  aktualisiereMandant(mandant.id);
-  const zusatz = ergebnis.zurueckgezogen.length
-    ? ` Die offene Anforderung für v${ergebnis.zurueckgezogen.join(', v')} wurde zurückgezogen.`
+  const z0 = zustaendigkeit(mandantId);
+  const person = (id: string | null) => {
+    const x = id ? demoPersonen.person(id) : null;
+    return x ? { id: x.id, name: x.name } : null;
+  };
+  const r = await imDemo(mandantId, (ctx) =>
+    fordereBeschreibungsfreigabeAn(ctx, {
+      mandantId,
+      versionId,
+      empfaengerId: gv.id,
+      verantwortung: {
+        berufstraeger: person(z0.berufstraegerId),
+        bearbeitung: person(z0.bearbeitungId),
+      },
+      namen: demoPersonen.alle().map((x) => ({ id: x.id, name: x.name })),
+    }),
+  );
+  if ('fehler' in r) return { fehler: r.fehler };
+  aktualisiereMandant(mandantId);
+  const zusatz = r.wert.zurueckgezogen.length
+    ? ` Die offene Anforderung für v${r.wert.zurueckgezogen.join(', v')} wurde zurückgezogen.`
     : '';
   return {
     ok: `Freigabe bei ${gv.name} angefordert; der Bestätigungscode liegt im Postausgang.${zusatz}`,

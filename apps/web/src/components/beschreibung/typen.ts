@@ -1,7 +1,8 @@
 // =============================================================================
-// Daten der lebenden Bausteine der CMS-Beschreibung. Die Struktur ist bewusst
-// JSON-flach (Datumswerte als ISO-Strings, Personen als Namen), damit derselbe
-// Inhalt live aus dem Kontext gerendert und als Snapshot eingefroren werden kann.
+// Daten der lebenden Bausteine der CMS-Beschreibung (Vertrag: BausteinSatzSchema
+// in @tcms/contract). Die Struktur ist bewusst JSON-flach (Datumswerte als
+// ISO-Strings, Personen als Namen und ID), damit derselbe Inhalt live aus dem
+// Kontext gerendert und als Snapshot eingefroren werden kann.
 // =============================================================================
 
 import type { Abschnitt, BausteinArt, Design, GovernanceTyp, Klasse } from '@tcms/domain';
@@ -24,6 +25,8 @@ export interface ZieleDaten {
     freigabe: 'ENTWURF' | 'AUSSTEHEND' | 'FREIGEGEBEN';
     freigegebenAm: string | null;
     freigegebenVon: string | null;
+    /** ID der freigebenden Person (für die kanzleikonsole; fehlt in älteren Snapshots). */
+    freigegebenVonId?: string | null;
   }[];
 }
 
@@ -52,13 +55,14 @@ export interface KontrollmatrixDaten {
     schluessel: boolean;
     design: Design;
     designVon: string | null;
+    designVonId?: string | null;
     designAm: string | null;
     risikoCodes: string[];
   }[];
 }
 
 export interface VerantwortungDaten {
-  rollen: { rolle: string; name: string }[];
+  rollen: { rolle: string; name: string; personId?: string | null }[];
   kontrollen: {
     code: string;
     titel: string;
@@ -66,6 +70,9 @@ export interface VerantwortungDaten {
     durchfuehrend: string;
     vertretung: string;
     gegenzeichnung: string;
+    durchfuehrendId?: string | null;
+    vertretungId?: string | null;
+    gegenzeichnungId?: string | null;
   }[];
 }
 

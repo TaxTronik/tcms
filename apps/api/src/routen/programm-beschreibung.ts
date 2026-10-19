@@ -11,23 +11,44 @@
 // =============================================================================
 
 import {
+  AbschnittSpeichernBodySchema,
+  BeschreibungFreigabeAnfordernBodySchema,
+  BeschreibungLesenQuerySchema,
   EinrichtungLesenQuerySchema,
   EntwurfSpeichernBodySchema,
+  FreigabeNeuadressierungBodySchema,
   NachrichtenOffenQuerySchema,
+  PortalFreigebenBodySchema,
+  PortalKenntnisnahmeBodySchema,
   ProgrammAnlegenBodySchema,
+  ReviewZurueckweisenBodySchema,
 } from '@tcms/contract';
 import type { Tx } from '@tcms/db';
 import {
+  adressiereFreigabeNeu,
+  bestaetigeKenntnisnahme,
   bestaetigeNachrichtZustellung,
+  erteileFreigabe,
+  fordereBeschreibungsfreigabeAn,
+  fordereFreigabeCodeAn,
+  gibBeschreibungZurReview,
+  ladeBeschreibung,
   ladeEinrichtung,
   ladeOffeneNachrichten,
+  ladePortalFreigaben,
+  legeBeschreibungsversionAn,
   legeProgrammAn,
+  schliesseBeschreibungsreviewAb,
+  speichereBeschreibungsabschnitt,
   speichereEinrichtungsschritt,
+  weiseBeschreibungsreviewZurueck,
 } from '@tcms/service';
 import type { Routen } from '../routen';
 import { dienstKontext } from './kontext';
 
 const M = '/v1/mandanten/:mandantId';
+const VERSION = `${M}/beschreibung/versionen/:versionId`;
+const PORTAL = `${M}/portal/freigaben/:freigabeId`;
 
 export function registriereProgrammBeschreibung(r: Routen<Tx>): void {
   // ---- Postausgang (tenantweit, Verwaltungsrecht im Service) ----
@@ -65,5 +86,128 @@ export function registriereProgrammBeschreibung(r: Routen<Tx>): void {
     status: 201,
     body: ProgrammAnlegenBodySchema,
     handler: (c) => legeProgrammAn(dienstKontext(c), { mandantId: c.params.mandantId!, ...c.body }),
+  });
+
+  // ---- CMS-Beschreibung ----
+  r.route({
+    methode: 'GET',
+    pfad: `${M}/beschreibung`,
+    query: BeschreibungLesenQuerySchema,
+    handler: (c) =>
+      ladeBeschreibung(dienstKontext(c), { mandantId: c.params.mandantId!, ...c.query }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${M}/beschreibung/versionen`,
+    status: 201,
+    handler: (c) =>
+      legeBeschreibungsversionAn(dienstKontext(c), { mandantId: c.params.mandantId! }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${VERSION}/abschnitte`,
+    body: AbschnittSpeichernBodySchema,
+    handler: (c) =>
+      speichereBeschreibungsabschnitt(dienstKontext(c), {
+        mandantId: c.params.mandantId!,
+        versionId: c.params.versionId!,
+        ...c.body,
+      }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${VERSION}/review`,
+    handler: (c) =>
+      gibBeschreibungZurReview(dienstKontext(c), {
+        mandantId: c.params.mandantId!,
+        versionId: c.params.versionId!,
+      }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${VERSION}/review/abschliessen`,
+    handler: (c) =>
+      schliesseBeschreibungsreviewAb(dienstKontext(c), {
+        mandantId: c.params.mandantId!,
+        versionId: c.params.versionId!,
+      }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${VERSION}/review/zurueckweisen`,
+    body: ReviewZurueckweisenBodySchema,
+    handler: (c) =>
+      weiseBeschreibungsreviewZurueck(dienstKontext(c), {
+        mandantId: c.params.mandantId!,
+        versionId: c.params.versionId!,
+        ...c.body,
+      }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${VERSION}/freigabe`,
+    status: 201,
+    body: BeschreibungFreigabeAnfordernBodySchema,
+    handler: (c) =>
+      fordereBeschreibungsfreigabeAn(dienstKontext(c), {
+        mandantId: c.params.mandantId!,
+        versionId: c.params.versionId!,
+        ...c.body,
+      }),
+  });
+
+  // ---- Freigaben: Neuadressierung (Kanzlei) ----
+  r.route({
+    methode: 'POST',
+    pfad: `${M}/freigaben/:freigabeId/neuadressierung`,
+    body: FreigabeNeuadressierungBodySchema,
+    handler: (c) =>
+      adressiereFreigabeNeu(dienstKontext(c), {
+        mandantId: c.params.mandantId!,
+        freigabeId: c.params.freigabeId!,
+        ...c.body,
+      }),
+  });
+
+  // ---- Portal ----
+  r.route({
+    methode: 'GET',
+    pfad: `${M}/portal/freigaben`,
+    portal: true,
+    handler: (c) => ladePortalFreigaben(dienstKontext(c), { mandantId: c.params.mandantId! }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${PORTAL}/code`,
+    portal: true,
+    handler: (c) =>
+      fordereFreigabeCodeAn(dienstKontext(c), {
+        mandantId: c.params.mandantId!,
+        freigabeId: c.params.freigabeId!,
+      }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${PORTAL}/freigeben`,
+    portal: true,
+    body: PortalFreigebenBodySchema,
+    handler: (c) =>
+      erteileFreigabe(dienstKontext(c), {
+        mandantId: c.params.mandantId!,
+        freigabeId: c.params.freigabeId!,
+        ...c.body,
+      }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${PORTAL}/kenntnisnahme`,
+    portal: true,
+    body: PortalKenntnisnahmeBodySchema,
+    handler: (c) =>
+      bestaetigeKenntnisnahme(dienstKontext(c), {
+        mandantId: c.params.mandantId!,
+        freigabeId: c.params.freigabeId!,
+        ...c.body,
+      }),
   });
 }

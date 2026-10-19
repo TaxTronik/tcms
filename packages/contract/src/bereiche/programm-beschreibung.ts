@@ -446,3 +446,478 @@ export const EinrichtungViewSchema = z
   })
   .strict();
 export type EinrichtungView = z.infer<typeof EinrichtungViewSchema>;
+
+// -----------------------------------------------------------------------------
+// CMS-Beschreibung
+// -----------------------------------------------------------------------------
+
+export const BESCHREIBUNG_ABSCHNITT_KEYS = [
+  'teilbereich',
+  'kultur',
+  'ziele',
+  'risiken',
+  'programm',
+  'organisation',
+  'kommunikation',
+  'ueberwachung',
+  'anhang',
+] as const;
+export const BESCHREIBUNG_BAUSTEIN_ARTEN = [
+  'TEILBEREICH',
+  'ZIELE',
+  'RISIKOINVENTAR',
+  'KONTROLLMATRIX',
+  'VERANTWORTUNG',
+  'LAENDER',
+  'FESTSTELLUNGEN',
+] as const;
+export const BeschreibungAbschnittKeySchema = z.enum(BESCHREIBUNG_ABSCHNITT_KEYS);
+export const BeschreibungBausteinArtSchema = z.enum(BESCHREIBUNG_BAUSTEIN_ARTEN);
+/** Höchstlänge eines Textblocks (Zeichen). */
+export const BESCHREIBUNG_MAX_TEXTBLOCK = 20_000;
+/** Höchstzahl Blöcke je Abschnitt. */
+export const BESCHREIBUNG_MAX_BLOECKE = 20;
+
+export const BeschreibungBlockSchema = z.discriminatedUnion('typ', [
+  z.object({ typ: z.literal('text'), text: z.string().max(BESCHREIBUNG_MAX_TEXTBLOCK) }).strict(),
+  z.object({ typ: z.literal('baustein'), art: BeschreibungBausteinArtSchema }).strict(),
+]);
+export const BeschreibungAbschnittSchema = z
+  .object({
+    key: BeschreibungAbschnittKeySchema,
+    bloecke: z.array(BeschreibungBlockSchema).max(BESCHREIBUNG_MAX_BLOECKE),
+  })
+  .strict();
+
+const ZieleDaten = z.object({
+  appetit: klasse,
+  ziele: z.array(
+    z.object({
+      text: z.string(),
+      wesentlichkeitEur: z.number(),
+      risikoappetit: klasse,
+      freigabe: z.enum(['ENTWURF', 'AUSSTEHEND', 'FREIGEGEBEN']),
+      freigegebenAm: z.string().nullable(),
+      freigegebenVon: z.string().nullable(),
+      freigegebenVonId: z.string().nullable().optional(),
+    }),
+  ),
+});
+
+/** Daten der lebenden Bausteine (JSON-flach; Personen als Name und – neu – als ID). */
+export const BausteinSatzSchema = z.object({
+  TEILBEREICH: z
+    .object({
+      name: z.string(),
+      abgrenzung: z.string(),
+      einschluesse: z.array(z.string()),
+      ausschluesse: z.array(z.string()),
+      zielLaender: z.array(z.string()),
+      kanaele: z.array(z.string()),
+    })
+    .nullable(),
+  ZIELE: ZieleDaten,
+  RISIKOINVENTAR: z.object({
+    appetit: klasse,
+    sicht: z.enum(['DESIGN', 'BETRIEB']),
+    risiken: z.array(
+      z.object({
+        code: z.string(),
+        titel: z.string(),
+        gt: governanceTyp,
+        brutto: klasse,
+        netto: klasse,
+        ueberAppetit: z.boolean(),
+        kontrollen: z.number(),
+      }),
+    ),
+  }),
+  KONTROLLMATRIX: z.object({
+    kontrollen: z.array(
+      z.object({
+        code: z.string(),
+        titel: z.string(),
+        art: z.enum(['P', 'D', 'K']),
+        frequenz: z.string(),
+        partei,
+        schluessel: z.boolean(),
+        design: z.enum(['ANGEMESSEN', 'NICHT_BEURTEILT', 'MANGEL']),
+        designVon: z.string().nullable(),
+        designVonId: z.string().nullable().optional(),
+        designAm: z.string().nullable(),
+        risikoCodes: z.array(z.string()),
+      }),
+    ),
+  }),
+  VERANTWORTUNG: z.object({
+    rollen: z.array(
+      z.object({ rolle: z.string(), name: z.string(), personId: z.string().nullable().optional() }),
+    ),
+    kontrollen: z.array(
+      z.object({
+        code: z.string(),
+        titel: z.string(),
+        partei,
+        durchfuehrend: z.string(),
+        vertretung: z.string(),
+        gegenzeichnung: z.string(),
+        durchfuehrendId: z.string().nullable().optional(),
+        vertretungId: z.string().nullable().optional(),
+        gegenzeichnungId: z.string().nullable().optional(),
+      }),
+    ),
+  }),
+  LAENDER: z.object({
+    stand: z.string().nullable(),
+    summeLfd: z.number(),
+    summeVorjahr: z.number(),
+    schwelle: z.string(),
+    laender: z.array(
+      z.object({
+        land: z.string(),
+        name: z.string(),
+        fernverkaeufeLfdEur: z.number(),
+        lagerSeit: z.string().nullable(),
+        oss: z.boolean(),
+        lokaleUstNr: z.boolean(),
+        registrierung: z.enum(['VOLLSTAENDIG', 'FEHLT', 'PRUEFEN']),
+      }),
+    ),
+  }),
+  FESTSTELLUNGEN: z.object({
+    feststellungen: z.array(
+      z.object({
+        nummer: z.string(),
+        titel: z.string(),
+        schwere: klasse,
+        status: z.string(),
+        massnahmenOffen: z.number(),
+      }),
+    ),
+  }),
+});
+export type BausteinSatzDaten = z.infer<typeof BausteinSatzSchema>;
+
+/** Eingefrorener Inhalt einer Beschreibungsversion (SHA-256 über kanonisches JSON). */
+export const BeschreibungSnapshotSchema = z.object({
+  nummer: z.string(),
+  mandant: z.string(),
+  eingefroren: z.literal(true),
+  stand: z.string().optional(),
+  erzeugtAm: z.string().optional(),
+  abschnitte: z.array(BeschreibungAbschnittSchema),
+  bausteine: BausteinSatzSchema.partial().optional(),
+});
+
+export type BeschreibungSnapshot = z.infer<typeof BeschreibungSnapshotSchema>;
+export type BeschreibungAbschnitt = z.infer<typeof BeschreibungAbschnittSchema>;
+
+export const BESCHREIBUNG_STATUS = [
+  'ENTWURF',
+  'KANZLEI_REVIEW',
+  'BEIM_MANDANTEN',
+  'FREIGEGEBEN',
+  'ABGELOEST',
+] as const;
+const beschreibungStatus = z.enum(BESCHREIBUNG_STATUS);
+const freigabeStatus = z.enum(['OFFEN', 'FREIGEGEBEN', 'ABGELEHNT']);
+export const FREIGABE_ARTEN = [
+  'ZIELE',
+  'BESCHREIBUNG',
+  'RISIKOAKZEPTANZ',
+  'AUFKLAERUNG',
+  'KENNTNISNAHME',
+] as const;
+const freigabeArt = z.enum(FREIGABE_ARTEN);
+
+/** Zustand des Bestätigungscodes einer Freigabe (nie der Code oder sein Hash). */
+export const FreigabeCodeStatusSchema = z.enum(['KEIN', 'AKTIV', 'ABGELAUFEN', 'GESPERRT']);
+export type FreigabeCodeStatus = z.infer<typeof FreigabeCodeStatusSchema>;
+
+export const BeschreibungVersionViewSchema = z
+  .object({
+    id: z.string(),
+    nummer: z.string(),
+    /** gespeicherter (aktueller) Status */
+    status: beschreibungStatus,
+    /** Status zum Stichtag (aus den Zeitstempeln abgeleitet; aktuell = status) */
+    anzeige: beschreibungStatus,
+    abschnitte: z.array(BeschreibungAbschnittSchema),
+    createdAt: isoZeit,
+    erstelltVon: z.string().nullable(),
+    reviewAngefordertVon: z.string().nullable(),
+    reviewAngefordertAm: isoZeit.nullable(),
+    reviewVon: z.string().nullable(),
+    reviewAm: isoZeit.nullable(),
+    freigabeAngefordertAm: isoZeit.nullable(),
+    freigegebenVon: z.string().nullable(),
+    freigegebenAm: isoZeit.nullable(),
+    snapshot: BeschreibungSnapshotSchema.nullable(),
+    snapshotSha256: z.string().nullable(),
+    /** SHA-256 des Snapshots stimmt (null: nichts zu prüfen). */
+    snapshotGeprueft: z.boolean().nullable(),
+    /** Letzte bearbeitende Person (Vier-Augen der Kanzlei-Review). */
+    letzteBearbeitung: z.string().nullable(),
+  })
+  .strict();
+export type BeschreibungVersionView = z.infer<typeof BeschreibungVersionViewSchema>;
+
+export const BeschreibungFreigabeViewSchema = z
+  .object({
+    id: z.string(),
+    refId: z.string(),
+    status: freigabeStatus,
+    angefordertVon: z.string(),
+    angefordertAm: isoZeit,
+    empfaengerId: z.string(),
+    codeStatus: FreigabeCodeStatusSchema,
+    codeAblauf: isoZeit.nullable(),
+    anmerkung: z.string().nullable(),
+    erledigtAm: isoZeit.nullable(),
+  })
+  .strict();
+
+export const BeschreibungLesenQuerySchema = z
+  .object({
+    stand: StandSchema.optional(),
+    /** Zuständigkeit für den Baustein VERANTWORTUNG (nur Anzeige). */
+    berufstraegerId: uuid.optional(),
+    bearbeitungId: uuid.optional(),
+  })
+  .strict();
+export const BeschreibungLesenEingabeSchema = BeschreibungLesenQuerySchema.extend({
+  mandantId: uuid,
+}).strict();
+export type BeschreibungLesenEingabe = z.infer<typeof BeschreibungLesenEingabeSchema>;
+
+export const BeschreibungViewSchema = z
+  .object({
+    programmId: z.string().nullable(),
+    stand: isoTag,
+    historisch: z.boolean(),
+    versionen: z.array(BeschreibungVersionViewSchema),
+    freigaben: z.array(BeschreibungFreigabeViewSchema),
+    zurueckweisungen: z.array(
+      z
+        .object({
+          versionId: z.string(),
+          nummer: z.string(),
+          at: isoZeit,
+          actorId: z.string().nullable(),
+          begruendung: z.string(),
+        })
+        .strict(),
+    ),
+    /** Lebende Bausteine zum Stichtag (für Entwürfe und die Vorschau). */
+    bausteine: BausteinSatzSchema.nullable(),
+    gesetzlicheVertreter: z.array(z.string()),
+    darfBearbeiten: z.boolean(),
+    /** Anzeigenamen über das Personenverzeichnis (im Dienst leer). */
+    namen: z.array(z.object({ id: z.string(), name: z.string() }).strict()),
+  })
+  .strict();
+export type BeschreibungView = z.infer<typeof BeschreibungViewSchema>;
+
+const versionPfad = { mandantId: uuid, versionId: objektId };
+
+export const BeschreibungVersionAnlegenEingabeSchema = z.object({ mandantId: uuid }).strict();
+export const BeschreibungVersionAnlegenErgebnisSchema = z
+  .object({ versionId: z.string(), nummer: z.string(), basis: z.string().nullable() })
+  .strict();
+
+export const AbschnittSpeichernBodySchema = z
+  .object({
+    key: BeschreibungAbschnittKeySchema,
+    bloecke: z.array(BeschreibungBlockSchema).min(1).max(BESCHREIBUNG_MAX_BLOECKE),
+  })
+  .strict();
+export const AbschnittSpeichernEingabeSchema =
+  AbschnittSpeichernBodySchema.extend(versionPfad).strict();
+export type AbschnittSpeichernEingabe = z.infer<typeof AbschnittSpeichernEingabeSchema>;
+export const AbschnittSpeichernErgebnisSchema = z
+  .object({ versionId: z.string(), nummer: z.string(), geaendert: z.boolean() })
+  .strict();
+
+export const BeschreibungVersionAktionEingabeSchema = z.object(versionPfad).strict();
+export type BeschreibungVersionAktionEingabe = z.infer<
+  typeof BeschreibungVersionAktionEingabeSchema
+>;
+export const BeschreibungVersionAktionErgebnisSchema = z
+  .object({ versionId: z.string(), nummer: z.string(), status: beschreibungStatus })
+  .strict();
+export type BeschreibungVersionAktionErgebnis = z.infer<
+  typeof BeschreibungVersionAktionErgebnisSchema
+>;
+
+/** Mindestlänge einer Begründung (wie Übersteuerungen, AGENTS.md Regel 2). */
+export const REVIEW_MIN_BEGRUENDUNG = 30;
+
+export const ReviewZurueckweisenBodySchema = z
+  .object({ begruendung: z.string().trim().min(REVIEW_MIN_BEGRUENDUNG).max(2000) })
+  .strict();
+export const ReviewZurueckweisenEingabeSchema =
+  ReviewZurueckweisenBodySchema.extend(versionPfad).strict();
+export type ReviewZurueckweisenEingabe = z.infer<typeof ReviewZurueckweisenEingabeSchema>;
+
+/**
+ * Freigabe beim Mandanten anfordern: Empfänger (gesetzliche Vertretung, ID),
+ * Zuständigkeit und Anzeigenamen für den eingefrorenen Inhalt (nur Anzeige).
+ */
+export const BeschreibungFreigabeAnfordernBodySchema = z
+  .object({
+    empfaengerId: uuid,
+    verantwortung: z
+      .object({ berufstraeger: namensEintrag.nullable(), bearbeitung: namensEintrag.nullable() })
+      .strict(),
+    namen: z.array(namensEintrag).max(2000),
+  })
+  .strict();
+export const BeschreibungFreigabeAnfordernEingabeSchema =
+  BeschreibungFreigabeAnfordernBodySchema.extend(versionPfad).strict();
+export type BeschreibungFreigabeAnfordernEingabe = z.infer<
+  typeof BeschreibungFreigabeAnfordernEingabeSchema
+>;
+export const BeschreibungFreigabeAnfordernErgebnisSchema = z
+  .object({
+    versionId: z.string(),
+    nummer: z.string(),
+    freigabeId: z.string(),
+    snapshotSha256: z.string(),
+    codeAblauf: isoZeit,
+    /** Zurückgezogene ältere Anforderungen (Versionsnummern). */
+    zurueckgezogen: z.array(z.string()),
+  })
+  .strict();
+export type BeschreibungFreigabeAnfordernErgebnis = z.infer<
+  typeof BeschreibungFreigabeAnfordernErgebnisSchema
+>;
+
+// -----------------------------------------------------------------------------
+// Freigaben: Neuadressierung (Kanzlei) und Portal
+// -----------------------------------------------------------------------------
+
+/** Bestätigungscode: genau sechs Ziffern. */
+export const FreigabeCodeSchema = z.string().regex(/^\d{6}$/);
+
+export const FreigabeNeuadressierungBodySchema = z.object({ empfaengerId: uuid }).strict();
+export const FreigabeNeuadressierungEingabeSchema = FreigabeNeuadressierungBodySchema.extend({
+  mandantId: uuid,
+  freigabeId: objektId,
+}).strict();
+export type FreigabeNeuadressierungEingabe = z.infer<typeof FreigabeNeuadressierungEingabeSchema>;
+export const FreigabeNeuadressierungErgebnisSchema = z
+  .object({ freigabeId: z.string(), vorherId: z.string(), empfaengerId: z.string() })
+  .strict();
+
+export const PortalFreigabenEingabeSchema = z.object({ mandantId: uuid }).strict();
+export type PortalFreigabenEingabe = z.infer<typeof PortalFreigabenEingabeSchema>;
+
+export const PortalFreigabeViewSchema = z
+  .object({
+    id: z.string(),
+    art: freigabeArt,
+    titel: z.string(),
+    inhalt: z.string().nullable(),
+    status: freigabeStatus,
+    angefordertVon: z.string(),
+    angefordertAm: isoZeit,
+    empfaengerId: z.string(),
+    erledigtAm: isoZeit.nullable(),
+    anmerkung: z.string().nullable(),
+    /** Freigabe mit Bestätigungscode (sonst Kenntnisnahme). */
+    brauchtCode: z.boolean(),
+    istEmpfaenger: z.boolean(),
+    darfFreigeben: z.boolean(),
+    darfKenntnisnehmen: z.boolean(),
+    /** Fachlicher Grund, falls der Akteur nicht handeln darf. */
+    sperrgrund: z.string().nullable(),
+    /** Nur für die adressierte Person. */
+    code: z
+      .object({
+        status: FreigabeCodeStatusSchema,
+        ablauf: isoZeit.nullable(),
+        verbleibendeVersuche: z.number().int().min(0),
+      })
+      .strict()
+      .nullable(),
+    version: z
+      .object({
+        id: z.string(),
+        nummer: z.string(),
+        status: beschreibungStatus,
+        abschnitte: z.array(BeschreibungAbschnittSchema),
+        snapshot: BeschreibungSnapshotSchema.nullable(),
+        snapshotSha256: z.string().nullable(),
+        snapshotGeprueft: z.boolean().nullable(),
+        freigegebenVon: z.string().nullable(),
+        freigegebenAm: isoZeit.nullable(),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+export type PortalFreigabeView = z.infer<typeof PortalFreigabeViewSchema>;
+
+export const PortalFreigabenViewSchema = z
+  .object({
+    freigaben: z.array(PortalFreigabeViewSchema),
+    /** Freigegebene Beschreibungsversionen ohne eigenen Freigabe-Datensatz. */
+    fruehere: z.array(
+      z
+        .object({
+          id: z.string(),
+          nummer: z.string(),
+          status: beschreibungStatus,
+          freigegebenVon: z.string(),
+          freigegebenAm: isoZeit,
+          snapshotSha256: z.string().nullable(),
+        })
+        .strict(),
+    ),
+    /** Lebende Bausteine, falls eine offene Beschreibung noch ohne Snapshot vorliegt. */
+    live: z.object({ stand: isoTag, bausteine: BausteinSatzSchema }).strict().nullable(),
+    gesetzlicheVertreter: z.array(z.string()),
+    istGesetzlicherVertreter: z.boolean(),
+    kannPortalLesen: z.boolean(),
+    namen: z.array(z.object({ id: z.string(), name: z.string() }).strict()),
+  })
+  .strict();
+export type PortalFreigabenView = z.infer<typeof PortalFreigabenViewSchema>;
+
+const portalPfad = { mandantId: uuid, freigabeId: objektId };
+
+export const PortalCodeAnfordernEingabeSchema = z.object(portalPfad).strict();
+export type PortalCodeAnfordernEingabe = z.infer<typeof PortalCodeAnfordernEingabeSchema>;
+export const PortalCodeAnfordernErgebnisSchema = z
+  .object({ freigabeId: z.string(), codeAblauf: isoZeit })
+  .strict();
+export type PortalCodeAnfordernErgebnis = z.infer<typeof PortalCodeAnfordernErgebnisSchema>;
+
+export const PortalFreigebenBodySchema = z.object({ code: FreigabeCodeSchema }).strict();
+export const PortalFreigebenEingabeSchema = PortalFreigebenBodySchema.extend(portalPfad).strict();
+export type PortalFreigebenEingabe = z.infer<typeof PortalFreigebenEingabeSchema>;
+/**
+ * Ergebnis eines Freigabeversuchs. Ein falscher Code ist kein Fehler der
+ * Anfrage: Der Fehlversuch wird gezählt und protokolliert (dieselbe
+ * Transaktion, deshalb 200 statt 4xx); der Aufrufer prüft `freigegeben`.
+ */
+export const PortalFreigebenErgebnisSchema = z.discriminatedUnion('freigegeben', [
+  z.object({ freigegeben: z.literal(true), freigabeId: z.string(), erledigtAm: isoZeit }).strict(),
+  z
+    .object({
+      freigegeben: z.literal(false),
+      freigabeId: z.string(),
+      grund: z.enum(['CODE_FALSCH', 'GESPERRT']),
+      verbleibendeVersuche: z.number().int().min(0),
+    })
+    .strict(),
+]);
+export type PortalFreigebenErgebnis = z.infer<typeof PortalFreigebenErgebnisSchema>;
+
+export const PortalKenntnisnahmeBodySchema = z.object({ gelesen: z.literal(true) }).strict();
+export const PortalKenntnisnahmeEingabeSchema =
+  PortalKenntnisnahmeBodySchema.extend(portalPfad).strict();
+export type PortalKenntnisnahmeEingabe = z.infer<typeof PortalKenntnisnahmeEingabeSchema>;
+export const PortalKenntnisnahmeErgebnisSchema = z
+  .object({ freigabeId: z.string(), erledigtAm: isoZeit })
+  .strict();

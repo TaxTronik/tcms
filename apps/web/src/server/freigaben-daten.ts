@@ -1,27 +1,30 @@
 import 'server-only';
-import { randomInt, timingSafeEqual } from 'node:crypto';
-import { NACHRICHT_ZWECKE } from '@tcms/contract';
-import { fmtDatum } from '@tcms/domain';
-import { nachrichtAdresse } from '@tcms/service';
-import { sha256 } from '@tcms/domain/audit';
-import type { Snapshot } from '@/components/beschreibung/typen';
-import { db, demoPersonen } from './demo';
-import { normalisiereAbschnitte } from './beschreibung-daten';
+import { DienstFehler, NACHRICHT_ZWECKE, type PortalFreigabenView } from '@tcms/contract';
 import type { Abschnitt } from '@tcms/domain';
+import {
+  FREIGABE_CODE_ARTEN,
+  freigabeBrauchtCode,
+  imDienst,
+  ladePortalFreigaben,
+  nachrichtAdresse,
+} from '@tcms/service';
+import type { BausteinSatz, Snapshot } from '@/components/beschreibung/typen';
+import { db, DEMO_PORTS, demoPersonen } from './demo';
+import { demoAkteur } from './sitzung';
 
 // =============================================================================
-// Freigaben und Kenntnisnahmen (Fachkonzept §10 P4, §13): E-Mail-Code für
-// Freigaben der gesetzlichen Vertretung, Postausgang der Entwicklungsumgebung.
-// Der Klartext-Code steht nur in der Nachricht, gespeichert wird sein SHA-256.
+// Freigaben und Kenntnisnahmen im Portal (Fachkonzept §10 P4, §13): liest über
+// den Service-Lader `ladePortalFreigaben` (Sichtbarkeit, Rechte-Flags und
+// Codezustand berechnet der Service) und ergänzt Namen aus dem
+// Demo-Verzeichnis. Codes erzeugt und prüft nur der Service; die Demo zeigt
+// sie ausschließlich im Entwicklungs-Postausgang (Demo-Login).
 // =============================================================================
 
-export const CODE_ARTEN = ['ZIELE', 'BESCHREIBUNG', 'RISIKOAKZEPTANZ', 'AUFKLAERUNG'] as const;
+export const CODE_ARTEN = FREIGABE_CODE_ARTEN;
 export type CodeArt = (typeof CODE_ARTEN)[number];
-export const CODE_GUELTIG_TAGE = 7;
-export const MAX_FEHLVERSUCHE = 5;
 
 export function brauchtCode(art: string): art is CodeArt {
-  return (CODE_ARTEN as readonly string[]).includes(art);
+  return freigabeBrauchtCode(art);
 }
 
 export const FREIGABE_ART_LABEL: Record<string, string> = {
@@ -32,57 +35,10 @@ export const FREIGABE_ART_LABEL: Record<string, string> = {
   KENNTNISNAHME: 'Kenntnisnahme',
 };
 
-/**
- * Neuer 6-stelliger Code mit Hash und Ablauf (+7 Tage ab Zeitpunkt). Der
- * Zeitpunkt ist echte Zeit (Sicherheitsfrist, keine Demo-Uhr); Fehlversuche
- * werden über Audit-Zeitstempel (ebenfalls echte Zeit) seit Ausstellung gezählt.
- */
-export function erzeugeCode(zeitpunkt: Date): { code: string; codeHash: string; codeAblauf: Date } {
-  const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
-  return {
-    code,
-    codeHash: sha256(code),
-    codeAblauf: new Date(zeitpunkt.getTime() + CODE_GUELTIG_TAGE * 86_400_000),
-  };
-}
-
-export function codePasst(code: string, codeHash: string): boolean {
-  const a = Buffer.from(sha256(code), 'hex');
-  const b = Buffer.from(codeHash, 'hex');
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-export function adresse(p: { name: string; email: string }): string {
-  return `${p.name} <${p.email}>`;
-}
-
-/** Text der Bestätigungsnachricht (Entwicklungs-Postausgang statt Mailversand). */
-export function codeNachricht(o: {
-  empfaenger: string;
-  mandant: string;
-  titel: string;
-  code: string;
-  codeAblauf: Date;
-  sha256?: string | null;
-}): { betreff: string; text: string } {
-  return {
-    betreff: `Freigabe angefordert: ${o.titel}`,
-    text: [
-      `Guten Tag ${o.empfaenger},`,
-      '',
-      `Ihre Kanzlei bittet Sie um Freigabe: ${o.titel} (${o.mandant}).`,
-      '',
-      `Ihr Bestätigungscode: ${o.code}`,
-      `Der Code ist bis ${fmtDatum(o.codeAblauf)} gültig und nur für diese Freigabe verwendbar. Sie finden die Anforderung im Mandantenportal unter „Freigaben & Kenntnisnahmen“.`,
-      ...(o.sha256 ? ['', `SHA-256 des vorgelegten Inhalts: ${o.sha256}`] : []),
-    ].join('\n'),
-  };
-}
-
 export interface FreigabeEintrag {
   id: string;
   art: string;
-  refId: string;
+  refId?: string;
   titel: string;
   inhalt: string | null;
   status: 'OFFEN' | 'FREIGEGEBEN' | 'ABGELEHNT';
@@ -90,8 +46,13 @@ export interface FreigabeEintrag {
   angefordertAm: Date;
   empfaengerId: string;
   empfaengerName: string;
+  /** Nur für die adressierte Person. */
   codeAblauf: Date | null;
   hatCode: boolean;
+  codeGesperrt: boolean;
+  verbleibendeVersuche: number | null;
+  darfFreigeben: boolean;
+  darfKenntnisnehmen: boolean;
   anmerkung: string | null;
   erledigtAm: Date | null;
   version: {
@@ -101,6 +62,7 @@ export interface FreigabeEintrag {
     abschnitte: Abschnitt[];
     snapshot: Snapshot | null;
     snapshotSha256: string | null;
+    snapshotGeprueft: boolean | null;
     freigegebenVon: string | null;
     freigegebenAm: Date | null;
   } | null;
@@ -117,76 +79,74 @@ export interface FreigabenUebersicht {
     freigegebenAm: Date;
     snapshotSha256: string | null;
   }[];
+  /** Lebende Bausteine für offene Beschreibungen ohne Snapshot. */
+  live: { stand: string; satz: BausteinSatz } | null;
+  istGv: boolean;
+  lesen: boolean;
 }
 
-/** Alle Freigaben und Kenntnisnahmen eines Mandanten (Portal). */
-export async function ladeFreigaben(mandantId: string): Promise<FreigabenUebersicht> {
-  const programme = await db.tcmsProgramm.findMany({
-    where: { mandantId },
-    select: { id: true },
-  });
-  const ids = programme.map((p) => p.id);
-  if (!ids.length) return { eintraege: [], fruehere: [] };
-  const [freigaben, versionen] = await Promise.all([
-    db.freigabe.findMany({
-      where: { programmId: { in: ids } },
-      orderBy: { angefordertAm: 'desc' },
-    }),
-    db.beschreibungVersion.findMany({
-      where: { programmId: { in: ids } },
-      orderBy: { createdAt: 'asc' },
-    }),
-  ]);
-  const name = new Map(demoPersonen.alle().map((p) => [p.id, p.name]));
-  const versionJe = new Map(versionen.map((v) => [v.id, v]));
-  const eintraege: FreigabeEintrag[] = freigaben.map((f) => {
-    const v = f.art === 'BESCHREIBUNG' ? versionJe.get(f.refId) : undefined;
-    return {
+const datum = (s: string | null) => (s ? new Date(s) : null);
+const name = (id: string | null) => (id ? (demoPersonen.person(id)?.name ?? '—') : '—');
+
+function abbilden(v: PortalFreigabenView): FreigabenUebersicht {
+  return {
+    eintraege: v.freigaben.map((f) => ({
       id: f.id,
       art: f.art,
-      refId: f.refId,
       titel: f.titel,
       inhalt: f.inhalt,
       status: f.status,
-      angefordertVon: name.get(f.angefordertVon) ?? '—',
-      angefordertAm: f.angefordertAm,
+      angefordertVon: name(f.angefordertVon),
+      angefordertAm: new Date(f.angefordertAm),
       empfaengerId: f.empfaengerId,
-      empfaengerName: name.get(f.empfaengerId) ?? '—',
-      codeAblauf: f.codeAblauf,
-      hatCode: !!f.codeHash,
+      empfaengerName: name(f.empfaengerId),
+      codeAblauf: datum(f.code?.ablauf ?? null),
+      hatCode: f.code?.status === 'AKTIV' || f.code?.status === 'ABGELAUFEN',
+      codeGesperrt: f.code?.status === 'GESPERRT',
+      verbleibendeVersuche: f.code?.verbleibendeVersuche ?? null,
+      darfFreigeben: f.darfFreigeben,
+      darfKenntnisnehmen: f.darfKenntnisnehmen,
       anmerkung: f.anmerkung,
-      erledigtAm: f.erledigtAm,
-      version: v
+      erledigtAm: datum(f.erledigtAm),
+      version: f.version
         ? {
-            id: v.id,
-            nummer: v.nummer,
-            status: v.status,
-            abschnitte: normalisiereAbschnitte(v.abschnitte),
-            snapshot: (v.snapshot as unknown as Snapshot | null) ?? null,
-            snapshotSha256: v.snapshotSha256,
-            freigegebenVon: v.freigegebenVon ? (name.get(v.freigegebenVon) ?? '—') : null,
-            freigegebenAm: v.freigegebenAm,
+            ...f.version,
+            snapshot: (f.version.snapshot as Snapshot | null) ?? null,
+            freigegebenVon: f.version.freigegebenVon ? name(f.version.freigegebenVon) : null,
+            freigegebenAm: datum(f.version.freigegebenAm),
           }
         : null,
-    };
-  });
-  const mitDatensatz = new Set(
-    freigaben
-      .filter((f) => f.art === 'BESCHREIBUNG' && f.status === 'FREIGEGEBEN')
-      .map((f) => f.refId),
-  );
-  const fruehere = versionen
-    .filter((v) => v.freigegebenAm && v.freigegebenVon && !mitDatensatz.has(v.id))
-    .map((v) => ({
-      id: v.id,
-      nummer: v.nummer,
-      status: v.status,
-      freigegebenVon: name.get(v.freigegebenVon!) ?? '—',
-      freigegebenAm: v.freigegebenAm!,
-      snapshotSha256: v.snapshotSha256,
-    }))
-    .reverse();
-  return { eintraege, fruehere };
+    })),
+    fruehere: v.fruehere.map((x) => ({
+      ...x,
+      freigegebenVon: name(x.freigegebenVon),
+      freigegebenAm: new Date(x.freigegebenAm),
+    })),
+    live: v.live ? { stand: v.live.stand, satz: v.live.bausteine as BausteinSatz } : null,
+    istGv: v.istGesetzlicherVertreter,
+    lesen: v.kannPortalLesen,
+  };
+}
+
+/** Freigaben und Kenntnisnahmen des eigenen Mandanten für die angemeldete Kontaktperson. */
+export async function ladeFreigaben(mandantId: string): Promise<FreigabenUebersicht> {
+  const akteur = await demoAkteur(mandantId);
+  const leer: FreigabenUebersicht = {
+    eintraege: [],
+    fruehere: [],
+    live: null,
+    istGv: false,
+    lesen: false,
+  };
+  if (!akteur) return leer;
+  try {
+    return abbilden(
+      await imDienst(akteur, DEMO_PORTS, (ctx) => ladePortalFreigaben(ctx, { mandantId })),
+    );
+  } catch (e) {
+    if (e instanceof DienstFehler && e.code === 'NICHT_GEFUNDEN') return leer;
+    throw e;
+  }
 }
 
 /**

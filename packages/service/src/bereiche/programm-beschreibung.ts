@@ -12,11 +12,33 @@ export {
   speichereEinrichtungsschritt,
 } from './programm-beschreibung/einrichtung';
 export {
+  fordereBeschreibungsfreigabeAn,
+  gibBeschreibungZurReview,
+  ladeBeschreibung,
+  legeBeschreibungsversionAn,
+  schliesseBeschreibungsreviewAb,
+  speichereBeschreibungsabschnitt,
+  weiseBeschreibungsreviewZurueck,
+} from './programm-beschreibung/beschreibung';
+export {
+  adressiereFreigabeNeu,
+  bestaetigeKenntnisnahme,
+  erteileFreigabe,
+  fordereFreigabeCodeAn,
+  FREIGABE_CODE_ARTEN,
+  freigabeBrauchtCode,
+  ladePortalFreigaben,
+} from './programm-beschreibung/freigaben';
+export {
   bestaetigeNachrichtZustellung,
   ladeOffeneNachrichten,
   leseNachrichtAdresse,
   nachrichtAdresse,
 } from './programm-beschreibung/nachrichten';
+export {
+  CODE_GUELTIG_TAGE as FREIGABE_CODE_GUELTIG_TAGE,
+  MAX_FEHLVERSUCHE as FREIGABE_MAX_FEHLVERSUCHE,
+} from './programm-beschreibung/code';
 export {
   appetitAusZielen,
   AufbauFehler,
@@ -47,3 +69,14 @@ export {
   risikoEntscheidung,
   standardZeitraum,
 } from './programm-beschreibung/entwurf';
+export {
+  baueBausteine,
+  baueSnapshot,
+  beschreibungStatusZum,
+  geruestAbschnitte,
+  normalisiereAbschnitte,
+  pruefeSnapshot,
+  snapshotHash,
+  type BausteinOptionen,
+  type BeschreibungStatusWert,
+} from './programm-beschreibung/bausteine';
