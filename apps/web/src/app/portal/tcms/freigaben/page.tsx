@@ -3,10 +3,8 @@ import { fmtDatumZeit, isoDatum } from '@tcms/domain';
 import { Icon } from '@/components/icon';
 import { ErledigtZeile, erledigtText, FreigabeKarte } from '@/components/portal/freigabe';
 import { Leerzustand } from '@/components/ui/leer';
-import { baueBausteine } from '@/server/beschreibung-daten';
 import { ladeFreigaben, ladePostausgang } from '@/server/freigaben-daten';
 import { ladeKontext } from '@/server/kontext';
-import { istGesetzlicherVertreter, kannPortalLesen } from '@tcms/service';
 import { demoPersonen } from '@/server/demo';
 import { brauchtPortal, demoLoginErlaubt } from '@/server/sitzung';
 import { heute } from '@/server/zeit';
@@ -18,7 +16,7 @@ export default async function PortalFreigaben({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const { akteur: nutzer, rollen } = await brauchtPortal();
+  const { akteur: nutzer } = await brauchtPortal();
   const person = demoPersonen.person(nutzer.id)!;
   const sp = await searchParams;
   const erledigtId = Array.isArray(sp['erledigt']) ? sp['erledigt'][0] : sp['erledigt'];
@@ -26,14 +24,10 @@ export default async function PortalFreigaben({
     ladeFreigaben(nutzer.mandantId),
     ladeKontext(nutzer.mandantId, isoDatum(heute()), false),
   ]);
-  const istGv = istGesetzlicherVertreter(nutzer, nutzer.mandantId, rollen);
-  const lesen = kannPortalLesen(nutzer, nutzer.mandantId, rollen);
-  // Mitarbeitende sehen nur Anforderungen, die an sie gerichtet sind.
-  const sichtbar = uebersicht.eintraege.filter((f) => lesen || f.empfaengerId === nutzer.id);
-  const kann = (f: (typeof sichtbar)[number]) =>
-    f.art === 'KENNTNISNAHME'
-      ? f.empfaengerId === nutzer.id
-      : istGv && f.empfaengerId === nutzer.id;
+  // Sichtbarkeit (Mitarbeitende nur Eigenes) und Rechte-Flags berechnet der Service.
+  const { istGv, lesen } = uebersicht;
+  const sichtbar = uebersicht.eintraege;
+  const kann = (f: (typeof sichtbar)[number]) => f.darfFreigeben || f.darfKenntnisnehmen;
   const offen = sichtbar
     .filter((f) => f.status === 'OFFEN')
     .sort((a, b) => Number(kann(b)) - Number(kann(a)));
@@ -42,10 +36,7 @@ export default async function PortalFreigaben({
     .filter((p) => p.mandantRolle === 'GESETZLICHER_VERTRETER')
     .map((p) => p.name)
     .join(', ');
-  const live =
-    ctx?.programm && offen.some((f) => f.version && !f.version.snapshot)
-      ? { stand: isoDatum(ctx.stand), satz: baueBausteine(ctx) }
-      : null;
+  const live = uebersicht.live;
   // Codefristen laufen auf echter Zeit (actions/freigaben.ts).
   const zeit = new Date();
   const bestaetigt = erledigtId

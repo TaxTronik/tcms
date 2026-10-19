@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import {
   AUSFUEHRUNG_LABEL,
@@ -16,12 +17,7 @@ import {
 } from '@tcms/domain';
 import { Icon } from '@/components/icon';
 import { Leerzustand } from '@/components/ui/leer';
-import {
-  leseEntwurf,
-  SCHRITTE,
-  type EntwurfKontrolle,
-  type SetupEntwurf,
-} from '@/components/setup/entwurf';
+import { SCHRITTE, type EntwurfKontrolle, type SetupEntwurf } from '@/components/setup/entwurf';
 import {
   Schrittleiste,
   StufeOffen,
@@ -44,7 +40,7 @@ import { KEIN_RECHT } from '@/server/aktion';
 import { personName } from '@/server/kontext';
 import { berechnePlan, rollen, type Plan } from '@/server/programm-aufbau';
 import { ladeStaffSeite, NUR_AKTUELL } from '@/server/seite';
-import { ladeSetupProgramm, umfeldAusKontext } from '@/server/setup-daten';
+import { ladeEinrichtung, umfeldAusKontext } from '@/server/setup-daten';
 
 export const metadata = { title: 'Einrichtungsassistent' };
 
@@ -92,21 +88,30 @@ export default async function Einrichtungsassistent({
   const sp = await searchParams;
   const seite = await ladeStaffSeite(id, sp);
   const { ctx, basis } = seite;
-  const programm = await ladeSetupProgramm(id);
+  const einrichtung = await ladeEinrichtung(id);
+  if (!einrichtung) notFound();
+  const programm = einrichtung.programm
+    ? {
+        ...einrichtung.programm,
+        version1Am: einrichtung.programm.version1Am
+          ? new Date(einrichtung.programm.version1Am)
+          : null,
+      }
+    : null;
   const umfeld = umfeldAusKontext(ctx);
   const r = rollen(umfeld);
   const darf = seite.darfBearbeiten;
   const gesperrtGrund = ctx.historisch ? NUR_AKTUELL : KEIN_RECHT;
 
   // ---- Bereits eingerichtet ----
-  if (programm && (programm.status === 'AKTIV' || programm.version1Am)) {
+  if (einrichtung.eingerichtet || !einrichtung.entwurf) {
     return (
       <div style={{ maxWidth: 1100 }}>
         <h2 className="page-title">Einrichtungsassistent</h2>
         <div className="card mt-4">
           <Leerzustand
             icon="CheckCircle2"
-            text={`Das Tax-CMS ist eingerichtet${programm.version1Am ? ` – Version 1 vom ${fmtDatumZeit(programm.version1Am)}` : ''}. Änderungen erfolgen in den Bereichen Profil, Risiken und Kontrollen.`}
+            text={`Das Tax-CMS ist eingerichtet${programm?.version1Am ? ` – Version 1 vom ${fmtDatumZeit(programm.version1Am)}` : ''}. Änderungen erfolgen in den Bereichen Profil, Risiken und Kontrollen.`}
           >
             <span className="row" style={{ justifyContent: 'center' }}>
               <Link className="btn-primary" href={basis}>
@@ -126,7 +131,7 @@ export default async function Einrichtungsassistent({
   }
 
   // ---- Entwurf ----
-  const entwurf = leseEntwurf(programm?.setupEntwurf, ctx.heute, r.gv);
+  const entwurf = einrichtung.entwurf;
   const max = Math.min(5, entwurf.abgeschlossen + 1);
   const roh = Number(Array.isArray(sp['schritt']) ? sp['schritt'][0] : sp['schritt']);
   const schritt = Number.isInteger(roh) && roh >= 1 ? Math.min(roh, max) : max;
@@ -313,7 +318,7 @@ export default async function Einrichtungsassistent({
         <p className="text-sm text-muted mt-1">
           Neues Tax-CMS in fünf Schritten —{' '}
           {programm && entwurf.gespeichertAm
-            ? `Entwurf, zuletzt gespeichert am ${fmtDatumZeit(new Date(entwurf.gespeichertAm))}${entwurf.gespeichertVon ? ` von ${entwurf.gespeichertVon}` : ''}; noch keine Version angelegt.`
+            ? `Entwurf, zuletzt gespeichert am ${fmtDatumZeit(new Date(entwurf.gespeichertAm))}${entwurf.gespeichertVon ? ` von ${personName(ctx, entwurf.gespeichertVon)}` : ''}; noch keine Version angelegt.`
             : 'Entwurf, noch keine Version angelegt.'}
         </p>
       </div>

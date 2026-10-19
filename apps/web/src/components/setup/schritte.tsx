@@ -19,7 +19,7 @@ import {
   type EntwurfRisiko,
   type EntwurfZiel,
   type SetupEntwurf,
-} from './entwurf';
+} from './anzeige';
 import { SetupForm } from './setup-form';
 
 type Aktion = (prev: Ergebnis, fd: FormData) => Promise<Ergebnis>;

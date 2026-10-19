@@ -65,6 +65,13 @@ function Dokument({
 }
 
 function CodeStatus({ f, jetzt }: { f: FreigabeEintrag; jetzt: Date }) {
+  if (f.codeGesperrt)
+    return (
+      <span className="text-xs" style={{ color: '#b42318' }}>
+        Der Bestätigungscode ist nach mehreren Fehlversuchen gesperrt. Bitte wenden Sie sich an Ihre
+        Kanzlei.
+      </span>
+    );
   if (!f.hatCode || !f.codeAblauf)
     return <span className="text-xs text-muted">Noch kein Bestätigungscode angefordert.</span>;
   if (f.codeAblauf.getTime() < jetzt.getTime())

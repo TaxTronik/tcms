@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
 import {
   ABSCHNITTE,
   abschnittHatText,
@@ -29,12 +30,9 @@ import {
   zurReview,
 } from '@/server/actions/beschreibung';
 import {
-  baueBausteine,
   ladeBeschreibungsDaten,
-  letzteBearbeitung,
   normalisiereAbschnitte,
-  pruefeSnapshot,
-  statusZum,
+  type BeschreibungsDaten,
   type BeschreibungStatus,
   type VersionRoh,
 } from '@/server/beschreibung-daten';
@@ -70,26 +68,11 @@ export default async function BeschreibungSeite({
     );
   }
 
-  const daten = await ladeBeschreibungsDaten(ctx.programm.id);
+  // Status zum Stichtag, ausgeblendete spätere Schritte und Prüfungen liefert der Service.
+  const daten = await ladeBeschreibungsDaten(id, seite.standIso);
+  if (!daten) notFound();
   const ende = tagesende(ctx.stand);
-  const sichtbar = daten.versionen.filter((v) => v.createdAt.getTime() <= ende.getTime());
-  // Zum Stichtag: spätere Schritte ausblenden, Status aus den Zeitstempeln ableiten.
-  const bis = (d: Date | null) => (d && d.getTime() <= ende.getTime() ? d : null);
-  const versionen = sichtbar.map((v) => ({
-    ...v,
-    anzeige: statusZum(v, sichtbar, daten.freigaben, ende, ctx.historisch),
-    ...(ctx.historisch
-      ? {
-          reviewAngefordertAm: bis(v.reviewAngefordertAm),
-          reviewAngefordertVon: bis(v.reviewAngefordertAm) ? v.reviewAngefordertVon : null,
-          reviewAm: bis(v.reviewAm),
-          reviewVon: bis(v.reviewAm) ? v.reviewVon : null,
-          freigabeAngefordertAm: bis(v.freigabeAngefordertAm),
-          freigegebenAm: bis(v.freigegebenAm),
-          freigegebenVon: bis(v.freigegebenAm) ? v.freigegebenVon : null,
-        }
-      : {}),
-  }));
+  const versionen = daten.versionen;
   const aktuell = versionen.at(-1) ?? null;
   const offeneVersion =
     daten.versionen.find((v) => v.status === 'ENTWURF' || v.status === 'KANZLEI_REVIEW') ?? null;
@@ -109,7 +92,7 @@ export default async function BeschreibungSeite({
     klasse?: string;
   }) => (
     <AktionsForm action={neueVersion} key="neue-version">
-      <input type="hidden" name="programmId" value={ctx.programm!.id} />
+      <input type="hidden" name="mandantId" value={id} />
       <SubmitButton className={klasse} disabled={!!neuGesperrt} title={neuGesperrt ?? undefined}>
         <Icon name="Plus" className="tx-icon-xs" /> {text}
       </SubmitButton>
@@ -146,8 +129,8 @@ export default async function BeschreibungSeite({
   const abschnitte = eingefroren ? normalisiereAbschnitte(v.snapshot!.abschnitte) : v.abschnitte;
   const quelle: BausteinQuelle = eingefroren
     ? { modus: 'snapshot', stand: v.snapshot!.stand ?? null, satz: v.snapshot!.bausteine ?? null }
-    : { modus: 'live', stand: seite.standIso, satz: baueBausteine(ctx) };
-  const hashOk = pruefeSnapshot(v.snapshot, v.snapshotSha256);
+    : { modus: 'live', stand: seite.standIso, satz: daten.bausteine! };
+  const hashOk = v.snapshotGeprueft;
   const luecken = abschnitte.filter((a) => !abschnittHatText(a));
   const abschnitt = abschnitte.find((a) => a.key === vorlage.key)!;
 
@@ -163,7 +146,7 @@ export default async function BeschreibungSeite({
   };
 
   // Rechte und Sperrgründe
-  const letzte = letzteBearbeitung(v, daten.verlauf);
+  const letzte = v.letzteBearbeitung;
   const bearbeitbar = darfBearbeiten && v.status === 'ENTWURF' && !ctx.historisch;
   const bearbeitenGrund = ctx.historisch
     ? NUR_AKTUELL
@@ -205,6 +188,7 @@ export default async function BeschreibungSeite({
         </div>
         <div className="row-lg" style={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <Statusaktionen
+            mandantId={id}
             v={v}
             darf={darfBearbeiten && !ctx.historisch}
             gesperrt={ctx.historisch ? NUR_AKTUELL : 'Nur zuständige Personen'}
@@ -371,6 +355,7 @@ export default async function BeschreibungSeite({
               </div>
             ) : bearbeiten ? (
               <AbschnittEditor
+                mandantId={id}
                 versionId={v.id}
                 abschnitt={abschnitt}
                 quelle={quelle}
@@ -568,6 +553,7 @@ function versionsZeile(
 // ---------------------------------------------------------------------------
 
 function Statusaktionen({
+  mandantId,
   v,
   darf,
   gesperrt,
@@ -575,6 +561,7 @@ function Statusaktionen({
   andereBeimMandanten,
   gvName,
 }: {
+  mandantId: string;
   v: VersionRoh & { anzeige: BeschreibungStatus };
   darf: boolean;
   gesperrt: string;
@@ -583,7 +570,12 @@ function Statusaktionen({
   gvName: string | null;
 }) {
   const anfordernGesperrt = 'Erst nach durchlaufener Kanzlei-Review';
-  const id = <input type="hidden" name="versionId" value={v.id} />;
+  const id = (
+    <>
+      <input type="hidden" name="mandantId" value={mandantId} />
+      <input type="hidden" name="versionId" value={v.id} />
+    </>
+  );
   if (v.anzeige !== v.status) {
     // Historischer Stand: nur Anzeige.
     return (
@@ -628,7 +620,7 @@ function Statusaktionen({
         titel={`v${v.nummer} zurück in den Entwurf`}
         hinweis="Die Kanzlei-Review endet; der Entwurf kann wieder bearbeitet werden."
         action={reviewZurueckweisen}
-        felder={{ versionId: v.id }}
+        felder={{ mandantId, versionId: v.id }}
         bestaetigen="Zurückgeben"
         vierAugen={false}
         disabled={!darf}
@@ -722,7 +714,7 @@ function Verlauf({
   name,
 }: {
   versionen: VersionRoh[];
-  daten: Awaited<ReturnType<typeof ladeBeschreibungsDaten>>;
+  daten: BeschreibungsDaten;
   ende: Date;
   name: (id: string | null) => string;
 }) {
@@ -768,15 +760,13 @@ function Verlauf({
         unter: `${f.anmerkung ?? ''} · ${fmtDatumZeit(f.erledigtAm)}`,
       });
   }
-  for (const a of daten.verlauf) {
-    if (a.aktion === 'tcms.beschreibung.review_zurueckgewiesen') {
-      e.push({
-        at: a.at,
-        icon: 'RotateCcw',
-        titel: `v${String(a.detail['nummer'] ?? '')} zurück in den Entwurf`,
-        unter: `${a.actorName.replace(/^StB\s+/, '')} · ${fmtDatumZeit(a.at)}`,
-      });
-    }
+  for (const z of daten.zurueckweisungen) {
+    e.push({
+      at: z.at,
+      icon: 'RotateCcw',
+      titel: `v${z.nummer} zurück in den Entwurf`,
+      unter: `${name(z.actorId)} · ${fmtDatumZeit(z.at)}`,
+    });
   }
   const liste = e
     .filter((x) => x.at.getTime() <= ende.getTime())

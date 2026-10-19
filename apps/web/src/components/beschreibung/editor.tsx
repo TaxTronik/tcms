@@ -8,11 +8,13 @@ import type { BausteinQuelle } from './typen';
 
 /** Formular je Abschnitt: Freitextblöcke als Textarea, Bausteine bleiben nicht editierbar. */
 export function AbschnittEditor({
+  mandantId,
   versionId,
   abschnitt,
   quelle,
   abbrechenHref,
 }: {
+  mandantId: string;
   versionId: string;
   abschnitt: Abschnitt;
   quelle: BausteinQuelle;
@@ -32,8 +34,19 @@ export function AbschnittEditor({
       className="col"
       style={{ gap: 6 }}
     >
+      <input type="hidden" name="mandantId" value={mandantId} />
       <input type="hidden" name="versionId" value={versionId} />
       <input type="hidden" name="key" value={abschnitt.key} />
+      {/* Aufbau des Abschnitts beim Öffnen: ordnet Textfelder und Entfernen-Haken den Blöcken zu. */}
+      <input
+        type="hidden"
+        name="struktur"
+        value={JSON.stringify(
+          abschnitt.bloecke.map((b) =>
+            b.typ === 'text' ? { typ: 'text' } : { typ: 'baustein', art: b.art },
+          ),
+        )}
+      />
       {ohneText ? (
         <>
           <label className="label-sm" htmlFor="text_neu">

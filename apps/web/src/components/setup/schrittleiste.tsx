@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { CSSProperties, ReactNode } from 'react';
 import { fmtDatum, KLASSE_LABEL, MONATE, TURNUS_LABEL, type Pruflast } from '@tcms/domain';
 import { Icon } from '../icon';
-import { SCHRITTE } from './entwurf';
+import { SCHRITTE } from './anzeige';
 
 // =============================================================================
 // Schrittleiste und Stufenkarten des Einrichtungsassistenten (Server).
