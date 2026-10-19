@@ -16,6 +16,7 @@ export type * from '@prisma/client';
 export {
   aktuellerTenant,
   erzeugeClient,
+  KONTEXT_VERAENDERT,
   mitTenant,
   pruefeLaufzeitRolle,
   pruefeLaufzeitverbindung,

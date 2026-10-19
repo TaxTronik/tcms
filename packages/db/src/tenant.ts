@@ -7,7 +7,16 @@
 // Fail closed:
 //   - ungültige Tenant-IDs werden vor jedem Datenbankzugriff abgewiesen;
 //   - eine Verbindung, deren Rolle Superuser ist, BYPASSRLS hat oder Tabellen
-//     besitzt (und damit RLS abschalten könnte), wird nie benutzt.
+//     besitzt (und damit RLS abschalten könnte), wird nie benutzt;
+//   - ist `tcms.tenant_id` nach dem Callback nicht mehr der gesetzte Tenant,
+//     wird die Transaktion zurückgerollt (RT-02, `TenantFehler`).
+//
+// Bekanntes Restrisiko (ADR 0001 §10): Der GUC ist für jede Rolle setzbar. RLS
+// schützt daher nicht gegen beliebiges SQL derselben Rolle (SQL-Injection).
+// Voraussetzung ist: nur parametrisierte Abfragen (statischer Test
+// `roh-sql.test.ts`). Die Prüfung vor dem Commit fängt ein Umsetzen ab, das
+// bis zum Ende der Transaktion bestehen bleibt – nicht ein Umsetzen und
+// Zurücksetzen innerhalb derselben Transaktion.
 // =============================================================================
 
 import { createHash } from 'node:crypto';
@@ -130,10 +139,39 @@ export interface TenantOptionen {
   client?: PrismaClient;
 }
 
+/** Ereignis im Log, wenn der Tenant-Kontext in einer Transaktion umgesetzt wurde. */
+export const KONTEXT_VERAENDERT = 'tenant_kontext_veraendert';
+
+/**
+ * Meldet ein umgesetztes `tcms.tenant_id` als JSON-Zeile (wie das Log des
+ * Dienstes). Bewusst ohne Details: keine Tenant-IDs, keine Werte, kein SQL.
+ */
+function meldeKontextVeraendert(): void {
+  process.stdout.write(
+    `${JSON.stringify({ zeit: new Date().toISOString(), stufe: 'error', ereignis: KONTEXT_VERAENDERT })}\n`,
+  );
+}
+
+/**
+ * Prüft vor dem Commit, dass `tcms.tenant_id` noch genau der von `mitTenant`
+ * gesetzte Tenant ist (RT-02). Sonst Log-Eintrag ohne Details und
+ * `TenantFehler` – die Transaktion wird zurückgerollt, das Ergebnis des
+ * Callbacks verlässt `mitTenant` nicht.
+ */
+async function pruefeKontextUnveraendert(tx: Tx, tenant: string): Promise<void> {
+  const [zeile] = await tx.$queryRaw<{ wert: string | null }[]>`
+    SELECT pg_catalog.current_setting(${TENANT_EINSTELLUNG}, true) AS wert`;
+  if (zeile?.wert !== tenant) {
+    meldeKontextVeraendert();
+    throw new TenantFehler('Tenant-Kontext wurde in der Transaktion verändert.');
+  }
+}
+
 /**
  * Führt `fn` in einer Transaktion im Kontext des Tenants aus. Lesen wie
  * Schreiben einer Anfrage laufen vollständig in genau einer solchen
  * Transaktion (ADR 0001 §4). `fn` darf `tx` nicht über das Ende hinaus halten.
+ * Hat `fn` den Tenant-Kontext umgesetzt, wird zurückgerollt (`TenantFehler`).
  */
 export async function mitTenant<T>(
   tenantId: string,
@@ -148,7 +186,10 @@ export async function mitTenant<T>(
       // is_local = true: gilt nur bis zum Ende dieser Transaktion, nie für die
       // Poolverbindung danach.
       await tx.$executeRaw`SELECT pg_catalog.set_config(${TENANT_EINSTELLUNG}, ${tenant}, true)`;
-      return fn(tx);
+      const ergebnis = await fn(tx);
+      // RT-02: vor dem Commit, im selben Zug wie die Änderungen von `fn`.
+      await pruefeKontextUnveraendert(tx, tenant);
+      return ergebnis;
     },
     {
       timeout: opts.timeoutMs ?? 30_000,

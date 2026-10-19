@@ -865,6 +865,103 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
         await su.$disconnect();
       }
     });
+
+    // RT-02: Ein im Callback umgesetzter Tenant-Kontext führt zum Rollback.
+    describe('Tenant-Kontext unverändert bis zum Commit (RT-02)', () => {
+      const nameVon = (f: Fixture) =>
+        mitTenant(
+          f.tenant,
+          async (tx) => (await tx.mandant.findFirstOrThrow({ where: { id: f.mandantId } })).name,
+          { client: app },
+        );
+      const mitLog = async <T>(fn: () => Promise<T>) => {
+        const zeilen: string[] = [];
+        const original = process.stdout.write.bind(process.stdout);
+        process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+          zeilen.push(String(chunk));
+          return (original as (...a: unknown[]) => boolean)(chunk, ...rest);
+        }) as typeof process.stdout.write;
+        try {
+          return { ergebnis: await fn().catch((e: unknown) => e), zeilen };
+        } finally {
+          process.stdout.write = original;
+        }
+      };
+
+      it('Umsetzen auf einen fremden Tenant: Rollback, TenantFehler, Log ohne Details', async () => {
+        const vorherA = await nameVon(A);
+        const vorherB = await nameVon(B);
+        const neu = `gekapert-${randomUUID().slice(0, 8)}`;
+        const { ergebnis, zeilen } = await mitLog(() =>
+          mitTenant(
+            A.tenant,
+            async (tx) => {
+              // Eigene Änderung im richtigen Kontext – muss mit zurückgerollt werden.
+              await tx.mandant.update({
+                where: { tenantId_id: { tenantId: A.tenant, id: A.mandantId } },
+                data: { name: neu },
+              });
+              await tx.$executeRaw`SELECT set_config('tcms.tenant_id', ${B.tenant}, true)`;
+              await tx.$executeRaw`UPDATE "Mandant" SET name = ${neu} WHERE id = ${B.mandantId}::uuid`;
+              return tx.$queryRaw<{ name: string }[]>`SELECT name FROM "Mandant"`;
+            },
+            { client: app },
+          ),
+        );
+        expect(ergebnis).toBeInstanceOf(TenantFehler);
+        expect(String((ergebnis as Error).message)).not.toContain(B.tenant);
+        expect(await nameVon(B)).toBe(vorherB);
+        expect(await nameVon(A)).toBe(vorherA);
+        const log = zeilen.filter((z) => z.includes('tenant_kontext_veraendert'));
+        expect(log).toHaveLength(1);
+        expect(JSON.parse(log[0]!)).toEqual({
+          zeit: expect.any(String),
+          stufe: 'error',
+          ereignis: 'tenant_kontext_veraendert',
+        });
+        for (const z of zeilen) {
+          expect(z).not.toContain(A.tenant);
+          expect(z).not.toContain(B.tenant);
+        }
+      });
+
+      it.each([
+        ['geleert', ''],
+        ['Großschreibung', 'gross'],
+        ['zufälliger Tenant', 'zufall'],
+      ])('Kontext %s: Rollback', async (_n, art) => {
+        const wert =
+          art === 'gross' ? A.tenant.toUpperCase() : art === 'zufall' ? randomUUID() : '';
+        const ergebnis = await mitTenant(
+          A.tenant,
+          async (tx) => {
+            await tx.$executeRaw`SELECT set_config('tcms.tenant_id', ${wert}, true)`;
+            return 'durch';
+          },
+          { client: app },
+        ).catch((e: unknown) => e);
+        expect(ergebnis).toBeInstanceOf(TenantFehler);
+      });
+
+      it('Kontext auch sitzungsweit (is_local = false) umgesetzt: Rollback, Verbindung danach ohne Kontext', async () => {
+        const ergebnis = await mitTenant(
+          A.tenant,
+          async (tx) => {
+            await tx.$executeRaw`SELECT set_config('tcms.tenant_id', ${B.tenant}, false)`;
+          },
+          { client: app },
+        ).catch((e: unknown) => e);
+        expect(ergebnis).toBeInstanceOf(TenantFehler);
+        // Rollback verwirft auch die Sitzungseinstellung der Transaktion.
+        const n = await app.mandant.count();
+        expect(n).toBe(0);
+      });
+
+      it('unverändert: Ergebnis kommt an, Änderungen bleiben', async () => {
+        const r = await mitTenant(A.tenant, (tx) => tx.mandant.count(), { client: app });
+        expect(r).toBeGreaterThan(0);
+      });
+    });
   });
 
   // ------------------------------------------------------------ Audit-Kette --
