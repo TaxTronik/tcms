@@ -39,3 +39,24 @@ export function antwortSchema<T extends z.ZodType>(daten: T) {
 export const MAX_BODY_BYTES = 256 * 1024;
 /** Höchste Zahl Mandanten-IDs in mandantenübergreifenden Lesepfaden. */
 export const MAX_MANDANTEN_JE_ANFRAGE = 5000;
+
+/**
+ * Fachlicher bzw. technischer Fehler, den der Dienst in den Antwortumschlag
+ * übersetzt. Meldungen sind für Nutzer bestimmt und enthalten keine internen
+ * Details (keine IDs fremder Mandanten, keine SQL-Fehler).
+ */
+export class DienstFehler extends Error {
+  readonly code: FehlerCode;
+  readonly felder: Record<string, string[]> | undefined;
+
+  constructor(code: FehlerCode, meldung?: string, felder?: Record<string, string[]>) {
+    super(meldung ?? code);
+    this.name = 'DienstFehler';
+    this.code = code;
+    this.felder = felder;
+  }
+
+  get status(): number {
+    return FEHLER_STATUS[this.code];
+  }
+}
