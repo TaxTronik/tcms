@@ -6,15 +6,38 @@ packages:
 # liegen direkt unter node_modules/.
 nodeLinker: hoisted
 
-# Lieferketten-Härtung (an die kanzleikonsole angelehnt): frische Releases
-# verzögern, Build-Skripte nur nach ausdrücklicher Freigabe.
+# Lieferketten-Härtung wie in der kanzleikonsole (Prüfung:
+# scripts/pruefe-lieferkette.sh, in CI vor jeder Installation).
+# Frische Releases erst nach 7 Tagen, auch transitiv und ohne Ausnahme für
+# Pakete ohne Zeitstempel.
 minimumReleaseAge: 10080 # 7 Tage
+minimumReleaseAgeStrict: true
+minimumReleaseAgeIgnoreMissingTime: false
+# Lockfile-Einträge werden gegen diese Regeln erneut geprüft.
+trustLockfile: false
+# Kein Paket mit schwächerem Herkunftsnachweis als seine Vorgängerversion.
+trustPolicy: no-downgrade
+# Keine Unterabhängigkeiten aus Git, Tarball-URLs oder Dateipfaden.
+blockExoticSubdeps: true
+# Build-Skripte nur nach ausdrücklicher Freigabe (allowBuilds unten).
 strictDepBuilds: true
 dangerouslyAllowAllBuilds: false
+sideEffectsCache: false
+# Skripte laufen nur mit einem zum Lockfile passenden node_modules.
+verifyDepsBeforeRun: error
+pmOnFail: download
 savePrefix: ''
+audit:
+  level: high
 
+# Install-Skripte, die laufen dürfen (alle anderen sind gesperrt):
+#   @prisma/engines  lädt die Schema-Engine für `prisma migrate` (Entwicklung);
+#                    das Image tcms-api enthält das Paket nicht.
+#   prisma           prüft beim Installieren die Node-Version.
+#   esbuild          prüft bzw. installiert die native Binärdatei (Build, tsx).
+#   sharp            native Bildverarbeitung von Next.js (nur Demo apps/web).
+#   unrs-resolver    gesperrt: optionaler nativer Resolver, nicht benötigt.
 allowBuilds:
-  '@prisma/client': true
   '@prisma/engines': true
   prisma: true
   esbuild: true
