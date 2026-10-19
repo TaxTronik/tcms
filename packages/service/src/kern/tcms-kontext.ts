@@ -26,6 +26,7 @@ import {
   KontextEingabeSchema,
   type Akteur,
   type KontextEingabe,
+  type PflichtattributLuecke,
 } from '@tcms/contract';
 import type { Prisma } from '@tcms/db';
 import {
@@ -165,6 +166,8 @@ export interface KontrolleView {
   letzte: DurchfuehrungView | null;
   naechste: DurchfuehrungView | null;
   pflichtattributeOk: boolean;
+  /** Fehlende Pflichtattribute (`pflichtattributLuecken`); leer genau bei `pflichtattributeOk`. */
+  pflichtattributeLuecken: PflichtattributLuecke[];
 }
 
 export interface DurchfuehrungView {
@@ -422,6 +425,39 @@ function gueltig<T extends { gueltigAb: Date; gueltigBis: Date | null }>(
         (s.gueltigBis == null || s.gueltigBis.getTime() > ende.getTime()),
     )
     .sort((a, b) => b.gueltigAb.getTime() - a.gueltigAb.getTime())[0];
+}
+
+/**
+ * Fehlende Pflichtattribute eines Kontrollstands (Fachkonzept §6), in der
+ * festen Reihenfolge des Vertrags: Ziel, Schritte, Nachweisanforderung,
+ * durchführende Person, Vertretung (verschieden), bei Schlüsselkontrollen eine
+ * Gegenzeichnung (andere Person oder beim Mandanten). Einzige Quelle für
+ * `pflichtattributeOk` und die Liste.
+ */
+export function pflichtattributLuecken(ks: {
+  ziel: string;
+  schritte: readonly unknown[];
+  nachweis: string;
+  durchfuehrendId: string | null;
+  vertretungId: string | null;
+  gegenzeichnerId: string | null;
+  gegenzeichnungMandant: boolean;
+  schluessel: boolean;
+}): PflichtattributLuecke[] {
+  const luecken: PflichtattributLuecke[] = [];
+  if (!ks.ziel) luecken.push('Ziel');
+  if (ks.schritte.length === 0) luecken.push('Schritte');
+  if (!ks.nachweis) luecken.push('Nachweisanforderung');
+  if (!ks.durchfuehrendId) luecken.push('durchführende Person');
+  if (!ks.vertretungId || ks.vertretungId === ks.durchfuehrendId)
+    luecken.push('Vertretung (verschieden von der durchführenden Person)');
+  if (
+    ks.schluessel &&
+    !ks.gegenzeichnungMandant &&
+    (!ks.gegenzeichnerId || ks.gegenzeichnerId === ks.durchfuehrendId)
+  )
+    luecken.push('Gegenzeichnung (Pflicht bei Schlüsselkontrollen)');
+  return luecken;
 }
 
 /** Nachlauf nach dem Wirksamkeitszeitraum: Fälligkeiten bis 60 Tage nach dessen Ende zählen mit. */
@@ -787,6 +823,7 @@ function berechne(
       sortiert.find((d) => d.anzeige === 'GEPLANT') ??
       null;
     const schritte = (ks.schritte as unknown as Schritt[]) ?? [];
+    const luecken = pflichtattributLuecken({ ...ks, schritte });
     kontrollen.push({
       id: k.id,
       code: k.code,
@@ -822,16 +859,8 @@ function berechne(
       betrieb,
       letzte: letzte ? stripD(letzte) : null,
       naechste: naechste ? stripD(naechste) : null,
-      pflichtattributeOk:
-        !!ks.ziel &&
-        schritte.length > 0 &&
-        !!ks.nachweis &&
-        !!ks.durchfuehrendId &&
-        !!ks.vertretungId &&
-        ks.durchfuehrendId !== ks.vertretungId &&
-        (!ks.schluessel ||
-          (!!ks.gegenzeichnerId && ks.gegenzeichnerId !== ks.durchfuehrendId) ||
-          ks.gegenzeichnungMandant),
+      pflichtattributeOk: luecken.length === 0,
+      pflichtattributeLuecken: luecken,
     });
   }
   kontrollen.sort((a, b) => a.code.localeCompare(b.code));

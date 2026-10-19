@@ -347,6 +347,10 @@ nur Kanzleipersonen mit `cli.id` = Mandant; Lesen mit `?stand=YYYY-MM-DD`, Schre
 
 Versionierte Änderungen beruhen auf dem gesehenen Stand: Ist inzwischen ein anderer Stand gültig,
 antwortet der Dienst mit `409 KONFLIKT`; gleichzeitige Entscheidungen wirken genau einmal.
+Kontrollen (Kontrollmatrix, Kontrolldetail und Kontext) tragen neben `pflichtattributeOk` die Liste
+`pflichtattributeLuecken` (feste Texte `PFLICHTATTRIBUT_LUECKEN`: Ziel, Schritte, Nachweisanforderung,
+durchführende Person, verschiedene Vertretung, Gegenzeichnung bei Schlüsselkontrollen); beide Felder
+kommen aus derselben Regel, `pflichtattributeOk` ist genau bei leerer Liste `true`.
 `…/verantwortliche` nimmt zusätzlich die gesehene Seite `partei` (`KANZLEI`/`MANDANT`): Die Personen
 werden gegen sie geprüft, und unter der Zeilensperre muss sie zum Kontrollstand passen (sonst `409`);
 `gegenzeichnungMandant` nur bei `partei: 'MANDANT'` (sonst `400`).

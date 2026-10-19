@@ -8,13 +8,16 @@
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
+  KontextAntwortSchema,
   KontrolleDetailSchema,
   KontrollenListeSchema,
   ProfilDatenSchema,
   RisikenListeSchema,
   RisikoDetailSchema,
 } from '@tcms/contract';
+import { mitTenant } from '@tcms/db';
 import type { DienstKontext } from '../../../kontext';
+import { leseKontext } from '../../lesepfade/kontext';
 import { ladeKontrolle, ladeKontrollen, ladeProfil, ladeRisiken, ladeRisiko } from '../lesen';
 import {
   akteureVon,
@@ -27,6 +30,7 @@ import {
 } from './fixture';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
+const inTenant = mitTenant;
 
 /** Das Ergebnis ist reines JSON (keine Date/Map/Set, keine undefined-Felder). */
 function istJson(x: unknown) {
@@ -93,6 +97,38 @@ describe.skipIf(!AKTIV)('Lader risiken-kontrollen', () => {
     istJson(d);
     expect(d.staende[0]!.aenderungen).toEqual(['Kontrolle angelegt']);
     expect(d.durchfuehrungen.length).toBeGreaterThan(0);
+  });
+
+  it('Pflichtattribute: Lücken als Liste neben pflichtattributeOk, eine Regel für Matrix und Kontext', async () => {
+    const { hb } = akteureVon(b);
+    const kontrolleId = [...b.kontrollen.values()][0]!;
+    // Stand mit Lücken: kein Ziel, Vertretung = durchführende Person.
+    await inTenant(tenant, async (tx) => {
+      const s = await tx.kontrolleStand.findFirstOrThrow({
+        where: { kontrolleId, gueltigBis: null },
+      });
+      await tx.kontrolleStand.update({
+        where: { id: s.id },
+        data: { ziel: '', vertretungId: s.durchfuehrendId },
+      });
+    });
+    const l = await rufe(hb, (ctx) => ladeKontrollen(ctx, { mandantId: b.mandantId }));
+    expect(KontrollenListeSchema.parse(l)).toEqual(l);
+    const k = l.kontrollen.find((x) => x.id === kontrolleId)!;
+    expect(k.pflichtattributeOk).toBe(false);
+    expect(k.pflichtattributeLuecken).toEqual([
+      'Ziel',
+      'Vertretung (verschieden von der durchführenden Person)',
+    ]);
+    for (const x of l.kontrollen)
+      expect(x.pflichtattributeOk, x.code).toBe(x.pflichtattributeLuecken.length === 0);
+    // Lesepfad Kontext: dieselbe Liste aus derselben Regel.
+    const kontext = await rufe(hb, (ctx) => leseKontext(ctx, { mandantId: b.mandantId }));
+    expect(KontextAntwortSchema.parse(kontext)).toEqual(kontext);
+    for (const x of kontext.kontrollen)
+      expect(x.pflichtattributeLuecken, x.code).toEqual(
+        l.kontrollen.find((y) => y.id === x.id)!.pflichtattributeLuecken,
+      );
   });
 
   it('Profil: Stände, Vorschläge mit Entscheidung', async () => {

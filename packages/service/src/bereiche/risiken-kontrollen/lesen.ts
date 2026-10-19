@@ -525,6 +525,7 @@ function kontrolleEintrag(
     letzte: x.letzte ? durchfuehrungKurz(x.letzte, fj) : null,
     naechste: x.naechste ? durchfuehrungKurz(x.naechste, fj) : null,
     pflichtattributeOk: x.pflichtattributeOk,
+    pflichtattributeLuecken: [...x.pflichtattributeLuecken],
   };
 }
 

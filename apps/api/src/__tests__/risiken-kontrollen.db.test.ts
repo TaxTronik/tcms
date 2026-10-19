@@ -297,6 +297,9 @@ describe.skipIf(!AKTIV)('API risiken-kontrollen gegen PostgreSQL', () => {
   it('GET /kontrollen und /kontrollen/:kontrolleId', async () => {
     const l = await kontrollen();
     expect(l.kontrollen).toHaveLength(a.kontrollen.size);
+    // Pflichtattribute: Lückenliste und Kennzeichen aus derselben Regel.
+    for (const x of l.kontrollen)
+      expect(x.pflichtattributeOk, x.code).toBe(x.pflichtattributeLuecken.length === 0);
     const id = l.kontrollen[0]!.id;
     const d = await rufe('GET', p(a, `/kontrollen/${id}`), wer(a, 'hb'));
     expect(erwarte(KontrolleDetailSchema, d.antwort).kontrolle.id).toBe(id);

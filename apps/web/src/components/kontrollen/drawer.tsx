@@ -165,19 +165,9 @@ export function KontrolleDrawer({
     .reverse()
     .slice(0, 3)
     .reverse();
-  const luecken: string[] = [];
-  if (!k.ziel) luecken.push('Ziel');
-  if (k.schritte.length === 0) luecken.push('Schritte');
-  if (!k.nachweis) luecken.push('Nachweisanforderung');
-  if (!k.durchfuehrendId) luecken.push('durchführende Person');
-  if (!k.vertretungId || k.vertretungId === k.durchfuehrendId)
-    luecken.push('Vertretung (verschieden von der durchführenden Person)');
-  if (
-    k.schluessel &&
-    !k.gegenzeichnungMandant &&
-    (!k.gegenzeichnerId || k.gegenzeichnerId === k.durchfuehrendId)
-  )
-    luecken.push('Gegenzeichnung (Pflicht bei Schlüsselkontrollen)');
+  // Pflichtattribute prüft der Service (`pflichtattributeLuecken`); die
+  // Designbeurteilung zeigt die Demo zusätzlich als Lücke an.
+  const luecken: string[] = [...k.pflichtattributeLuecken];
   if (k.design === 'NICHT_BEURTEILT') luecken.push('Designbeurteilung');
 
   // Der Anlass-Anteil der Mindestfrequenz kann aus einem anderen Risiko stammen als der Turnus.

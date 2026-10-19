@@ -105,6 +105,9 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
           : [],
       );
       expect(k.zeitraum!.nachweise).toBeGreaterThan(0);
+      // Pflichtattribute: Lückenliste neben dem Kennzeichen (eine Regel).
+      for (const x of k.kontrollen)
+        expect(x.pflichtattributeOk, x.code).toBe(x.pflichtattributeLuecken.length === 0);
     });
 
     it('falscher Mandant im Pfad: 404 (Bindung an cli.id)', async () => {

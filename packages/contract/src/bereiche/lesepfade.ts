@@ -229,6 +229,23 @@ const risikoSicht = z
   })
   .strict();
 
+/**
+ * Fehlende Pflichtattribute einer Kontrolle (Fachkonzept §6), feste Texte in
+ * fester Reihenfolge. `pflichtattributeOk` ist genau dann `true`, wenn die
+ * Liste leer ist (eine Regel im Dienst, beide Felder daraus). Die
+ * Designbeurteilung ist kein Pflichtattribut (eigenes Feld `design`).
+ */
+export const PFLICHTATTRIBUT_LUECKEN = [
+  'Ziel',
+  'Schritte',
+  'Nachweisanforderung',
+  'durchführende Person',
+  'Vertretung (verschieden von der durchführenden Person)',
+  'Gegenzeichnung (Pflicht bei Schlüsselkontrollen)',
+] as const;
+export const PflichtattributLueckeSchema = z.enum(PFLICHTATTRIBUT_LUECKEN);
+export type PflichtattributLuecke = z.infer<typeof PflichtattributLueckeSchema>;
+
 const kontrolleSicht = z
   .object({
     id: objektId,
@@ -282,6 +299,8 @@ const kontrolleSicht = z
     letzte: durchfuehrungSicht.nullable(),
     naechste: durchfuehrungSicht.nullable(),
     pflichtattributeOk: z.boolean(),
+    /** Fehlende Pflichtattribute; leer genau bei `pflichtattributeOk`. */
+    pflichtattributeLuecken: z.array(PflichtattributLueckeSchema),
   })
   .strict();
 

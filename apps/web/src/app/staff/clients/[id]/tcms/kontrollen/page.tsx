@@ -243,7 +243,11 @@ export default async function Kontrollmatrix({
                           )}
                         </div>
                         {!k.pflichtattributeOk ? (
-                          <div className="text-11" style={{ color: '#b42318' }}>
+                          <div
+                            className="text-11"
+                            style={{ color: '#b42318' }}
+                            title={k.pflichtattributeLuecken.join(', ')}
+                          >
                             Pflichtattribute unvollständig
                           </div>
                         ) : null}

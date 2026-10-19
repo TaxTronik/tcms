@@ -21,7 +21,7 @@
 // =============================================================================
 
 import { z } from 'zod';
-import { StandSchema } from './lesepfade';
+import { PflichtattributLueckeSchema, StandSchema } from './lesepfade';
 import { FreigabeZustellungSchema } from './zustellung';
 
 // -----------------------------------------------------------------------------
@@ -820,6 +820,8 @@ export const KontrolleEintragSchema = z
     letzte: KontrollDurchfuehrungSchema.nullable(),
     naechste: KontrollDurchfuehrungSchema.nullable(),
     pflichtattributeOk: z.boolean(),
+    /** Fehlende Pflichtattribute (feste Texte); leer genau bei `pflichtattributeOk`. */
+    pflichtattributeLuecken: z.array(PflichtattributLueckeSchema),
   })
   .strict();
 
