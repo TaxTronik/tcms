@@ -6,10 +6,27 @@
 # des Laufzeitbaums, Start mit `node` aus einem fremden Arbeitsverzeichnis,
 # Health, signierte Anfrage, Container-Healthcheck und geordnetes Beenden.
 #
+# Zwei Arten, die Datenbank zu wählen (genau eine):
+#
 #   DATABASE_URL=postgresql://tcms_app:…@host/db scripts/simuliere-image.sh <arbeitsverzeichnis>
 #
-# DATABASE_URL: Laufzeitrolle tcms_app einer mit tcms-migrate aufgebauten
-# Datenbank, mit starkem Passwort (der Dienst läuft mit NODE_ENV=production).
+#     Laufzeitrolle tcms_app einer mit tcms-migrate aufgebauten Datenbank, mit
+#     starkem Passwort (der Dienst läuft mit NODE_ENV=production).
+#
+#   TCMS_SIM_PGHOST=127.0.0.1 TCMS_SIM_PGPORT=55433 TCMS_SIM_PGUSER=postgres \
+#     [TCMS_SIM_PGPASSWORD=…] [TCMS_SIM_PASSWOERTER_DANACH=entwicklung] \
+#     scripts/simuliere-image.sh <arbeitsverzeichnis>
+#
+#     Eigener Cluster (tcms-s9, scripts/sim-datenbank.sh): Das Skript legt eine
+#     eigene Datenbank `tcms_sim_<zufall>` an, baut sie mit tcms-migrate auf
+#     (starke Einmalpasswörter für tcms_owner und tcms_app, nur in der
+#     Prozessumgebung), startet den Dienst dagegen und löscht sie am Ende, auch
+#     nach einem Fehler. Fremde Datenbanken bleiben unberührt; die Rollen sind
+#     aber clusterweit – nur auf einem eigenen Test-Cluster und nie gleichzeitig
+#     mit anderen Läufen, die Rollenpasswörter setzen (z. B. unter `flock`).
+#     TCMS_SIM_PASSWOERTER_DANACH=entwicklung setzt danach die
+#     Entwicklungspasswörter (= Rollenname) wieder.
+#
 # Dienst-Token und Schlüssel erzeugt das Skript je Lauf; Geheimnisse gehen nur
 # über die Umgebung an Kindprozesse, nie in Kommandozeilen oder die Ausgabe.
 # =============================================================================
@@ -19,15 +36,49 @@ umask 077
 WURZEL="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 ARBEIT="${1:?Aufruf: simuliere-image.sh <arbeitsverzeichnis>}"
 VERSION="${TCMS_VERSION:-0.0.0-sim}"
-[[ -n ${DATABASE_URL:-} ]] || {
-  echo 'simuliere-image: DATABASE_URL (tcms_app) fehlt' >&2
-  exit 64
-}
+# Genau eine Datenbankwahl; alles geprüft, bevor etwas gebaut oder angelegt wird.
+SIM_MODUS=0
+if [[ -n ${TCMS_SIM_PGHOST:-}${TCMS_SIM_PGPORT:-}${TCMS_SIM_PGUSER:-} ]]; then SIM_MODUS=1; fi
+if ((SIM_MODUS)); then
+  [[ -z ${DATABASE_URL:-} ]] || {
+    echo 'simuliere-image: entweder DATABASE_URL oder TCMS_SIM_PG* setzen, nicht beides' >&2
+    exit 64
+  }
+  SIM_WURZEL=$WURZEL
+  # shellcheck source=scripts/sim-datenbank.sh
+  source "$WURZEL/scripts/sim-datenbank.sh"
+  sim_db_pruefen || exit $?
+else
+  [[ -n ${DATABASE_URL:-} ]] || {
+    echo 'simuliere-image: DATABASE_URL (tcms_app) oder TCMS_SIM_PG* fehlt' >&2
+    exit 64
+  }
+fi
 [[ ! -e $ARBEIT ]] || {
   echo "simuliere-image: $ARBEIT existiert bereits" >&2
   exit 64
 }
 schritt() { printf '\n== %s\n' "$*"; }
+
+# Beim Beenden (auch nach einem Fehler): Dienst stoppen, eigene Datenbank löschen.
+DIENST=''
+aufraeumen() {
+  local status=$?
+  if [[ -n $DIENST ]]; then kill "$DIENST" 2>/dev/null || true; fi
+  if ((SIM_MODUS)); then
+    sim_db_entfernen || status=1
+  fi
+  exit "$status"
+}
+trap aufraeumen EXIT
+
+# Zuerst die eigene Datenbank: Ein Fehler hier bricht vor dem langen Build ab,
+# ein Fehler danach löscht sie wieder (aufraeumen).
+if ((SIM_MODUS)); then
+  schritt 'Eigene Datenbank mit tcms-migrate (eigener Cluster)'
+  sim_db_anlegen || exit $?
+  DATABASE_URL=$SIM_DB_URL
+fi
 
 schritt 'Build-Kontext nach .dockerignore'
 node "$WURZEL/scripts/docker-kontext.mjs" --kopiere "$ARBEIT/kontext"
@@ -82,7 +133,6 @@ node -e "
   exec node --enable-source-maps "$ARBEIT/app/dist/server.mjs"
 ) >"$ARBEIT/dienst.log" 2>&1 &
 DIENST=$!
-trap 'kill $DIENST 2>/dev/null || true' EXIT
 
 healthcheck() {
   (
@@ -139,10 +189,10 @@ schritt 'GET /v1/health mit Token und signierte Anfrage GET /v1/ich'
 )
 
 schritt 'SIGTERM: geordnetes Ende'
-kill -TERM $DIENST
+kill -TERM "$DIENST"
 code=0
-wait $DIENST || code=$?
-trap - EXIT
+wait "$DIENST" || code=$?
+DIENST=''
 echo "Exit-Code nach SIGTERM: $code"
 [[ $code -eq 0 ]]
 if healthcheck 2>/dev/null; then
@@ -158,6 +208,14 @@ fi
 if grep -qFf "$ARBEIT/codeschluessel" "$ARBEIT/dienst.log"; then
   echo 'Code-Schlüssel im Log des Dienstes' >&2
   exit 1
+fi
+# Einmalpasswörter der eigenen Datenbank: Vergleich in der Shell (kein grep-Argument).
+if ((SIM_MODUS)); then
+  log=$(<"$ARBEIT/dienst.log")
+  if [[ $log == *"$SIM_APP_PW"* || $log == *"$SIM_OWNER_PW"* ]]; then
+    echo 'Rollenpasswort im Log des Dienstes' >&2
+    exit 1
+  fi
 fi
 grep -o '"ereignis":"[a-z_]*"' "$ARBEIT/dienst.log" | sort | uniq -c
 schritt 'Simulation erfolgreich'

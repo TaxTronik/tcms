@@ -539,10 +539,28 @@ TCMS_DB_SUPERUSER_URL=postgresql://postgres@localhost:5433/tcms \
 
 Ohne Docker prüfbar: `pnpm image:pruefen` (Regeln für Dockerfile und `.dockerignore`) und
 `DATABASE_URL=<tcms_app> scripts/simuliere-image.sh <verzeichnis>` (Build-Schritte auf dem
-Build-Kontext, Start des Bundles mit `node`, Health, signierte Anfrage, `SIGTERM`). Die Tests des
-Läufers setzen clusterweite Rollenpasswörter und laufen daher nur auf Anforderung gegen eine
-Testinstanz: `TCMS_MIGRATE_TESTS=1 TCMS_MIGRATE_TEST_SUPERUSER_URL=<superuser>/postgres pnpm --filter
-@tcms/db exec vitest run src/__tests__/migrate.db.test.ts`.
+Build-Kontext, Start des Bundles mit `node`, Health, signierte Anfrage, `SIGTERM`). Ohne eigene
+Datenbank nimmt das Skript stattdessen den Superuser eines eigenen Test-Clusters und baut sich eine
+Datenbank selbst auf (`scripts/sim-datenbank.sh`):
+
+```bash
+TCMS_SIM_PGHOST=127.0.0.1 TCMS_SIM_PGPORT=55433 TCMS_SIM_PGUSER=postgres \
+  TCMS_SIM_PASSWOERTER_DANACH=entwicklung scripts/simuliere-image.sh /tmp/tcms-sim
+```
+
+Es legt `tcms_sim_<zufall>` an, baut sie mit `tcms-migrate` auf (starke Einmalpasswörter für
+`tcms_owner`/`tcms_app`, nur in der Prozessumgebung, nie in Kommandozeile, Datei oder Ausgabe),
+startet den Dienst dagegen und löscht die Datenbank am Ende, auch nach einem Fehler; fremde
+Datenbanken bleiben unberührt. `TCMS_SIM_PGPASSWORD` (optional) ist das Superuser-Passwort,
+`TCMS_SIM_PGDATABASE` die Wartungsdatenbank (Standard `postgres`). Die Rollen sind clusterweit: nur
+auf einem eigenen Test-Cluster, nie gleichzeitig mit anderen Läufen, die Rollenpasswörter setzen
+(z. B. unter `flock`); `TCMS_SIM_PASSWOERTER_DANACH=entwicklung` setzt danach die
+Entwicklungspasswörter wieder, sonst kennt niemand mehr die Passwörter der Rollen. `DATABASE_URL` und
+`TCMS_SIM_PG*` schließen sich aus. Die Tests des Läufers und der eigenen Simulationsdatenbank setzen
+ebenfalls clusterweite Rollenpasswörter und laufen daher nur auf Anforderung gegen eine Testinstanz:
+`TCMS_MIGRATE_TESTS=1 TCMS_MIGRATE_TEST_SUPERUSER_URL=<superuser>/postgres pnpm --filter @tcms/db exec
+vitest run src/__tests__/migrate.db.test.ts` bzw. `TCMS_SIM_TESTS=1 TCMS_SIM_PGHOST=… TCMS_SIM_PGPORT=…
+TCMS_SIM_PGUSER=… pnpm --filter @tcms/api exec vitest run src/__tests__/simulation.test.ts`.
 
 CI (`.forgejo/workflows/ci.yml`): Lieferketten-Prüfung (`scripts/pruefe-lieferkette.sh`) vor jeder
 Installation, frozen Lockfile, Format, Typecheck, Tests ohne und mit PostgreSQL 18 (Datenbank aus

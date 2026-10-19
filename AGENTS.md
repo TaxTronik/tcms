@@ -361,4 +361,8 @@ pnpm image:pruefen
 
 Änderungen am Migrationsläufer zusätzlich mit
 `TCMS_MIGRATE_TESTS=1 TCMS_MIGRATE_TEST_SUPERUSER_URL=…` gegen eine Testinstanz
-(setzt clusterweite Rollenpasswörter).
+(setzt clusterweite Rollenpasswörter). Die Image-Simulation läuft ohne fremde
+Datenbank mit `TCMS_SIM_PGHOST/PGPORT/PGUSER` gegen einen eigenen Test-Cluster
+(eigene Datenbank je Lauf, danach gelöscht; `TCMS_SIM_PASSWOERTER_DANACH=entwicklung`),
+Änderungen daran zusätzlich mit `TCMS_SIM_TESTS=1` (`apps/api/src/__tests__/simulation.test.ts`)
+– beides nie parallel zu anderen Läufen auf demselben Cluster.
