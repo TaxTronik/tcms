@@ -4,6 +4,7 @@
 // als dünne Hüllen um @tcms/service, Portal-Meldung mit Datei (Demo-Ablage,
 // Verweis im Audit), Download der Anlage über den Service mit SHA-256-Prüfung
 // (TS-09), Folgen aus dem Formular (TS-04 auf dem Demo-Weg), Länder-Formular.
+// Wiederholbar: verbrauchte Demodaten (Länderstand) räumt der Test wieder ab.
 // Next-Module (Cookies, Revalidierung, Redirect) sind durch Attrappen ersetzt.
 // =============================================================================
 
@@ -197,6 +198,12 @@ describe.skipIf(!AKTIV)('Demo feststellungen-ereignisse gegen PostgreSQL', () =>
   });
 
   it('Länder-Formular: Betrag in deutscher Schreibweise, neuer Stand, Umleitung', async () => {
+    // Malta ist nicht im Seed: Stände früherer Läufe entfernen (wiederholbar).
+    const entferneMalta = () =>
+      imDemo((tx) =>
+        tx.landStand.deleteMany({ where: { land: 'MT', programm: { mandantId: T } } }),
+      );
+    await entferneMalta();
     als(DEMO_IDS.leon);
     const fd = new FormData();
     fd.set('mandantId', T);
@@ -213,6 +220,7 @@ describe.skipIf(!AKTIV)('Demo feststellungen-ereignisse gegen PostgreSQL', () =>
     expect(s.oss).toBe(true);
     fd.set('fernverkaeufeLfdEur', 'viel');
     expect((await landHinzufuegen(null, fd))?.fehler).toMatch(/Betrag/);
+    await entferneMalta();
   });
 
   it('Vertraulich: Detail für Nicht-Beteiligte maskiert (Service), Schalter nur für BT', async () => {

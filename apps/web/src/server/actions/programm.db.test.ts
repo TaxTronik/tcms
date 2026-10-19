@@ -4,6 +4,8 @@
 // Hüllen um @tcms/service (Formular → Eingabe → Service → Meldung). Geprüft
 // werden Einrichtung (Bergkamm), Beschreibung mit Vier-Augen-Review,
 // Freigabe-Code über den Entwicklungs-Postausgang und Freigeben im Portal.
+// Vor dem Lauf wird Bergkamm auf „ohne Tax-CMS" zurückgesetzt (Eigentümerrolle,
+// `DATABASE_OWNER_URL`): zwei Läufe hintereinander sind grün.
 // Next-Module (Cookies, Revalidierung, Redirect) sind durch Attrappen ersetzt.
 // =============================================================================
 
@@ -11,6 +13,7 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEMO_IDS, DEMO_TENANT_ID } from '@tcms/db/demo';
 import { mitTenant } from '@tcms/db';
+import { setzeMandantOhneTcmsZurueck } from '../../test/demo-daten';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 
@@ -65,8 +68,9 @@ const imDemo = <T>(fn: Parameters<typeof mitTenant<T>>[1]) => mitTenant(DEMO_TEN
 const M = DEMO_IDS.bergkamm;
 
 describe.skipIf(!AKTIV)('Demo-Actions Einrichtung, Beschreibung, Freigaben', () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env['SESSION_SECRET'] ??= randomBytes(32).toString('hex');
+    await setzeMandantOhneTcmsZurueck(M);
   });
   beforeEach(() => {
     sitzung = '';

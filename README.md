@@ -126,6 +126,11 @@ DB_TESTS=1 \
 
 `DATABASE_SUPERUSER_URL` (optional) prüft zusätzlich die Abweisung einer Superuser-Verbindung.
 
+Die Web-DB-Tests (`DB_TESTS=1 pnpm --filter @tcms/web test`) laufen gegen eine geseedete Datenbank
+mit `DATABASE_URL` und `DATABASE_OWNER_URL`. Sie legen ihre Fixtures selbst an bzw. räumen
+verbrauchte Demodaten ab (Bergkamm wird vor dem Einrichtungstest über die Eigentümerrolle auf „ohne
+Tax-CMS" zurückgesetzt) und sind damit wiederholbar.
+
 ## Aufbau
 
 ```
