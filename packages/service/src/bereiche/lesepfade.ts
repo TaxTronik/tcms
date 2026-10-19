@@ -34,3 +34,5 @@ export { kontextAlsAntwort, kontextRechte, leseKontext } from './lesepfade/konte
 export { ladePortfolio, portfolioZeile } from './lesepfade/portfolio';
 export { ladeArbeitskorb } from './lesepfade/arbeitskorb';
 export { ladePortalUebersicht } from './lesepfade/portal';
+export { brauchtBearbeitung, setzeMandantAnker } from './lesepfade/mandant';
+export { ladeKontakte, setzeKontaktRollen } from './lesepfade/kontakte';

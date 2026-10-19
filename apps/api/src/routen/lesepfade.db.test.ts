@@ -9,7 +9,10 @@ import { randomUUID } from 'node:crypto';
 import {
   ArbeitskorbAntwortSchema,
   bodySha256,
+  KontakteAntwortSchema,
+  KontaktRollenAntwortSchema,
   KontextAntwortSchema,
+  MandantAnkerAntwortSchema,
   MAX_MANDANTEN_JE_ANFRAGE,
   PortalUebersichtAntwortSchema,
   PortfolioAntwortSchema,
@@ -121,6 +124,125 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
       const mitQuery = `${pfad}?stand=2026-01-01`;
       const q = await bestaetigtSenden(app(), { ziel: mitQuery, roheClaims: jana(mitQuery) });
       expect(q.status).toBe(400);
+    });
+  });
+
+  describe('Mandantenanker und Kontaktrollen', () => {
+    const tenant = randomUUID();
+    const mandant = randomUUID();
+    const ankerPfad = `/v1/mandanten/${mandant}`;
+    const kontaktPfad = `${ankerPfad}/kontakte`;
+    const admin = (over: Partial<AkteurClaims> = {}): Partial<AkteurClaims> => ({
+      tnt: tenant,
+      sub: randomUUID(),
+      rol: { adm: true, bt: true },
+      cli: { id: mandant, bt: false, hb: false },
+      ...over,
+    });
+    const ankerBody = JSON.stringify({ name: 'Neu GmbH', rechtsform: 'KapG', datevNr: '1234' });
+
+    it('PUT Anker: 200 (anlegen, dann unverändert)', async () => {
+      const put = () =>
+        bestaetigtSenden(app(), {
+          methode: 'PUT',
+          ziel: ankerPfad,
+          body: ankerBody,
+          claims: admin(),
+        });
+      const r1 = await put();
+      expect(r1.status).toBe(200);
+      expect(MandantAnkerAntwortSchema.parse((await json(r1))['daten']).angelegt).toBe(true);
+      const r2 = await put();
+      expect(MandantAnkerAntwortSchema.parse((await json(r2))['daten'])).toMatchObject({
+        angelegt: false,
+        geaendert: false,
+      });
+    });
+
+    it('PUT Anker: falscher Mandant 404, Mandantenperson 404, ohne Zuständigkeit 403, Body 400', async () => {
+      const fremd = await bestaetigtSenden(app(), {
+        methode: 'PUT',
+        ziel: `/v1/mandanten/${randomUUID()}`,
+        body: ankerBody,
+        claims: admin(),
+      });
+      expect(fremd.status).toBe(404);
+      const kontaktClaims = mandantClaims(mandant, {
+        tnt: tenant,
+        req: { m: 'PUT', p: ankerPfad, b: bodySha256(new TextEncoder().encode(ankerBody)) },
+      });
+      const k = await bestaetigtSenden(app(), {
+        methode: 'PUT',
+        ziel: ankerPfad,
+        body: ankerBody,
+        roheClaims: kontaktClaims,
+      });
+      expect(k.status).toBe(404);
+      const ohne = await bestaetigtSenden(app(), {
+        methode: 'PUT',
+        ziel: ankerPfad,
+        body: ankerBody,
+        claims: admin({ rol: { adm: false, bt: true } }),
+      });
+      expect(ohne.status).toBe(403);
+      for (const body of [
+        '{}',
+        JSON.stringify({ name: 'A', rechtsform: 'KapG', tenantId: randomUUID() }),
+        JSON.stringify({ name: 'A\u0000', rechtsform: 'KapG' }),
+      ]) {
+        const r = await bestaetigtSenden(app(), {
+          methode: 'PUT',
+          ziel: ankerPfad,
+          body,
+          claims: admin(),
+        });
+        expect(r.status, body).toBe(400);
+      }
+    });
+
+    it('PUT/GET Kontakte: 200, Mandantenperson 404, falscher Mandant 404, Body 400', async () => {
+      const kontaktId = randomUUID();
+      const body = JSON.stringify({
+        kontaktId,
+        rollen: ['GESETZLICHER_VERTRETER'],
+        funktion: 'GF',
+      });
+      const r = await bestaetigtSenden(app(), {
+        methode: 'PUT',
+        ziel: kontaktPfad,
+        body,
+        claims: admin(),
+      });
+      expect(r.status).toBe(200);
+      expect(KontaktRollenAntwortSchema.parse((await json(r))['daten']).geaendert).toBe(true);
+      const g = await bestaetigtSenden(app(), { ziel: kontaktPfad, claims: admin() });
+      expect(g.status).toBe(200);
+      const liste = KontakteAntwortSchema.parse((await json(g))['daten']);
+      expect(liste.kontakte.map((x) => x.kontaktId)).toContain(kontaktId);
+      // Der neue Kontakt ist jetzt GV, darf aber Staff-Endpunkte nie nutzen.
+      const kontaktGet = mandantClaims(mandant, {
+        tnt: tenant,
+        sub: kontaktId,
+        req: { m: 'GET', p: kontaktPfad, b: bodySha256(new Uint8Array()) },
+      });
+      expect(
+        (await bestaetigtSenden(app(), { ziel: kontaktPfad, roheClaims: kontaktGet })).status,
+      ).toBe(404);
+      const fremd = `/v1/mandanten/${randomUUID()}/kontakte`;
+      expect((await bestaetigtSenden(app(), { ziel: fremd, claims: admin() })).status).toBe(404);
+      for (const b of [
+        JSON.stringify({ kontaktId, rollen: ['GESETZLICHER_VERTRETER', 'GESETZLICHER_VERTRETER'] }),
+        JSON.stringify({ kontaktId: 'x', rollen: [] }),
+        JSON.stringify({ kontaktId, rollen: [], mandantId: randomUUID() }),
+      ]) {
+        const x = await bestaetigtSenden(app(), {
+          methode: 'PUT',
+          ziel: kontaktPfad,
+          body: b,
+          claims: admin(),
+        });
+        expect(x.status, b).toBe(400);
+      }
     });
   });
 

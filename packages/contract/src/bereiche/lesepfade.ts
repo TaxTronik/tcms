@@ -841,3 +841,96 @@ export const PortalUebersichtAntwortSchema = z
   .strict();
 
 export type PortalUebersichtAntwort = z.infer<typeof PortalUebersichtAntwortSchema>;
+
+// ---------------------------------------------------------------------------
+// Mandantenanker und Kontaktrollen (ADR 0001 §5): Pflege durch die kanzleikonsole
+// ---------------------------------------------------------------------------
+
+/** Einzeiliger Text ohne Steuerzeichen und Richtungszeichen (Anzeige-Spoofing). */
+const einzeilig = (max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .regex(/^[^\u0000-\u001f\u007f‪-‮⁦-⁩]*$/, 'Unzulässige Zeichen');
+
+/** Body von `PUT /v1/mandanten/:mandantId`: Stammdaten des Mandantenankers. */
+export const MandantAnkerBodySchema = z
+  .object({
+    name: einzeilig(200),
+    rechtsform: einzeilig(50),
+    datevNr: z
+      .string()
+      .regex(/^[0-9]{1,20}$/)
+      .nullable()
+      .default(null),
+  })
+  .strict();
+
+export const MandantAnkerEingabeSchema = MandantAnkerBodySchema.extend({
+  mandantId: z.uuid(),
+}).strict();
+export type MandantAnkerEingabe = z.input<typeof MandantAnkerEingabeSchema>;
+
+export const MandantAnkerAntwortSchema = z
+  .object({
+    mandant: z
+      .object({
+        id: z.uuid(),
+        name: text(200),
+        rechtsform: text(50),
+        datevNr: text(20).nullable(),
+        aktiv: z.boolean(),
+      })
+      .strict(),
+    /** true: neu angelegt; false: bestehender Anker (aktualisiert oder unverändert). */
+    angelegt: z.boolean(),
+    geaendert: z.boolean(),
+  })
+  .strict();
+export type MandantAnkerAntwort = z.infer<typeof MandantAnkerAntwortSchema>;
+
+/** Eingabe von `GET /v1/mandanten/:mandantId/kontakte`. */
+export const KontakteEingabeSchema = z.object({ mandantId: z.uuid() }).strict();
+export type KontakteEingabe = z.infer<typeof KontakteEingabeSchema>;
+
+const kontaktRollenSicht = z
+  .object({
+    kontaktId: z.uuid(),
+    rollen: z.array(
+      z
+        .object({ rolle: mandantRolle, aktiv: z.boolean(), funktion: text(200).nullable() })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export const KontakteAntwortSchema = z.object({ kontakte: z.array(kontaktRollenSicht) }).strict();
+export type KontakteAntwort = z.infer<typeof KontakteAntwortSchema>;
+
+/**
+ * Body von `PUT /v1/mandanten/:mandantId/kontakte`: Die aktiven Rollen des
+ * Kontakts beim Mandanten sind danach genau `rollen` (leer = Kontakt
+ * deaktivieren); `funktion` gilt für die gesetzten Rollen.
+ */
+export const KontaktRollenBodySchema = z
+  .object({
+    kontaktId: z.uuid(),
+    rollen: z
+      .array(mandantRolle)
+      .max(3)
+      .refine((r) => new Set(r).size === r.length, 'Rolle doppelt'),
+    funktion: einzeilig(200).nullable().default(null),
+  })
+  .strict();
+
+export const KontaktRollenEingabeSchema = KontaktRollenBodySchema.extend({
+  mandantId: z.uuid(),
+}).strict();
+export type KontaktRollenEingabe = z.input<typeof KontaktRollenEingabeSchema>;
+
+export const KontaktRollenAntwortSchema = kontaktRollenSicht
+  .extend({ geaendert: z.boolean() })
+  .strict();
+export type KontaktRollenAntwort = z.infer<typeof KontaktRollenAntwortSchema>;
