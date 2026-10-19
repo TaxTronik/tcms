@@ -225,6 +225,27 @@ Header-Werte und Bodys). Fremde Mandanten und nicht kanonische Pfade ergeben `40
 `GET /v1/health` braucht nur das Dienst-Token, `GET /v1/ich` liefert den abgeleiteten Akteur
 (Vertragstest).
 
+**Risikoinventar, Kontrollmatrix, Geschäftsprofil** (`apps/api/src/routen/risiken-kontrollen.ts`,
+nur Kanzleipersonen mit `cli.id` = Mandant; Lesen mit `?stand=YYYY-MM-DD`, Schreiben ohne Stichtag):
+
+| Methode | Pfad unter `/v1/mandanten/:mandantId`                                                           | Recht                                   |
+| ------- | ----------------------------------------------------------------------------------------------- | --------------------------------------- |
+| GET     | `/risiken`, `/risiken/:risikoId`                                                                | Lesen                                   |
+| POST    | `/risiken/:risikoId/neu-bewerten`, `…/bewertung-bestaetigen`                                    | Bearbeiten, gesehener Stand (`standId`) |
+| POST    | `/risiken/:risikoId/uebersteuerungen` (201)                                                     | Bearbeiten                              |
+| POST    | `/uebersteuerungen/:uebersteuerungId/entscheiden`                                               | Bearbeiten, zweite Person               |
+| POST    | `/risiken-freigabe/einreichen`, `/risiken-freigabe/freigeben`                                   | Bearbeiten; Freigabe zweite Person      |
+| POST    | `/risiken/:risikoId/zurueckweisen`                                                              | Bearbeiten, zweite Person               |
+| POST    | `/risiken/:risikoId/akzeptanz-anfordern` (201)                                                  | Bearbeiten; Empfänger aktive GV         |
+| GET     | `/kontrollen`, `/kontrollen/:kontrolleId`                                                       | Lesen                                   |
+| POST    | `/kontrollen/:kontrolleId/design`, `…/abweichung`, `…/abweichung/aufheben`, `…/verantwortliche` | Bearbeiten, `standId`                   |
+| POST    | `/kontrollen/:kontrolleId/abweichung/entscheiden`                                               | Bearbeiten, zweite Person, `standId`    |
+| GET     | `/profil`                                                                                       | Lesen                                   |
+| POST    | `/profil` (`profilStandId`), `/profil/risiko-aufnehmen` (201)                                   | Bearbeiten                              |
+
+Versionierte Änderungen beruhen auf dem gesehenen Stand: Ist inzwischen ein anderer Stand gültig,
+antwortet der Dienst mit `409 KONFLIKT`; gleichzeitige Entscheidungen wirken genau einmal.
+
 Tests: `pnpm --filter @tcms/api test`. Die PostgreSQL-Tests laufen gegen eine Datenbank, die wie in
 Produktion aufgebaut ist (Bootstrap und Migration wie oben unter „Datenbank“), ausschließlich als
 Laufzeitrolle `tcms_app`:
