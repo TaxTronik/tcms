@@ -1,0 +1,22 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+# Flaches node_modules wie in der kanzleikonsole: Prisma-CLI, tsx und pg
+# liegen direkt unter node_modules/.
+nodeLinker: hoisted
+
+# Lieferketten-Härtung (an die kanzleikonsole angelehnt): frische Releases
+# verzögern, Build-Skripte nur nach ausdrücklicher Freigabe.
+minimumReleaseAge: 10080 # 7 Tage
+strictDepBuilds: true
+dangerouslyAllowAllBuilds: false
+savePrefix: ''
+
+allowBuilds:
+  '@prisma/client': true
+  '@prisma/engines': true
+  prisma: true
+  esbuild: true
+  sharp: true
+  unrs-resolver: false

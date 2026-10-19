@@ -1,0 +1,774 @@
+// =============================================================================
+// Tax-CMS — Prisma-Schema (Stufe 1)
+//
+// Versionierte Objekte führen ihre fachlichen Attribute in *Stand-Tabellen mit
+// gueltigAb/gueltigBis. Der Stand zu einem Stichtag ist damit rekonstruierbar;
+// Änderungen schließen den aktuellen Stand und legen einen neuen an.
+// Abgeschlossene Durchführungen und Audit-Einträge werden nie geändert.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Personen und Mandanten
+// ---------------------------------------------------------------------------
+
+enum PersonArt {
+  KANZLEI
+  MANDANT
+}
+
+enum KanzleiRolle {
+  BERUFSTRAEGER
+  BEARBEITUNG
+}
+
+enum MandantRolle {
+  GESETZLICHER_VERTRETER
+  TAX_COMPLIANCE_BEAUFTRAGTER
+  MITARBEITER
+}
+
+model Person {
+  id           String        @id @default(cuid())
+  name         String
+  kuerzel      String
+  email        String        @unique
+  art          PersonArt
+  kanzleiRolle KanzleiRolle?
+  istAdmin     Boolean       @default(false)
+  mandantId    String?
+  mandant      Mandant?      @relation("MandantPersonen", fields: [mandantId], references: [id])
+  mandantRolle MandantRolle?
+  funktion     String?
+  telefon      String?
+  aktiv        Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+
+  @@index([mandantId])
+}
+
+model Mandant {
+  id              String         @id @default(cuid())
+  name            String
+  rechtsform      String
+  datevNr         String?
+  aktiv           Boolean        @default(true)
+  berufstraegerId String
+  bearbeitungId   String
+  personen        Person[]       @relation("MandantPersonen")
+  programme       TcmsProgramm[]
+  createdAt       DateTime       @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Tax-CMS-Programm, Teilbereich, Profil, Ziele
+// ---------------------------------------------------------------------------
+
+enum Turnus {
+  KEIN
+  JAEHRLICH
+  QUARTALSWEISE
+  MONATLICH
+}
+
+enum ProgrammStatus {
+  ENTWURF
+  AKTIV
+}
+
+model TcmsProgramm {
+  id                     String             @id @default(cuid())
+  mandantId              String
+  mandant                Mandant            @relation(fields: [mandantId], references: [id])
+  paketId                String
+  paketVersion           String
+  status                 ProgrammStatus     @default(ENTWURF)
+  /// Erklärungsturnus für „jede Periode" (FP) der Häufigkeitsmatrix.
+  erklaerungsTurnus      Turnus             @default(MONATLICH)
+  angemessenheitStichtag DateTime?          @db.Date
+  wirksamAb              DateTime?          @db.Date
+  wirksamBis             DateTime?          @db.Date
+  /// Entwurfsstand des Einrichtungsassistenten (Schritte 1–5).
+  setupEntwurf           Json?
+  version1Am             DateTime?
+  createdAt              DateTime           @default(now())
+  teilbereiche           Teilbereich[]
+  profile                ProfilStand[]
+  risiken                Risiko[]
+  kontrollen             Kontrolle[]
+  feststellungen         Feststellung[]
+  ereignisse             Ereignis[]
+  laender                LandStand[]
+  beschreibungen         BeschreibungVersion[]
+  freigaben              Freigabe[]
+
+  @@index([mandantId])
+}
+
+model Teilbereich {
+  id           String          @id @default(cuid())
+  programmId   String
+  programm     TcmsProgramm    @relation(fields: [programmId], references: [id])
+  name         String
+  abgrenzung   String
+  einschluesse String[]
+  ausschluesse String[]
+  createdAt    DateTime        @default(now())
+  ziele        ComplianceZiel[]
+
+  @@index([programmId])
+}
+
+model ProfilStand {
+  id          String       @id @default(cuid())
+  programmId  String
+  programm    TcmsProgramm @relation(fields: [programmId], references: [id])
+  antworten   Json
+  gueltigAb   DateTime
+  gueltigBis  DateTime?
+  erstelltVon String?
+  createdAt   DateTime     @default(now())
+
+  @@index([programmId, gueltigAb])
+}
+
+enum Klasse {
+  GERING
+  MITTEL
+  HOCH
+  KRITISCH
+}
+
+enum FreigabeStand {
+  ENTWURF
+  AUSSTEHEND
+  FREIGEGEBEN
+}
+
+model ComplianceZiel {
+  id                String        @id @default(cuid())
+  teilbereichId     String
+  teilbereich       Teilbereich   @relation(fields: [teilbereichId], references: [id])
+  text              String
+  wesentlichkeitEur Int
+  risikoappetit     Klasse        @default(MITTEL)
+  freigabe          FreigabeStand @default(ENTWURF)
+  freigegebenAm     DateTime?
+  freigegebenVon    String?
+  createdAt         DateTime      @default(now())
+
+  @@index([teilbereichId])
+}
+
+// ---------------------------------------------------------------------------
+// Risiken (versioniert)
+// ---------------------------------------------------------------------------
+
+enum Herkunft {
+  KATALOG
+  BERATER
+}
+
+enum RisikoEntscheidung {
+  VORGESCHLAGEN
+  UEBERNOMMEN
+  ABGELEHNT
+}
+
+enum RisikoFreigabe {
+  IDENTIFIZIERT
+  BEWERTET
+  ZUR_FREIGABE
+  FREIGEGEBEN
+}
+
+enum Schaden {
+  N
+  M
+  H
+}
+
+enum Wahrscheinlichkeit {
+  SELTEN
+  MOEGLICH
+  WAHRSCHEINLICH
+  HAEUFIG
+}
+
+enum GovernanceTyp {
+  FP
+  FF
+  IN
+}
+
+model Risiko {
+  id                   String             @id @default(cuid())
+  programmId           String
+  programm             TcmsProgramm       @relation(fields: [programmId], references: [id])
+  code                 String
+  herkunft             Herkunft           @default(KATALOG)
+  kern                 Boolean            @default(false)
+  entscheidung         RisikoEntscheidung @default(VORGESCHLAGEN)
+  vorschlagsgrund      String?
+  ablehnungsgrund      String?
+  freigabe             RisikoFreigabe     @default(IDENTIFIZIERT)
+  freigabeEingereichtVon String?
+  freigegebenVon       String?
+  freigegebenAm        DateTime?
+  ownerId              String?
+  /// Durch Ereignis-Triage zur Neubewertung markiert.
+  neuBewerten          Boolean            @default(false)
+  aktivAb              DateTime
+  inaktivAb            DateTime?
+  createdAt            DateTime           @default(now())
+  staende              RisikoStand[]
+  kontrollen           RisikoKontrolle[]
+  uebersteuerungen     Uebersteuerung[]
+  feststellungen       FeststellungRisiko[]
+
+  @@unique([programmId, code])
+}
+
+model RisikoStand {
+  id           String             @id @default(cuid())
+  risikoId     String
+  risiko       Risiko             @relation(fields: [risikoId], references: [id])
+  titel        String
+  fehlerquelle String
+  folge        String
+  normanker    Json
+  s            Schaden
+  w            Wahrscheinlichkeit
+  r            Int
+  gt           GovernanceTyp
+  modell       String
+  gueltigAb    DateTime
+  gueltigBis   DateTime?
+  erstelltVon  String?
+  createdAt    DateTime           @default(now())
+
+  @@index([risikoId, gueltigAb])
+}
+
+enum UebersteuerungSicht {
+  DESIGN
+  BETRIEB
+}
+
+enum UebersteuerungStatus {
+  BEANTRAGT
+  FREIGEGEBEN
+  ABGELEHNT
+  AUFGEHOBEN
+}
+
+model Uebersteuerung {
+  id             String               @id @default(cuid())
+  risikoId       String
+  risiko         Risiko               @relation(fields: [risikoId], references: [id])
+  sicht          UebersteuerungSicht
+  klasse         Klasse
+  berechnet      Klasse
+  begruendung    String
+  status         UebersteuerungStatus @default(BEANTRAGT)
+  beantragtVon   String
+  beantragtAm    DateTime             @default(now())
+  entschiedenVon String?
+  entschiedenAm  DateTime?
+
+  @@index([risikoId])
+}
+
+// ---------------------------------------------------------------------------
+// Kontrollen (versioniert) und Durchführungen
+// ---------------------------------------------------------------------------
+
+enum KontrollArt {
+  P
+  D
+  K
+}
+
+enum Ausfuehrung {
+  M
+  IT
+  A
+}
+
+enum Partei {
+  KANZLEI
+  MANDANT
+}
+
+enum Design {
+  ANGEMESSEN
+  NICHT_BEURTEILT
+  MANGEL
+}
+
+model Kontrolle {
+  id               String            @id @default(cuid())
+  programmId       String
+  programm         TcmsProgramm      @relation(fields: [programmId], references: [id])
+  code             String
+  herkunft         Herkunft          @default(KATALOG)
+  aktivAb          DateTime
+  entfallenAb      DateTime?
+  createdAt        DateTime          @default(now())
+  staende          KontrolleStand[]
+  risiken          RisikoKontrolle[]
+  durchfuehrungen  Durchfuehrung[]
+
+  @@unique([programmId, code])
+}
+
+model KontrolleStand {
+  id                    String       @id @default(cuid())
+  kontrolleId           String
+  kontrolle             Kontrolle    @relation(fields: [kontrolleId], references: [id])
+  version               Int
+  titel                 String
+  ziel                  String
+  art                   KontrollArt
+  ausfuehrung           Ausfuehrung
+  vorlageTurnus         Turnus
+  vorlageAnlass         Boolean
+  /// Abweichung unter die Matrixfrequenz (nur mit Begründung + zweiter Person).
+  abweichungTurnus      Turnus?
+  abweichungAnlass      Boolean?
+  abweichungBegruendung String?
+  abweichungFreigegebenVon String?
+  partei                Partei
+  schluessel            Boolean
+  durchfuehrendId       String?
+  vertretungId          String?
+  gegenzeichnerId       String?
+  /// Gegenzeichnung durch zweite Person beim Mandanten statt Kanzlei.
+  gegenzeichnungMandant Boolean      @default(false)
+  nachweis              String
+  mindestNachweise      Int
+  schritte              Json
+  kennzahlen            Json
+  toleranzEur           Decimal?     @db.Decimal(14, 2)
+  faelligNachTagen      Int
+  design                Design       @default(NICHT_BEURTEILT)
+  designVon             String?
+  designAm              DateTime?
+  designBegruendung     String?
+  gueltigAb             DateTime
+  gueltigBis            DateTime?
+  erstelltVon           String?
+  createdAt             DateTime     @default(now())
+  durchfuehrungen       Durchfuehrung[]
+
+  @@index([kontrolleId, gueltigAb])
+}
+
+model RisikoKontrolle {
+  risikoId    String
+  risiko      Risiko    @relation(fields: [risikoId], references: [id])
+  kontrolleId String
+  kontrolle   Kontrolle @relation(fields: [kontrolleId], references: [id])
+
+  @@id([risikoId, kontrolleId])
+}
+
+enum DurchfuehrungStatus {
+  GEPLANT
+  IN_DURCHFUEHRUNG
+  ZUR_GEGENZEICHNUNG
+  ZURUECKGEWIESEN
+  OHNE_BEFUND
+  MIT_BEFUND
+  ENTFALLEN
+}
+
+enum Ergebnis {
+  OHNE_BEFUND
+  MIT_BEFUND
+}
+
+model Durchfuehrung {
+  id                   String              @id @default(cuid())
+  kontrolleId          String
+  kontrolle            Kontrolle           @relation(fields: [kontrolleId], references: [id])
+  kontrolleStandId     String
+  kontrolleStand       KontrolleStand      @relation(fields: [kontrolleStandId], references: [id])
+  periodeLabel         String
+  periodeVon           DateTime            @db.Date
+  periodeBis           DateTime            @db.Date
+  faelligAm            DateTime            @db.Date
+  status               DurchfuehrungStatus @default(GEPLANT)
+  ausserplanmaessig    Boolean             @default(false)
+  anlass               String?
+  ereignisFolgeId      String?
+  /// [{ erledigt: boolean, kommentar: string }] je Schritt der Kontrollversion.
+  schritte             Json                @default("[]")
+  /// { [kennzahlKey]: { wert: number | null, bemerkung: string, erklaert: boolean } }
+  werte                Json                @default("{}")
+  ergebnis             Ergebnis?
+  ergebnisKommentar    String?
+  durchgefuehrtVon     String?
+  begonnenAm           DateTime?
+  eingereichtAm        DateTime?
+  /// Bei Mandanten-Gegenzeichnung: erste Übermittlung im Portal.
+  mandantBestaetigtVon String?
+  gegengezeichnetVon   String?
+  abgeschlossenAm      DateTime?
+  zurueckgewiesenVon   String?
+  zurueckweisungsgrund String?
+  entfallenBegruendung String?
+  entfallenVon         String?
+  entfallenAm          DateTime?
+  nachtragZuId         String?
+  createdAt            DateTime            @default(now())
+  nachweise            Nachweis[]
+  feststellungen       Feststellung[]      @relation("FeststellungQuelle")
+  nachkontrolleFuer    Feststellung[]      @relation("Nachkontrolle")
+
+  @@index([kontrolleId, periodeVon])
+  @@index([faelligAm])
+}
+
+model Nachweis {
+  id              String        @id @default(cuid())
+  durchfuehrungId String
+  durchfuehrung   Durchfuehrung @relation(fields: [durchfuehrungId], references: [id])
+  dateiname       String
+  mime            String
+  groesse         Int
+  sha256          String
+  speicherpfad    String
+  gesperrt        Boolean       @default(false)
+  hochgeladenVon  String
+  hochgeladenAm   DateTime      @default(now())
+
+  @@index([durchfuehrungId])
+}
+
+// ---------------------------------------------------------------------------
+// Feststellungen und Maßnahmen
+// ---------------------------------------------------------------------------
+
+enum FeststellungStatus {
+  ERFASST
+  IN_WUERDIGUNG
+  MASSNAHMEN_OFFEN
+  NACHKONTROLLE
+  GESCHLOSSEN
+  VERWORFEN
+}
+
+enum FeststellungQuelle {
+  KONTROLLE
+  EREIGNIS
+  STICHPROBE
+  HINWEIS
+  AUSSENPRUEFUNG
+}
+
+enum FeststellungKlasse {
+  DESIGNMANGEL
+  DURCHFUEHRUNGSMANGEL
+  STEUERLICHER_FEHLER
+  HINWEIS
+}
+
+enum Auswirkung {
+  JA
+  NEIN
+  UNKLAR
+}
+
+enum P153Entscheidung {
+  BERICHTIGUNG
+  KEINE_PFLICHT
+  WEITERE_KLAERUNG
+  UEBERGABE
+}
+
+model Feststellung {
+  id                     String               @id @default(cuid())
+  programmId             String
+  programm               TcmsProgramm         @relation(fields: [programmId], references: [id])
+  nummer                 String
+  titel                  String
+  sachverhalt            String
+  quelle                 FeststellungQuelle
+  quelleText             String
+  durchfuehrungId        String?
+  durchfuehrung          Durchfuehrung?       @relation("FeststellungQuelle", fields: [durchfuehrungId], references: [id])
+  ereignisId             String?
+  klasse                 FeststellungKlasse
+  schwere                Klasse
+  auswirkung             Auswirkung
+  ursache                String?
+  status                 FeststellungStatus   @default(ERFASST)
+  vertraulich            Boolean              @default(false)
+  p153Entscheidung       P153Entscheidung?
+  p153Begruendung        String?
+  p153Frist              DateTime?            @db.Date
+  p153EntschiedenVon     String?
+  p153EntschiedenAm      DateTime?
+  nachkontrolleId        String?
+  nachkontrolle          Durchfuehrung?       @relation("Nachkontrolle", fields: [nachkontrolleId], references: [id])
+  verwerfenBegruendung   String?
+  verwerfenBeantragtVon  String?
+  verwerfenBestaetigtVon String?
+  erfasstVon             String
+  erfasstAm              DateTime             @default(now())
+  geschlossenAm          DateTime?
+  risiken                FeststellungRisiko[]
+  erklaerungen           BetroffeneErklaerung[]
+  massnahmen             Massnahme[]
+
+  @@unique([programmId, nummer])
+}
+
+model FeststellungRisiko {
+  feststellungId String
+  feststellung   Feststellung @relation(fields: [feststellungId], references: [id])
+  risikoId       String
+  risiko         Risiko       @relation(fields: [risikoId], references: [id])
+
+  @@id([feststellungId, risikoId])
+}
+
+model BetroffeneErklaerung {
+  id             String       @id @default(cuid())
+  feststellungId String
+  feststellung   Feststellung @relation(fields: [feststellungId], references: [id])
+  steuerart      String
+  land           String
+  zeitraum       String
+  auswirkungEur  Decimal?     @db.Decimal(14, 2)
+}
+
+enum MassnahmeStatus {
+  OFFEN
+  ERLEDIGT
+}
+
+model Massnahme {
+  id              String          @id @default(cuid())
+  feststellungId  String
+  feststellung    Feststellung    @relation(fields: [feststellungId], references: [id])
+  /// Laufende Wiedervorlage-Nummer (#123), kanzleiweit.
+  wiedervorlageNr Int             @unique
+  beschreibung    String
+  verantwortlich  String
+  frist           DateTime        @db.Date
+  status          MassnahmeStatus @default(OFFEN)
+  erledigtAm      DateTime?
+  erledigtVon     String?
+  createdAt       DateTime        @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Ereignisse
+// ---------------------------------------------------------------------------
+
+enum EreignisStatus {
+  NEU
+  IN_TRIAGE
+  ERLEDIGT
+  VERWORFEN
+}
+
+enum EreignisQuelle {
+  PORTAL
+  KONTROLLE
+  STAMMDATEN
+  RSS
+  MANUELL
+}
+
+enum FolgeArt {
+  RISIKO_NEU_BEWERTEN
+  RISIKO_AKTIVIEREN
+  KONTROLLE_AUSSERPLANMAESSIG
+  PROFIL_AENDERN
+  FESTSTELLUNG_ANLEGEN
+  HINWEIS
+}
+
+enum FolgeStatus {
+  VORGESCHLAGEN
+  ANGELEGT
+  ERLEDIGT
+  VERWORFEN
+}
+
+model Ereignis {
+  id                   String          @id @default(cuid())
+  programmId           String
+  programm             TcmsProgramm    @relation(fields: [programmId], references: [id])
+  nummer               String          @unique
+  typ                  String
+  titel                String
+  beschreibung         String
+  quelle               EreignisQuelle
+  gemeldetVon          String?
+  gemeldetAm           DateTime        @default(now())
+  ereignisDatum        DateTime        @db.Date
+  status               EreignisStatus  @default(NEU)
+  verwerfenBegruendung String?
+  triagiertVon         String?
+  triagiertAm          DateTime?
+  folgen               EreignisFolge[]
+
+  @@index([programmId])
+}
+
+model EreignisFolge {
+  id          String      @id @default(cuid())
+  ereignisId  String
+  ereignis    Ereignis    @relation(fields: [ereignisId], references: [id])
+  art         FolgeArt
+  ziel        String?
+  text        String
+  zustaendig  String?
+  frist       DateTime?   @db.Date
+  status      FolgeStatus @default(VORGESCHLAGEN)
+  objektId    String?
+  erledigtAm  DateTime?
+}
+
+// ---------------------------------------------------------------------------
+// Länder-Monitor
+// ---------------------------------------------------------------------------
+
+enum DatenQuelle {
+  MANUELL
+  CSV
+}
+
+model LandStand {
+  id                     String       @id @default(cuid())
+  programmId             String
+  programm               TcmsProgramm @relation(fields: [programmId], references: [id])
+  land                   String
+  fernverkaeufeLfdEur    Decimal      @db.Decimal(14, 2)
+  fernverkaeufeVorjahrEur Decimal     @db.Decimal(14, 2)
+  lagerSeit              String?
+  oss                    Boolean
+  lokaleUstNr            Boolean
+  zmRelevant             Boolean      @default(false)
+  steuersaetzeGeprueftAm DateTime?    @db.Date
+  stand                  DateTime     @db.Date
+  quelle                 DatenQuelle  @default(MANUELL)
+  erfasstVon             String?
+  createdAt              DateTime     @default(now())
+
+  @@index([programmId, land, stand])
+}
+
+// ---------------------------------------------------------------------------
+// CMS-Beschreibung und Freigaben
+// ---------------------------------------------------------------------------
+
+enum BeschreibungStatus {
+  ENTWURF
+  KANZLEI_REVIEW
+  BEIM_MANDANTEN
+  FREIGEGEBEN
+  ABGELOEST
+}
+
+model BeschreibungVersion {
+  id                  String             @id @default(cuid())
+  programmId          String
+  programm            TcmsProgramm       @relation(fields: [programmId], references: [id])
+  nummer              String
+  status              BeschreibungStatus @default(ENTWURF)
+  /// [{ key, titel, text }] — Freitext je Abschnitt (0 Teilbereich, 1–7, Anhang).
+  abschnitte          Json
+  reviewAngefordertVon String?
+  reviewAngefordertAm DateTime?
+  reviewVon           String?
+  reviewAm            DateTime?
+  freigabeAngefordertAm DateTime?
+  freigegebenVon      String?
+  freigegebenAm       DateTime?
+  /// Eingefrorener Inhalt inkl. gerenderter lebender Bausteine.
+  snapshot            Json?
+  snapshotSha256      String?
+  createdAt           DateTime           @default(now())
+  erstelltVon         String?
+
+  @@unique([programmId, nummer])
+}
+
+enum FreigabeArt {
+  ZIELE
+  BESCHREIBUNG
+  RISIKOAKZEPTANZ
+  AUFKLAERUNG
+  /// Kenntnisnahme (z. B. Steuerrichtlinie); kein Freigabevorbehalt.
+  KENNTNISNAHME
+}
+
+enum FreigabeStatus {
+  OFFEN
+  FREIGEGEBEN
+  ABGELEHNT
+}
+
+model Freigabe {
+  id             String         @id @default(cuid())
+  programmId     String
+  programm       TcmsProgramm   @relation(fields: [programmId], references: [id])
+  art            FreigabeArt
+  refId          String
+  titel          String
+  /// Darzustellender Inhalt (Markdown-light) bei Kenntnisnahmen und Akzeptanzen.
+  inhalt         String?
+  angefordertVon String
+  angefordertAm  DateTime       @default(now())
+  empfaengerId   String
+  codeHash       String?
+  codeAblauf     DateTime?
+  status         FreigabeStatus @default(OFFEN)
+  anmerkung      String?
+  erledigtAm     DateTime?
+
+  @@index([programmId])
+  @@index([empfaengerId, status])
+}
+
+/// Postausgang der Entwicklungsumgebung (kein Mailversand in Stufe 1).
+model Nachricht {
+  id        String   @id @default(cuid())
+  an        String
+  betreff   String
+  text      String
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Audit
+// ---------------------------------------------------------------------------
+
+model AuditEvent {
+  seq        Int      @id @default(autoincrement())
+  at         DateTime
+  actorId    String?
+  actorName  String
+  aktion     String
+  objektTyp  String
+  objektId   String
+  programmId String?
+  detail     Json
+  prevHash   String
+  hash       String   @unique
+
+  @@index([programmId, seq])
+  @@index([objektTyp, objektId])
+}

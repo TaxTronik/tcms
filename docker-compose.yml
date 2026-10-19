@@ -1,0 +1,16 @@
+# Lokale Entwicklungsdatenbank für das Tax-CMS.
+# Start: docker compose up -d
+services:
+  postgres:
+    image: postgres:16.10-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tcms
+      POSTGRES_PASSWORD: tcms
+      POSTGRES_DB: tcms
+    ports:
+      - '5433:5432'
+    volumes:
+      - tcms-pg:/var/lib/postgresql/data
+volumes:
+  tcms-pg:
