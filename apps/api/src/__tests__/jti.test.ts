@@ -58,10 +58,21 @@ describe('PgJti ohne Datenbank', () => {
   it('löscht in Stapeln und begrenzt die Arbeit je Lauf', async () => {
     let aufrufe = 0;
     const voll = { query: async () => (aufrufe++, { rowCount: 2, rows: [] }) };
-    expect(await new PgJti(voll as never, 2, 5).aufraeumen()).toBe(10);
+    expect(await new PgJti(voll as never, { stapel: 2, maxStapelJeLauf: 5 }).aufraeumen()).toBe(10);
     expect(aufrufe).toBe(5);
     const teil = { query: async () => ({ rowCount: 1, rows: [] }) };
-    expect(await new PgJti(teil as never, 2, 5).aufraeumen()).toBe(1);
+    expect(await new PgJti(teil as never, { stapel: 2, maxStapelJeLauf: 5 }).aufraeumen()).toBe(1);
+  });
+
+  it('löscht erst nach der Karenz (Standard 300 s) und weist ungültige Karenz ab', async () => {
+    const werte: unknown[][] = [];
+    const pool = {
+      query: async (_: string, w: unknown[]) => (werte.push(w), { rowCount: 0, rows: [] }),
+    };
+    await new PgJti(pool as never).aufraeumen();
+    expect(werte[0]).toEqual([1000, 300]);
+    expect(() => new PgJti(pool as never, { karenzS: -1 })).toThrow();
+    expect(() => new PgJti(pool as never, { karenzS: 1.5 })).toThrow();
   });
 });
 

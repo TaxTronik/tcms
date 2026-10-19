@@ -52,6 +52,9 @@ export class SpeicherJti implements JtiSpeicher {
   }
 }
 
+/** Karenz vor dem Löschen abgelaufener jti (Uhrabweichung Dienst/Datenbank), in Sekunden. */
+export const JTI_KARENZ_S = 300;
+
 /**
  * Tabelle `akteur_jti (jti text PRIMARY KEY, exp timestamptz NOT NULL)` aus
  * dem Schema von `packages/db` (nicht mandantengebunden, ohne RLS; die
@@ -61,11 +64,19 @@ export class PgJti implements JtiSpeicher {
   readonly #pool: Pick<pg.Pool, 'query'>;
   readonly #stapel: number;
   readonly #maxStapelJeLauf: number;
+  readonly #karenzS: number;
 
-  constructor(pool: Pick<pg.Pool, 'query'>, stapel = 1000, maxStapelJeLauf = 100) {
+  constructor(
+    pool: Pick<pg.Pool, 'query'>,
+    opts: { stapel?: number; maxStapelJeLauf?: number; karenzS?: number } = {},
+  ) {
     this.#pool = pool;
-    this.#stapel = stapel;
-    this.#maxStapelJeLauf = maxStapelJeLauf;
+    this.#stapel = opts.stapel ?? 1000;
+    this.#maxStapelJeLauf = opts.maxStapelJeLauf ?? 100;
+    this.#karenzS = opts.karenzS ?? JTI_KARENZ_S;
+    if (!Number.isInteger(this.#karenzS) || this.#karenzS < 0) {
+      throw new Error('PgJti: Karenz muss eine nicht negative ganze Zahl sein');
+    }
   }
 
   async einmalig(jti: string, exp: Date): Promise<boolean> {
@@ -79,20 +90,23 @@ export class PgJti implements JtiSpeicher {
 
   /**
    * Löscht abgelaufene Einträge in Stapeln (kurze Sperren, begrenzte Arbeit je
-   * Lauf). Ein abgelaufener, noch nicht gelöschter Eintrag weist dieselbe
-   * `jti` weiter ab; das ist gewollt (fail closed), die Bestätigung ist dann
-   * ohnehin abgelaufen. Ohne `FOR UPDATE`: Das bräuchte das UPDATE-Recht, das
-   * die Laufzeitrolle auf `akteur_jti` nicht hat; parallele Läufe löschen
-   * schlimmstenfalls dieselben Zeilen (dann 0 Zeilen).
+   * Lauf), aber erst nach einer Karenz: `exp` ist Dienstzeit, `now()` die Uhr
+   * der Datenbank. Geht die Datenbank vor, würde eine `jti` sonst gelöscht,
+   * während der Dienst die Bestätigung noch annimmt – ein Fenster für
+   * Wiederholungen in Höhe der Uhrabweichung. Ein abgelaufener, noch nicht
+   * gelöschter Eintrag weist dieselbe `jti` weiter ab (fail closed). Ohne
+   * `FOR UPDATE`: Das bräuchte das UPDATE-Recht, das die Laufzeitrolle auf
+   * `akteur_jti` nicht hat; parallele Läufe löschen schlimmstenfalls dieselben
+   * Zeilen (dann 0 Zeilen).
    */
   async aufraeumen(): Promise<number> {
     let gesamt = 0;
     for (let i = 0; i < this.#maxStapelJeLauf; i++) {
       const r = await this.#pool.query(
         `DELETE FROM akteur_jti WHERE jti IN (
-           SELECT jti FROM akteur_jti WHERE exp < now() LIMIT $1
+           SELECT jti FROM akteur_jti WHERE exp < now() - make_interval(secs => $2) LIMIT $1
          )`,
-        [this.#stapel],
+        [this.#stapel, this.#karenzS],
       );
       gesamt += r.rowCount ?? 0;
       if ((r.rowCount ?? 0) < this.#stapel) break;

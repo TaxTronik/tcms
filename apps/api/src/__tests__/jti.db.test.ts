@@ -105,12 +105,28 @@ describe.skipIf(!URL_TEST)('PostgreSQL', () => {
       await admin.query("INSERT INTO akteur_jti VALUES ($1, now() - interval '1 second')", [id]);
     }
     await admin.query("INSERT INTO akteur_jti VALUES ($1, now() + interval '1 minute')", [frisch]);
-    const geloescht = await new PgJti(app, 2, 100).aufraeumen();
+    const geloescht = await new PgJti(app, { stapel: 2, karenzS: 0 }).aufraeumen();
     expect(geloescht).toBeGreaterThanOrEqual(5);
     const rest = await admin.query('SELECT jti FROM akteur_jti WHERE jti = ANY($1)', [
       [...alt, frisch],
     ]);
     expect(rest.rows.map((r) => r.jti)).toEqual([frisch]);
+  });
+
+  it('löscht abgelaufene Einträge erst nach der Karenz (Uhrabweichung Dienst/Datenbank)', async () => {
+    const innerhalb = jti('karenz-innen');
+    const ausserhalb = jti('karenz-aussen');
+    await admin.query("INSERT INTO akteur_jti VALUES ($1, now() - interval '4 minutes')", [
+      innerhalb,
+    ]);
+    await admin.query("INSERT INTO akteur_jti VALUES ($1, now() - interval '6 minutes')", [
+      ausserhalb,
+    ]);
+    await new PgJti(app).aufraeumen();
+    const rest = await admin.query('SELECT jti FROM akteur_jti WHERE jti = ANY($1)', [
+      [innerhalb, ausserhalb],
+    ]);
+    expect(rest.rows.map((r) => r.jti)).toEqual([innerhalb]);
   });
 
   it('die Laufzeitrolle kann akteur_jti nicht ändern (kein UPDATE nötig, keines erlaubt)', async () => {
