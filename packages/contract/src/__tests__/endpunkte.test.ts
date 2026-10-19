@@ -174,11 +174,24 @@ describe('Endpunktregister', () => {
     expect(() => pruefePortal('test', `${MANDANT}/kontakte`, ['KANZLEI'])).not.toThrow();
   });
 
-  it('lässt den Systemakteur genau an die zwei Nachrichten-Endpunkte, an keinen anderen', () => {
+  it('lässt den Systemakteur genau an die drei Nachrichten-Endpunkte, an keinen anderen', () => {
     const mitSystem = ENDPUNKT_LISTE.filter((e) => e.akteure.includes('SYSTEM')).map((e) => e.name);
-    expect(mitSystem.sort()).toEqual(['nachrichtZugestelltMelden', 'nachrichtenOffenLesen']);
+    expect(mitSystem.sort()).toEqual([
+      'nachrichtUnzustellbarMelden',
+      'nachrichtZugestelltMelden',
+      'nachrichtenOffenLesen',
+    ]);
     expect(ENDPUNKTE.nachrichtenOffenLesen.akteure).toEqual(['SYSTEM']);
     expect(ENDPUNKTE.nachrichtZugestelltMelden.akteure).toEqual(['SYSTEM']);
+    expect(ENDPUNKTE.nachrichtUnzustellbarMelden.akteure).toEqual(['SYSTEM']);
+    expect(ENDPUNKTE.nachrichtUnzustellbarMelden).toMatchObject({
+      methode: 'POST',
+      pfad: '/v1/nachrichten/:nachrichtId/unzustellbar',
+      mandantenbezogen: false,
+      portal: false,
+      akteur: true,
+      erfolgStatus: 200,
+    });
     for (const e of ENDPUNKT_LISTE) {
       if (!mitSystem.includes(e.name)) expect(e.akteure, e.name).not.toContain('SYSTEM');
     }

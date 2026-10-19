@@ -1,12 +1,18 @@
 // Offene Nachrichten (Stufe 4): diskriminiert über `zweck`, Empfängerart fest je
 // Zweck, Vorlagendaten streng (genau die Felder der Vorlage, keine Namen).
+// Unzustellbarkeit: Grund nur aus der festen Liste, Body und Ergebnis streng.
 import { describe, expect, it } from 'vitest';
 import {
   NACHRICHT_EMPFAENGER,
   NACHRICHT_ZWECKE,
   NachrichtenOffenSchema,
+  NachrichtPfadSchema,
+  NachrichtUnzustellbarBodySchema,
+  NachrichtUnzustellbarEingabeSchema,
+  NachrichtUnzustellbarErgebnisSchema,
   OffeneNachrichtSchema,
 } from './programm-beschreibung';
+import { NACHRICHT_UNZUSTELLBAR_GRUENDE } from './zustellung';
 
 const KOPF = {
   id: 'cknachricht00000000000a',
@@ -99,5 +105,62 @@ describe('OffeneNachrichtSchema', () => {
     ];
     for (const [name, n] of falsch)
       expect(OffeneNachrichtSchema.safeParse(n).success, name).toBe(false);
+  });
+});
+
+describe('Unzustellbarkeit melden', () => {
+  const ID = 'cknachricht00000000000a';
+
+  it('nimmt jeden Grund der Liste an (Body, Eingabe, Ergebnis)', () => {
+    expect([...NACHRICHT_UNZUSTELLBAR_GRUENDE]).toEqual([
+      'EMPFAENGER_UNGUELTIG',
+      'KEIN_PORTALZUGANG',
+      'ABGELAUFEN',
+      'SONSTIGES',
+    ]);
+    for (const grund of NACHRICHT_UNZUSTELLBAR_GRUENDE) {
+      expect(NachrichtUnzustellbarBodySchema.safeParse({ grund }).success, grund).toBe(true);
+      expect(
+        NachrichtUnzustellbarEingabeSchema.safeParse({ nachrichtId: ID, grund }).success,
+        grund,
+      ).toBe(true);
+      expect(
+        NachrichtUnzustellbarErgebnisSchema.safeParse({
+          nachrichtId: ID,
+          unzustellbar: true,
+          grund,
+        }).success,
+      ).toBe(true);
+    }
+    expect(NachrichtPfadSchema.safeParse({ nachrichtId: ID }).success).toBe(true);
+  });
+
+  it('weist Freitext, fehlenden Grund, Zusatzfelder und fremde IDs ab (fail closed)', () => {
+    const body: [string, unknown][] = [
+      ['ohne Grund', {}],
+      ['Freitext', { grund: 'Postfach voll' }],
+      ['Kleinschreibung', { grund: 'sonstiges' }],
+      ['Grund null', { grund: null }],
+      ['Zusatzfeld', { grund: 'SONSTIGES', text: 'Details' }],
+      ['ID im Body', { grund: 'SONSTIGES', nachrichtId: ID }],
+      ['kein Objekt', ['SONSTIGES']],
+    ];
+    for (const [name, b] of body) {
+      expect(NachrichtUnzustellbarBodySchema.safeParse(b).success, name).toBe(false);
+    }
+    for (const nachrichtId of ['', 'a/b', 'x y', 'a'.repeat(65), '../offen']) {
+      expect(NachrichtPfadSchema.safeParse({ nachrichtId }).success, nachrichtId).toBe(false);
+      expect(
+        NachrichtUnzustellbarEingabeSchema.safeParse({ nachrichtId, grund: 'SONSTIGES' }).success,
+      ).toBe(false);
+    }
+    const ergebnis: [string, unknown][] = [
+      ['unzustellbar false', { nachrichtId: ID, unzustellbar: false, grund: 'SONSTIGES' }],
+      ['ohne Grund', { nachrichtId: ID, unzustellbar: true }],
+      ['mit Text', { nachrichtId: ID, unzustellbar: true, grund: 'SONSTIGES', text: 'x' }],
+    ];
+    for (const [name, e] of ergebnis) {
+      expect(NachrichtUnzustellbarErgebnisSchema.safeParse(e).success, name).toBe(false);
+    }
   });
 });

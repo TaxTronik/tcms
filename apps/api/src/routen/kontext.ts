@@ -33,7 +33,8 @@ export function dienstKontext(ctx: RoutenKontext<Tx, unknown, unknown>): DienstK
 }
 
 /**
- * Kontext einer Systemoperation (Nachrichten abholen, Zustellung melden). Jede
+ * Kontext einer Systemoperation (Nachrichten abholen, Zustellung bzw.
+ * Unzustellbarkeit melden). Jede
  * Person – auch ein Admin – erhält `NICHT_GEFUNDEN`, bevor die Operation läuft.
  */
 export function systemKontext(ctx: RoutenKontext<Tx, unknown, unknown>): SystemKontext {

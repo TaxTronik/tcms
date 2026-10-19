@@ -136,6 +136,9 @@ import {
   FreigabenHistorieSchema,
   NachrichtenOffenQuerySchema,
   NachrichtenOffenSchema,
+  NachrichtPfadSchema,
+  NachrichtUnzustellbarBodySchema,
+  NachrichtUnzustellbarErgebnisSchema,
   NachrichtZugestelltEingabeSchema,
   NachrichtZugestelltErgebnisSchema,
   PortalCodeAnfordernErgebnisSchema,
@@ -1056,6 +1059,14 @@ export const ENDPUNKTE = register({
     akteure: NUR_SYSTEM,
     params: NachrichtZugestelltEingabeSchema,
     antwort: NachrichtZugestelltErgebnisSchema,
+  },
+  nachrichtUnzustellbarMelden: {
+    methode: 'POST',
+    pfad: '/v1/nachrichten/:nachrichtId/unzustellbar',
+    akteure: NUR_SYSTEM,
+    params: NachrichtPfadSchema,
+    body: NachrichtUnzustellbarBodySchema,
+    antwort: NachrichtUnzustellbarErgebnisSchema,
   },
 
   // ---- Einrichtungsassistent --------------------------------------------------

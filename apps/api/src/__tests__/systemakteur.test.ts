@@ -3,14 +3,15 @@
 // §3.3), ohne Datenbank, in zwei unabhängigen Schichten:
 //
 //   1. Routentabelle: Jeder Registereintrag bekommt einen Platzhalter-Handler.
-//      Der Systemakteur erreicht genau die zwei Nachrichten-Endpunkte; jeder
-//      andere antwortet 404, ohne Handler und ohne Tenant-Transaktion.
-//      Personen erreichen die Nachrichten-Endpunkte nicht.
+//      Der Systemakteur erreicht genau die drei Nachrichten-Endpunkte (abholen,
+//      zugestellt, unzustellbar); jeder andere antwortet 404, ohne Handler und
+//      ohne Tenant-Transaktion. Personen erreichen die Nachrichten-Endpunkte
+//      nicht.
 //   2. Dienstschicht: Die echten Handler des Dienstes (`registriereAlle`)
 //      werden direkt mit einem Systemakteur aufgerufen – an der Routentabelle
-//      vorbei. Jeder Handler außer den zwei Nachrichten-Endpunkten weist ihn
-//      mit NICHT_GEFUNDEN ab, bevor er die Transaktion berührt (`tx` wirft bei
-//      jedem Zugriff); Personen weisen die zwei Nachrichten-Handler ebenso ab.
+//      vorbei. Jeder Handler außer den Nachrichten-Endpunkten weist ihn mit
+//      NICHT_GEFUNDEN ab, bevor er die Transaktion berührt (`tx` wirft bei
+//      jedem Zugriff); Personen weisen die Nachrichten-Handler ebenso ab.
 //
 // Die Ende-zu-Ende-Prüfung mit PostgreSQL steht in systemakteur.db.test.ts.
 // =============================================================================
@@ -46,20 +47,35 @@ import {
   systemClaims,
 } from './hilfen';
 
-const NACHRICHTEN = ['nachrichtZugestelltMelden', 'nachrichtenOffenLesen'];
+/** Alle Endpunkte des Systemakteurs (sortiert). */
+const NACHRICHTEN = [
+  'nachrichtUnzustellbarMelden',
+  'nachrichtZugestelltMelden',
+  'nachrichtenOffenLesen',
+];
 const MIT_AKTEUR = ENDPUNKT_LISTE.filter((e) => e.akteur);
-const LEER = bodySha256(new Uint8Array());
+/** Gültige Eingabe je Nachrichten-Endpunkt mit Body (sonst 400 vor dem Handler). */
+const BEISPIEL_BODY: Readonly<Record<string, unknown>> = {
+  nachrichtUnzustellbarMelden: { grund: 'SONSTIGES' },
+};
+const bodyFuer = (name: string): string | undefined =>
+  name in BEISPIEL_BODY ? JSON.stringify(BEISPIEL_BODY[name]) : undefined;
 
-/** Claims je Art mit allen Rechten, die die Art haben kann. */
-function claimsFuer(art: AkteurArt, methode: AkteurClaims['req']['m'], p: string): AkteurClaims {
-  const req = { m: methode, p, b: LEER };
+/** Claims je Art mit allen Rechten, die die Art haben kann (gebunden an den Body). */
+function claimsFuer(
+  art: AkteurArt,
+  methode: AkteurClaims['req']['m'],
+  p: string,
+  body = '',
+): AkteurClaims {
+  const req = { m: methode, p, b: bodySha256(new TextEncoder().encode(body)) };
   if (art === 'SYSTEM') return systemClaims({ req });
   if (art === 'MANDANT') return mandantClaims(MANDANT, { req });
   return claims({ rol: { adm: true, bt: true }, cli: { id: MANDANT, bt: true, hb: true }, req });
 }
 
 describe('Systemakteur: Routentabelle über alle Registereinträge', () => {
-  it('erreicht genau die zwei Nachrichten-Endpunkte; überall sonst 404 ohne Handler und Tenant', async () => {
+  it('erreicht genau die Nachrichten-Endpunkte; überall sonst 404 ohne Handler und Tenant', async () => {
     const erreicht: string[] = [];
     const t = aufbau({
       register: ENDPUNKT_LISTE,
@@ -77,10 +93,12 @@ describe('Systemakteur: Routentabelle über alle Registereinträge', () => {
     const ergebnisse: Record<string, number> = {};
     for (const e of MIT_AKTEUR) {
       const ziel = beispielPfad(e.pfad);
+      const body = bodyFuer(e.name);
       const r = await bestaetigtSenden(t.app, {
         methode: e.methode,
         ziel,
-        roheClaims: claimsFuer('SYSTEM', e.methode, ziel),
+        body,
+        roheClaims: claimsFuer('SYSTEM', e.methode, ziel, body),
       });
       ergebnisse[e.name] = r.status;
       if (NACHRICHTEN.includes(e.name)) {
@@ -92,8 +110,8 @@ describe('Systemakteur: Routentabelle über alle Registereinträge', () => {
     }
     expect(Object.keys(ergebnisse)).toHaveLength(ENDPUNKT_LISTE.length - 1);
     expect(erreicht.sort()).toEqual(NACHRICHTEN);
-    // Nur die zwei erreichten Handler öffneten eine Transaktion.
-    expect(t.tenants).toEqual([TENANT, TENANT]);
+    // Nur die erreichten Handler öffneten eine Transaktion.
+    expect(t.tenants).toEqual(NACHRICHTEN.map(() => TENANT));
   });
 
   it('jede zugelassene Personenart passiert die Akteursprüfung, jede andere erhält 404', async () => {
@@ -113,10 +131,12 @@ describe('Systemakteur: Routentabelle über alle Registereinträge', () => {
     for (const e of MIT_AKTEUR) {
       for (const art of ['KANZLEI', 'MANDANT', 'SYSTEM'] as const) {
         const ziel = beispielPfad(e.pfad);
+        const body = bodyFuer(e.name);
         const r = await bestaetigtSenden(t.app, {
           methode: e.methode,
           ziel,
-          roheClaims: claimsFuer(art, e.methode, ziel),
+          body,
+          roheClaims: claimsFuer(art, e.methode, ziel, body),
         });
         if (e.akteure.includes(art)) {
           // Zugelassen: Handler (409), eingebautes `ich` (200) oder Body fehlt (400).
@@ -194,7 +214,7 @@ async function rufe(
       tx: wachsameTx(zugriffe),
       akteur,
       params: beispielParams(route.pfad),
-      body: {},
+      body: BEISPIEL_BODY[route.endpunkt?.name ?? ''] ?? {},
       query: {},
       requestId: 'test',
       jetzt: new Date(),
@@ -230,7 +250,7 @@ describe('Systemakteur: Dienstschicht (echte Handler an der Routentabelle vorbei
     const routen = dienstTabelle()
       .eintraege()
       .filter((r) => NACHRICHTEN.includes(r.endpunkt?.name ?? ''));
-    expect(routen).toHaveLength(2);
+    expect(routen).toHaveLength(NACHRICHTEN.length);
     for (const route of routen) {
       for (const person of [ADMIN, KONTAKT]) {
         const { zugriffe, fehler } = await rufe(route, person);

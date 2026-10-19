@@ -30,6 +30,7 @@ import {
   ladePortalFreigaben,
   legeBeschreibungsversionAn,
   legeProgrammAn,
+  meldeNachrichtUnzustellbar,
   schliesseBeschreibungsreviewAb,
   speichereBeschreibungsabschnitt,
   speichereEinrichtungsschritt,
@@ -50,6 +51,12 @@ export function registriereProgrammBeschreibung(r: Routen<Tx>): void {
   );
   r.endpunkt(ENDPUNKTE.nachrichtZugestelltMelden, (c) =>
     bestaetigeNachrichtZustellung(systemKontext(c), { nachrichtId: c.params.nachrichtId! }),
+  );
+  r.endpunkt(ENDPUNKTE.nachrichtUnzustellbarMelden, (c) =>
+    meldeNachrichtUnzustellbar(systemKontext(c), {
+      ...c.body,
+      nachrichtId: c.params.nachrichtId!,
+    }),
   );
 
   // ---- Einrichtungsassistent ----

@@ -7,17 +7,19 @@
 // Zeile, `betreff`/`text` bleiben als Rückfall.
 //
 // Sparsamkeit: Ein Bestätigungscode steht im Klartext nur in `code` (und im
-// Rückfalltext), nie in `daten`, und nur bis zur Zustellung: „Zugestellt"
-// setzt `zugestelltAm` und leert `code` und `text`; der Vorgang steht im Audit
-// (ohne Text und Code). Gilt der Code nicht mehr (Freigabe erledigt, Code
-// abgelaufen, ersetzt, gesperrt oder neu adressiert), liefert der nächste
-// Abruf die Nachricht nicht mehr aus und leert sie (`verworfenAm`).
+// Rückfalltext), nie in `daten`, und nur bis zum Abschluss: „Zugestellt"
+// setzt `zugestelltAm`, „unzustellbar" (die kanzleikonsole konnte nicht
+// zustellen) setzt `unzustellbarAm` mit Grund; beide leeren `code` und `text`
+// und schließen sich aus (409, CHECK). Der Vorgang steht im Audit (ohne Text
+// und Code). Gilt der Code nicht mehr (Freigabe erledigt, Code abgelaufen,
+// ersetzt, gesperrt oder neu adressiert), liefert der nächste Abruf die
+// Nachricht nicht mehr aus und leert sie (`verworfenAm`).
 //
-// Abholen und Bestätigen ausschließlich durch den Systemakteur der
-// kanzleikonsole (`SystemKontext`, Stufe 4): Der Zustell-Worker ist keine
-// Person, und keine Person – auch kein Admin – liest den Postausgang über den
-// Dienst. Tenantweit über RLS. Codes erscheinen in keiner anderen Antwort und
-// in keinem Audit-Detail.
+// Abholen und Melden ausschließlich durch den Systemakteur der kanzleikonsole
+// (`SystemKontext`, Stufe 4): Der Zustell-Worker ist keine Person, und keine
+// Person – auch kein Admin – liest den Postausgang über den Dienst.
+// Tenantweit über RLS. Codes erscheinen in keiner anderen Antwort und in
+// keinem Audit-Detail.
 // =============================================================================
 
 import {
@@ -29,10 +31,14 @@ import {
   NachrichtDatenFreigabeCodeSchema,
   NachrichtDatenFreigabeNeuAdressiertSchema,
   NachrichtenOffenEingabeSchema,
+  NachrichtUnzustellbarEingabeSchema,
   NachrichtZugestelltEingabeSchema,
   OffeneNachrichtSchema,
   type NachrichtEmpfaengerArt,
   type NachrichtenOffenEingabe,
+  type NachrichtUnzustellbarEingabe,
+  type NachrichtUnzustellbarErgebnis,
+  type NachrichtUnzustellbarGrund,
   type NachrichtZugestelltEingabe,
   type NachrichtZugestelltErgebnis,
   type NachrichtZweck,
@@ -51,8 +57,13 @@ type Gleich<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 const _zweckePassen: Gleich<Prisma.NachrichtCreateInput['zweck'], NachrichtZweck> = true;
 const _artenPassen: Gleich<Prisma.NachrichtCreateInput['empfaengerArt'], NachrichtEmpfaengerArt> =
   true;
+const _gruendePassen: Gleich<
+  NonNullable<Prisma.NachrichtCreateInput['unzustellbarGrund']>,
+  NachrichtUnzustellbarGrund
+> = true;
 void _zweckePassen;
 void _artenPassen;
+void _gruendePassen;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const STANDARD_NACHRICHTEN_LIMIT = 50;
@@ -269,7 +280,8 @@ export async function ladeOffeneNachrichten(
   const limit = e.limit ?? STANDARD_NACHRICHTEN_LIMIT;
   // Codefristen laufen auf echter Zeit, nie auf einer fachlichen Uhr (AGENTS.md).
   const jetzt = new Date();
-  const offen = { zugestelltAm: null, verworfenAm: null };
+  // Offen: weder zugestellt noch unzustellbar gemeldet noch verworfen.
+  const offen = { zugestelltAm: null, unzustellbarAm: null, verworfenAm: null };
   const reihenfolge = [{ createdAt: 'asc' as const }, { id: 'asc' as const }];
   const protokoll: Protokoll[] = [];
   const geprueft = new Set<string>();
@@ -328,13 +340,54 @@ export async function ladeOffeneNachrichten(
   return mitAudit(ctx, async () => ({ wert: { nachrichten }, protokoll }));
 }
 
+/** Zustand einer Nachricht unter Zeilensperre (ohne Inhalte: kein Text, kein Code). */
+interface NachrichtZustand {
+  id: string;
+  zweck: NachrichtZweck;
+  empfaengerId: string;
+  zugestelltAm: Date | null;
+  unzustellbarAm: Date | null;
+  unzustellbarGrund: NachrichtUnzustellbarGrund | null;
+}
+
 /**
- * Zustellung bestätigen: `zugestelltAm` wird gesetzt und der Text geleert.
+ * Sperrt eine Nachricht des eigenen Tenants (FOR UPDATE, TS-05) und liest
+ * ihren Zustand. Unbekannte IDs und Nachrichten anderer Tenants (RLS:
+ * unsichtbar) → `NICHT_GEFUNDEN`; das verrät nichts über andere Tenants, und
+ * der Systemakteur sieht die Nachrichten seines Tenants ohnehin. Gleichzeitige
+ * Meldungen zu derselben Nachricht laufen so nacheinander und sehen den
+ * Zustand der vorherigen (zugestellt bzw. unzustellbar).
+ */
+async function sperreNachricht(tx: Tx, nachrichtId: string): Promise<NachrichtZustand> {
+  const zeilen = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM "Nachricht" WHERE id = ${nachrichtId} FOR UPDATE`;
+  if (zeilen.length !== 1) throw new DienstFehler('NICHT_GEFUNDEN');
+  const z = await tx.nachricht.findUnique({
+    where: { id: nachrichtId },
+    select: {
+      id: true,
+      zweck: true,
+      empfaengerId: true,
+      zugestelltAm: true,
+      unzustellbarAm: true,
+      unzustellbarGrund: true,
+    },
+  });
+  if (!z) throw new DienstFehler('NICHT_GEFUNDEN');
+  return z;
+}
+
+const BEREITS_UNZUSTELLBAR = 'Die Nachricht ist bereits als unzustellbar gemeldet.';
+const BEREITS_ZUGESTELLT = 'Die Nachricht ist bereits als zugestellt gemeldet.';
+/** Unter der Zeilensperre nicht erreichbar; fail closed statt eines Doppelstatus. */
+const ZUSTAND_GEAENDERT = 'Die Nachricht hat ihren Zustand geändert.';
+
+/**
+ * Zustellung bestätigen: `zugestelltAm` wird gesetzt, Text und Code geleert.
  * Idempotent für Nachrichten des eigenen Tenants (eine bereits bestätigte
- * liefert dasselbe Ergebnis ohne zweites Audit). Unbekannte IDs und
- * Nachrichten anderer Tenants (RLS: unsichtbar) → `NICHT_GEFUNDEN`; das
- * verrät nichts über andere Tenants, und der Systemakteur sieht die Nachrichten
- * seines Tenants ohnehin.
+ * liefert dasselbe Ergebnis ohne zweites Audit). Eine als unzustellbar
+ * gemeldete Nachricht → `KONFLIKT` (schließen sich aus). Unbekannte IDs und
+ * Nachrichten anderer Tenants → `NICHT_GEFUNDEN`.
  */
 export async function bestaetigeNachrichtZustellung(
   ctx: SystemKontext,
@@ -343,20 +396,15 @@ export async function bestaetigeNachrichtZustellung(
   brauchtSystem(ctx);
   const e = pruefeEingabe(NachrichtZugestelltEingabeSchema, eingabe);
   const ergebnis: NachrichtZugestelltErgebnis = { nachrichtId: e.nachrichtId, zugestellt: true };
-  const vorhanden = await ctx.tx.nachricht.findFirst({
-    where: { id: e.nachrichtId },
-    select: { id: true, zugestelltAm: true, zweck: true, empfaengerId: true },
-  });
-  if (!vorhanden) throw new DienstFehler('NICHT_GEFUNDEN');
-  if (vorhanden.zugestelltAm) return ergebnis;
-  const zeile = vorhanden;
-  // Bedingt: Bei gleichzeitiger Bestätigung setzt genau eine Anfrage die Zustellung,
-  // die andere findet unter der Zeilensperre keine offene Zeile mehr.
+  const zeile = await sperreNachricht(ctx.tx, e.nachrichtId);
+  if (zeile.zugestelltAm) return ergebnis;
+  if (zeile.unzustellbarAm) throw new DienstFehler('KONFLIKT', BEREITS_UNZUSTELLBAR);
+  // Bedingt auf den gesperrten Zustand (fail closed, zusätzlich zum CHECK der Datenbank).
   const r = await ctx.tx.nachricht.updateMany({
-    where: { id: zeile.id, zugestelltAm: null },
+    where: { id: zeile.id, zugestelltAm: null, unzustellbarAm: null },
     data: { zugestelltAm: ctx.uhr.jetzt(), text: '', code: null },
   });
-  if (r.count !== 1) return ergebnis;
+  if (r.count !== 1) throw new DienstFehler('KONFLIKT', ZUSTAND_GEAENDERT);
   return mitAudit(ctx, async () => ({
     wert: ergebnis,
     protokoll: {
@@ -365,6 +413,55 @@ export async function bestaetigeNachrichtZustellung(
       objektId: zeile.id,
       programmId: null,
       detail: { zweck: zeile.zweck, empfaengerId: zeile.empfaengerId },
+    },
+  }));
+}
+
+/**
+ * Unzustellbarkeit melden: Die kanzleikonsole konnte die Nachricht nicht
+ * zustellen (Empfänger ungültig, kein bestätigter Portalzugang, Frist
+ * abgelaufen, Sonstiges) und schließt sie ab. Setzt `unzustellbarAm` und
+ * `unzustellbarGrund` und leert Text und Code wie die Zustellung; die
+ * Nachricht wird nicht mehr ausgeliefert. Die Kanzlei sieht den Status an der
+ * Freigabe und kann neu adressieren.
+ *
+ * Idempotent mit demselben Grund (kein zweites Audit). Bereits zugestellt oder
+ * mit anderem Grund gemeldet → `KONFLIKT` (zugestellt und unzustellbar
+ * schließen sich aus; zusätzlich CHECK in der Datenbank). Unbekannte IDs und
+ * Nachrichten anderer Tenants → `NICHT_GEFUNDEN`. Das Audit nennt Zweck,
+ * Empfänger-ID und Grund, nie Inhalte.
+ */
+export async function meldeNachrichtUnzustellbar(
+  ctx: SystemKontext,
+  eingabe: NachrichtUnzustellbarEingabe,
+): Promise<NachrichtUnzustellbarErgebnis> {
+  brauchtSystem(ctx);
+  const e = pruefeEingabe(NachrichtUnzustellbarEingabeSchema, eingabe);
+  const ergebnis: NachrichtUnzustellbarErgebnis = {
+    nachrichtId: e.nachrichtId,
+    unzustellbar: true,
+    grund: e.grund,
+  };
+  const zeile = await sperreNachricht(ctx.tx, e.nachrichtId);
+  if (zeile.zugestelltAm) throw new DienstFehler('KONFLIKT', BEREITS_ZUGESTELLT);
+  if (zeile.unzustellbarAm) {
+    if (zeile.unzustellbarGrund === e.grund) return ergebnis;
+    throw new DienstFehler('KONFLIKT', 'Die Nachricht ist bereits mit anderem Grund gemeldet.');
+  }
+  // Bedingt auf den gesperrten Zustand (fail closed, zusätzlich zum CHECK der Datenbank).
+  const r = await ctx.tx.nachricht.updateMany({
+    where: { id: zeile.id, zugestelltAm: null, unzustellbarAm: null },
+    data: { unzustellbarAm: ctx.uhr.jetzt(), unzustellbarGrund: e.grund, text: '', code: null },
+  });
+  if (r.count !== 1) throw new DienstFehler('KONFLIKT', ZUSTAND_GEAENDERT);
+  return mitAudit(ctx, async () => ({
+    wert: ergebnis,
+    protokoll: {
+      aktion: 'tcms.nachricht.unzustellbar',
+      objektTyp: 'Nachricht',
+      objektId: zeile.id,
+      programmId: null,
+      detail: { zweck: zeile.zweck, empfaengerId: zeile.empfaengerId, grund: e.grund },
     },
   }));
 }

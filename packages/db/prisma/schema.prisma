@@ -840,29 +840,44 @@ enum NachrichtEmpfaengerArt {
   KANZLEI
 }
 
+/// Grund, aus dem die kanzleikonsole eine Nachricht nicht zustellen konnte
+/// (wie `NACHRICHT_UNZUSTELLBAR_GRUENDE` im Vertrag).
+enum NachrichtUnzustellbarGrund {
+  EMPFAENGER_UNGUELTIG
+  KEIN_PORTALZUGANG
+  ABGELAUFEN
+  SONSTIGES
+}
+
 /// Postausgang: Die kanzleikonsole holt offene Nachrichten mit ihrem
 /// Systemakteur ab und stellt sie zu (Stufe 4). Empfänger nur als Personen-ID
 /// (TS-06), Mandant als Anker, Vorlagendaten in `daten` (ohne Geheimnis),
-/// Bestätigungscode nur in `code`. „Zugestellt" (`zugestelltAm`) und
-/// „verworfen" (`verworfenAm`: Freigabe erledigt, Code abgelaufen oder ersetzt)
-/// leeren `text` und `code`; CHECKs in der Migration erzwingen das.
+/// Bestätigungscode nur in `code`. „Zugestellt" (`zugestelltAm`),
+/// „unzustellbar" (`unzustellbarAm` mit Grund, von der kanzleikonsole gemeldet)
+/// und „verworfen" (`verworfenAm`: Freigabe erledigt, Code abgelaufen oder
+/// ersetzt) leeren `text` und `code`; zugestellt und unzustellbar schließen sich
+/// aus. CHECKs in den Migrationen erzwingen das.
 model Nachricht {
-  id            String                 @id @default(cuid())
-  tenantId      String                 @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
-  mandantId     String                 @db.Uuid
-  mandant       Mandant                @relation(fields: [tenantId, mandantId], references: [tenantId, id])
-  empfaengerId  String                 @db.Uuid
-  empfaengerArt NachrichtEmpfaengerArt
-  zweck         NachrichtZweck
-  betreff       String
-  text          String
+  id                String                      @id @default(cuid())
+  tenantId          String                      @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  mandantId         String                      @db.Uuid
+  mandant           Mandant                     @relation(fields: [tenantId, mandantId], references: [tenantId, id])
+  empfaengerId      String                      @db.Uuid
+  empfaengerArt     NachrichtEmpfaengerArt
+  zweck             NachrichtZweck
+  betreff           String
+  text              String
   /// Vorlagendaten je Zweck ohne `code` (Vertrag `OffeneNachrichtSchema`).
-  daten         Json
+  daten             Json
   /// Bestätigungscode (6 Ziffern), nur bei FREIGABE_CODE und nur solange offen.
-  code          String?
-  createdAt     DateTime               @default(now())
-  zugestelltAm  DateTime?
-  verworfenAm   DateTime?
+  code              String?
+  createdAt         DateTime                    @default(now())
+  zugestelltAm      DateTime?
+  verworfenAm       DateTime?
+  /// Von der kanzleikonsole als unzustellbar gemeldet (mit Grund); schließt
+  /// `zugestelltAm` aus.
+  unzustellbarAm    DateTime?
+  unzustellbarGrund NachrichtUnzustellbarGrund?
 
   @@index([tenantId, zugestelltAm, createdAt])
   @@index([tenantId, mandantId])
