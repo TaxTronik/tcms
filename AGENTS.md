@@ -60,8 +60,9 @@ für KI-Werkzeuge.
     `ladeAudit`/`pruefeAudit`); die Demo ergänzt nur Namen und Zuständigkeit
     aus ihrem Verzeichnis (`mandantenListe`, `demoAkteur`).
   - `src/server/actions/*.ts` – Server Actions je Bereich.
-  - `src/server/aktion.ts` – `mitAudit` der Demo (Dienstkontext aus
-    `@tcms/service` im Tenant des Akteurs) und `aktualisiereMandant`.
+  - `src/server/aktion.ts` – `aktualisiereMandant` (Revalidierung) und
+    Meldungstexte; die Demo hat keinen eigenen Schreibweg, Actions rufen nur
+    Operationen aus `@tcms/service` (`imDienst(demoAkteur(…), DEMO_PORTS, …)`).
   - `src/server/demo.ts` – Stellvertreterin der kanzleikonsole: Demo-Verzeichnis
     (Personen, Zuständigkeit, Tenant), Akteur je Mandant, Demo-Uhr, Ablage,
     `lies`/`db` für Lesezugriffe (nur lesend, je Aufruf im Demo-Tenant).

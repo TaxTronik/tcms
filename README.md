@@ -362,10 +362,10 @@ mit diesen Rollen nicht startet.
   Der Dienst speichert nur Verweise; Dateien nimmt die kanzleikonsole an (ADR 0001 §6). Die Demo
   spielt dabei die kanzleikonsole (Ablage, Dokument-ID als UUID) und reicht nur den Verweis weiter.
 - **Audit:** SHA-256-Hashkette je Tenant (Kettenversion 2), ohne qualifizierten Zeitstempel.
-- **Demo-Lader:** lesen über `db` aus `apps/web/src/server/demo.ts` (je Aufruf eine Transaktion im
-  Demo-Tenant, nur lesende Methoden); Prüfung und Änderung vieler Actions liegen noch nicht in
-  derselben Transaktion (TS-05 für die Fachoperationen folgt mit deren Umzug nach
-  `packages/service`). Eindeutige Schlüssel und bedingte Updates fangen Gabelungen ab.
+- **Demo-Lader:** lesen über die Service-Lader bzw. `db` aus `apps/web/src/server/demo.ts` (je
+  Aufruf eine Transaktion im Demo-Tenant, nur lesende Methoden). Actions sind dünne Hüllen um die
+  Operationen aus `packages/service` (Prüfung und Änderung in derselben Transaktion, TS-05); die
+  Demo selbst schreibt nicht.
 - **Katalog:** Risiken, Kontrollen, Normanker und Matrix-Startwerte sind ungeprüfte Entwürfe und vom
   Berufsträger zu kalibrieren.
 - **Prio-B-Bereiche schlank:** Kontrollkalender, Kommunikation, Prüfungsvorbereitung und Katalog nur

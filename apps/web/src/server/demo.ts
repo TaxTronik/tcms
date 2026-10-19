@@ -209,8 +209,8 @@ export const DEMO_PORTS: DienstPorts = {
 
 /**
  * Lesender Zugriff der Demo im Demo-Tenant (eine Transaktion je Aufruf). Die
- * Demo kennt nur diesen Tenant; Schreibzugriffe laufen über `mitAudit`
- * (aktion.ts) im Tenant des Akteurs.
+ * Demo kennt nur diesen Tenant; Schreibzugriffe laufen nur über die
+ * Operationen aus @tcms/service im Tenant des Akteurs.
  */
 export function lies<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
   return mitTenant(DEMO_TENANT_ID, fn);
@@ -231,7 +231,7 @@ const LESEND = new Set([
  * Lesezugriff der Demo-Lader wie früher über `prisma.<modell>.<methode>(…)`:
  * Jeder Aufruf läuft in `lies` (eigene Transaktion im Demo-Tenant, RLS).
  * Schreibende Methoden und Rohzugriffe (`$…`) sind gesperrt – Änderungen nur
- * über `mitAudit` (AGENTS.md Regel 1).
+ * über die Operationen aus @tcms/service (AGENTS.md Regel 1).
  */
 export const db: Tx = new Proxy({} as Tx, {
   get(_ziel, modell) {
@@ -244,7 +244,7 @@ export const db: Tx = new Proxy({} as Tx, {
         get(_z, methode) {
           if (typeof methode !== 'string' || !LESEND.has(methode)) {
             throw new Error(
-              `[demo] db.${modell}.${String(methode)}: Änderungen nur über mitAudit.`,
+              `[demo] db.${modell}.${String(methode)}: Änderungen nur über @tcms/service.`,
             );
           }
           return (...args: unknown[]) =>
