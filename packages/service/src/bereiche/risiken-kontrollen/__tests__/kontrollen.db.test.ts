@@ -458,7 +458,7 @@ describe.skipIf(!AKTIV)('Kontrollen: Fachoperationen', () => {
       };
       const faelle: [Partial<typeof basis>, string][] = [
         [{ durchfuehrendId: a.personen.gv }, 'durchfuehrendId'],
-        [{ vertretungId: b.personen.tcb }, 'vertretungId'],
+        [{ vertretungId: a.personen.tcb }, 'vertretungId'],
         [{ vertretungId: a.personen.ehemals }, 'vertretungId'],
         [{ gegenzeichnerId: a.personen.ma }, 'gegenzeichnerId'],
         [{ gegenzeichnerId: a.personen.vertretung }, 'gegenzeichnerId'],
@@ -489,6 +489,12 @@ describe.skipIf(!AKTIV)('Kontrollen: Fachoperationen', () => {
         rufe(akt.bt, (ctx) => verantwortlicheAendern(ctx, { ...basis, standId: neu.id })),
       );
       expect(gleich.code).toBe('UNGUELTIG');
+      // Kein Existenz-Orakel über andere Mandanten: ein Kontakt von B wird wie
+      // jede unbekannte UUID behandelt (Kanzleiseite nur in UUID-Form prüfbar).
+      const ohneOrakel = await rufe(akt.bt, (ctx) =>
+        verantwortlicheAendern(ctx, { ...basis, standId: neu.id, vertretungId: b.personen.tcb }),
+      );
+      expect(ohneOrakel.version).toBe(neu.version + 1);
     });
 
     it('Mandantenseite: nur aktive Rolle bei genau diesem Mandanten', async () => {

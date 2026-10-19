@@ -430,17 +430,20 @@ function ungueltig(meldung: string, feld: string): DienstFehler {
 
 /**
  * Kanzleipersonen sind IDs der kanzleikonsole; der Dienst kennt sie nicht und
- * prüft nur die UUID-Form (Schema). Fail closed: eine ID, die im Tenant als
- * Mandantenkontakt bekannt ist (aktive oder frühere Rolle), ist keine
- * Kanzleiperson.
+ * prüft nur die UUID-Form (Schema). Zusätzlich fail closed: ein Kontakt
+ * dieses Mandanten (aktive oder frühere Rolle) ist keine Kanzleiperson. Die
+ * Prüfung bleibt bewusst auf den Mandanten der Anfrage beschränkt; eine
+ * tenantweite Suche verriete, ob eine ID bei einem anderen Mandanten als
+ * Kontakt existiert (Existenz-Orakel).
  */
 export async function pruefeKanzleiPersonen(
   tx: Tx,
+  mandantId: string,
   ids: readonly { id: string; feld: string }[],
 ): Promise<void> {
   if (ids.length === 0) return;
   const kontakte = await tx.mandantKontaktRolle.findMany({
-    where: { kontaktId: { in: ids.map((x) => x.id) } },
+    where: { mandantId, kontaktId: { in: ids.map((x) => x.id) } },
     select: { kontaktId: true },
   });
   for (const x of ids) {
@@ -512,7 +515,7 @@ export async function verantwortlicheAendern(
         { id: vertretungId, feld: 'vertretungId' },
       ];
       if (alt.partei === 'MANDANT') await pruefeMandantPersonen(tx, mandantId, seite);
-      else await pruefeKanzleiPersonen(tx, seite);
+      else await pruefeKanzleiPersonen(tx, mandantId, seite);
 
       if (!gegenzeichnungMandant) {
         if (alt.schluessel && !gegenzeichnerId) {
@@ -529,7 +532,9 @@ export async function verantwortlicheAendern(
             );
           }
           // Gegenzeichnung durch eine Person der Kanzlei (oder zweite Person beim Mandanten).
-          await pruefeKanzleiPersonen(tx, [{ id: gegenzeichnerId, feld: 'gegenzeichnerId' }]);
+          await pruefeKanzleiPersonen(tx, mandantId, [
+            { id: gegenzeichnerId, feld: 'gegenzeichnerId' },
+          ]);
         }
       }
       if (

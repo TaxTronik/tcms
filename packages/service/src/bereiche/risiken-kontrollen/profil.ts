@@ -552,7 +552,7 @@ export async function vorgeschlagenesRisikoAufnehmen(
         mandantId,
         'Risiken werden bis zur Anlage von Version 1 im Einrichtungsassistenten übernommen.',
       );
-      await pruefeKanzleiPersonen(tx, [
+      await pruefeKanzleiPersonen(tx, mandantId, [
         { id: e.verantwortliche.berufstraeger.id, feld: 'verantwortliche.berufstraeger' },
         { id: e.verantwortliche.hauptbearbeitung.id, feld: 'verantwortliche.hauptbearbeitung' },
         ...(e.verantwortliche.vertretung
