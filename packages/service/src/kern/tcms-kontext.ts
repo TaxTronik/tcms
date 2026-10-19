@@ -396,6 +396,16 @@ export interface TcmsKontext {
     ohneGegenzeichnung: number;
     ueberfaellig: number;
     fehlendeNachweise: number;
+    /**
+     * Codes wiederkehrender Kontrollen (Turnus ≠ KEIN) ohne jede – auch
+     * geplante – nicht entfallene Durchführung mit Fälligkeit im Zeitraum
+     * (+ 60 Tage Nachlauf); leer, solange der Zeitraum zum Stand nicht begonnen hat.
+     */
+    ohneDurchfuehrung: string[];
+    /** Summe der Nachweise abgeschlossener Durchführungen (ohne/mit Befund) im Zeitraum. */
+    nachweise: number;
+    /** Entfallene Durchführungen im Zeitraum (zählen nicht als „ohne Befund"). */
+    entfallen: number;
   } | null;
   /** Objekte, die wegen des Stichtags ausgeblendet sind. */
   ausgeblendet: number;
@@ -413,6 +423,9 @@ function gueltig<T extends { gueltigAb: Date; gueltigBis: Date | null }>(
     )
     .sort((a, b) => b.gueltigAb.getTime() - a.gueltigAb.getTime())[0];
 }
+
+/** Nachlauf nach dem Wirksamkeitszeitraum: Fälligkeiten bis 60 Tage nach dessen Ende zählen mit. */
+const NACHLAUF_MS = 60 * 86_400_000;
 
 function monatePlus(d: Date, n: number): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, 1));
@@ -1091,12 +1104,28 @@ function berechne(
   const aktuelleBeschreibung = beschreibungen[beschreibungen.length - 1] ?? null;
 
   // ---- Zeitraum und Lücken ----
+  // Regeln der Prüfungsvorbereitung (bisher in der Demo-Seite): Durchführungen
+  // zählen, wenn ihre Fälligkeit im Wirksamkeitszeitraum liegt, mit 60 Tagen
+  // Nachlauf für Fälligkeiten nach Periodenende. Feststellungen gehen nicht
+  // ein; die Zahlen verraten daher nichts Vertrauliches (RT-01).
   const durchfuehrungen = alleDurchf.map(stripD);
   const ueberfaellig = durchfuehrungen.filter((d) => d.anzeige === 'UEBERFAELLIG').length;
   let zeitraum: TcmsKontext['zeitraum'] = null;
   if (programm.wirksamAb && programm.wirksamBis) {
     const ab = programm.wirksamAb;
     const bis = programm.wirksamBis;
+    const imFenster = (d: DurchfuehrungView) =>
+      d.faelligAm.getTime() >= ab.getTime() && d.faelligAm.getTime() <= bis.getTime() + NACHLAUF_MS;
+    const begonnen = ab.getTime() <= ende.getTime();
+    const mitDurchfuehrung = new Set(
+      durchfuehrungen
+        .filter((d) => imFenster(d) && d.anzeige !== 'ENTFALLEN')
+        .map((d) => d.kontrolleId),
+    );
+    const faelligGeworden = durchfuehrungen.filter((d) => imFenster(d) && d.anzeige !== 'GEPLANT');
+    const abgeschlossen = faelligGeworden.filter(
+      (d) => d.anzeige === 'OHNE_BEFUND' || d.anzeige === 'MIT_BEFUND',
+    );
     const monate =
       (bis.getUTCFullYear() - ab.getUTCFullYear()) * 12 + bis.getUTCMonth() - ab.getUTCMonth() + 1;
     const monat = Math.max(
@@ -1109,13 +1138,7 @@ function berechne(
           1,
       ),
     );
-    const imZeitraum = durchfuehrungen.filter(
-      (d) =>
-        d.faelligAm.getTime() >= ab.getTime() &&
-        d.faelligAm.getTime() <= bis.getTime() + 60 * 86_400_000 &&
-        d.anzeige !== 'GEPLANT' &&
-        d.anzeige !== 'ENTFALLEN',
-    );
+    const imZeitraum = faelligGeworden.filter((d) => d.anzeige !== 'ENTFALLEN');
     zeitraum = {
       monat,
       monate,
@@ -1133,6 +1156,13 @@ function berechne(
             d.anzeige === 'ZUR_GEGENZEICHNUNG') &&
           d.nachweise < d.mindestNachweise,
       ).length,
+      ohneDurchfuehrung: begonnen
+        ? kontrollen
+            .filter((k) => k.frequenz.turnus !== 'KEIN' && !mitDurchfuehrung.has(k.id))
+            .map((k) => k.code)
+        : [],
+      nachweise: abgeschlossen.reduce((summe, d) => summe + d.nachweise, 0),
+      entfallen: faelligGeworden.filter((d) => d.anzeige === 'ENTFALLEN').length,
     };
   }
 

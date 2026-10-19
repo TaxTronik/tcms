@@ -61,40 +61,17 @@ export default async function Pruefung({
       ? p.angemessenheitStichtag
       : null;
 
-  // ---- Durchführungen im Wirksamkeitszeitraum (wie Kontext: Fälligkeit im Zeitraum + 60 Tage Nachlauf) ----
-  const imZr =
-    p.wirksamAb && p.wirksamBis
-      ? ctx.durchfuehrungen.filter(
-          (d) =>
-            d.faelligAm.getTime() >= p.wirksamAb!.getTime() &&
-            d.faelligAm.getTime() <= p.wirksamBis!.getTime() + 60 * 86_400_000 &&
-            d.anzeige !== 'GEPLANT',
-        )
-      : [];
-  const abgeschlossen = imZr.filter(
-    (d) => d.anzeige === 'OHNE_BEFUND' || d.anzeige === 'MIT_BEFUND',
-  );
-  const nachweiseSumme = abgeschlossen.reduce((s, d) => s + d.nachweise, 0);
-  const entfallen = imZr.filter((d) => d.anzeige === 'ENTFALLEN').length;
+  // ---- Durchführungen im Wirksamkeitszeitraum ----
+  // Zahlen und Regeln (Fälligkeit im Zeitraum + 60 Tage Nachlauf) rechnet der
+  // Service im Kontext (`zeitraum`); die Seite zeigt sie nur an.
+  const abgeschlossen = (zr?.ohneBefund ?? 0) + (zr?.mitBefund ?? 0);
   const zeitraumBegonnen = !!p.wirksamAb && p.wirksamAb.getTime() <= ende;
 
   // ---- Lückenanalyse ----
   // Wiederkehrende Kontrollen ohne jede (auch geplante) Durchführung mit Fälligkeit im Zeitraum.
-  const mitDurchf = new Set(
-    p.wirksamAb && p.wirksamBis
-      ? ctx.durchfuehrungen
-          .filter(
-            (d) =>
-              d.faelligAm.getTime() >= p.wirksamAb!.getTime() &&
-              d.faelligAm.getTime() <= p.wirksamBis!.getTime() + 60 * 86_400_000 &&
-              d.anzeige !== 'ENTFALLEN',
-          )
-          .map((d) => d.kontrolleId)
-      : [],
+  const ohneDurchfuehrung = (zr?.ohneDurchfuehrung ?? []).flatMap((code) =>
+    ctx.kontrollen.filter((k) => k.code === code),
   );
-  const ohneDurchfuehrung = zeitraumBegonnen
-    ? ctx.kontrollen.filter((k) => k.frequenz.turnus !== 'KEIN' && !mitDurchf.has(k.id))
-    : [];
   const ueberfaellig = ctx.durchfuehrungen.filter((d) => d.anzeige === 'UEBERFAELLIG').length;
   // Schwere und §-153 nur aus lesbaren Feststellungen (RT-01: maskierte ohne Inhalt).
   const hochOffen = ctx.feststellungen.filter(
@@ -467,11 +444,11 @@ export default async function Pruefung({
                 style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}
               >
                 <div className="mini-kpi">
-                  <div className="v">{zr?.relevante ?? imZr.length}</div>
+                  <div className="v">{zr?.relevante ?? 0}</div>
                   <div className="l">fällig gewordene Durchführungen</div>
                 </div>
                 <div className="mini-kpi">
-                  <div className="v">{abgeschlossen.length}</div>
+                  <div className="v">{abgeschlossen}</div>
                   <div className="l">abgeschlossen und gegengezeichnet</div>
                 </div>
                 <div className="mini-kpi">
@@ -483,11 +460,11 @@ export default async function Pruefung({
                   <div className="l">abgeschlossen – mit Befund</div>
                 </div>
                 <div className="mini-kpi">
-                  <div className="v">{nachweiseSumme}</div>
+                  <div className="v">{zr?.nachweise ?? 0}</div>
                   <div className="l">Nachweise dokumentiert</div>
                 </div>
                 <div className="mini-kpi">
-                  <div className="v">{entfallen}</div>
+                  <div className="v">{zr?.entfallen ?? 0}</div>
                   <div className="l">entfallen (zählen nicht als ohne Befund)</div>
                 </div>
               </div>

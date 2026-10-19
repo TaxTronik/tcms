@@ -292,6 +292,12 @@ und Zuständigkeit ergänzt die kanzleikonsole):
 | GET     | `/v1/audit?programmId=&mandantId=&aktion=&nach=&vor=&limit=` | Admin/Partner; höchstens 500 je Seite; Cursor = Position `pos`         |
 | POST    | `/v1/audit/pruefen`                                          | Admin/Partner; Kette seitenweise, Zeitbudget 20 s, Fortsetzung `ab`    |
 
+Der Kontext rechnet die Zahlen der Prüfungsvorbereitung (`zeitraum`, nur mit Wirksamkeitszeitraum):
+Durchführungen zählen, wenn ihre Fälligkeit im Zeitraum liegt (mit 60 Tagen Nachlauf); dazu
+`ohneDurchfuehrung` (Codes wiederkehrender Kontrollen ohne jede – auch geplante – nicht entfallene
+Durchführung; leer, solange der Zeitraum zum Stand nicht begonnen hat), `nachweise` (Nachweise
+abgeschlossener Durchführungen) und `entfallen`. Feststellungen gehen nicht ein.
+
 Rechte-Kennzeichen für die Oberfläche berechnet der Dienst mit denselben Rechtefunktionen wie die
 Schreiboperationen: Kontext `rechte` (`bearbeiten`, `wuerdigen`) und `mandant.rechte.bearbeiten` (Anker
 pflegen), beide im historischen Stand `false`; `GET …/kontakte` liefert `rechte.bearbeiten` (Rollen setzen).

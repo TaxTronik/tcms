@@ -580,6 +580,17 @@ export const KontextAntwortSchema = z
         ohneGegenzeichnung: z.number().int(),
         ueberfaellig: z.number().int(),
         fehlendeNachweise: z.number().int(),
+        /**
+         * Codes wiederkehrender Kontrollen (Turnus ≠ KEIN) ohne jede – auch
+         * geplante – nicht entfallene Durchführung mit Fälligkeit im
+         * Wirksamkeitszeitraum (+ 60 Tage Nachlauf); leer, solange der
+         * Zeitraum zum Stand nicht begonnen hat (Oberfläche: „n. a.").
+         */
+        ohneDurchfuehrung: z.array(text(50)),
+        /** Summe der Nachweise abgeschlossener Durchführungen (ohne/mit Befund) im Zeitraum. */
+        nachweise: z.number().int(),
+        /** Entfallene Durchführungen im Zeitraum (zählen nicht als „ohne Befund"). */
+        entfallen: z.number().int(),
       })
       .strict()
       .nullable(),

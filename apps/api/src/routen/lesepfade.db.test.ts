@@ -75,6 +75,38 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
       });
     });
 
+    it('Zeitraumzahlen der Prüfungsvorbereitung (ohneDurchfuehrung, nachweise, entfallen)', async () => {
+      const r = await bestaetigtSenden(app(), { ziel: pfad, claims: anna() });
+      const k = KontextAntwortSchema.parse((await json(r))['daten']);
+      const ab = Date.parse(k.programm!.wirksamAb!);
+      const bis = Date.parse(k.programm!.wirksamBis!) + 60 * 86_400_000;
+      const imFenster = (d: (typeof k.durchfuehrungen)[number]) =>
+        Date.parse(d.faelligAm) >= ab && Date.parse(d.faelligAm) <= bis;
+      // Gegenrechnung aus derselben Antwort mit den Regeln der Prüfungsseite.
+      const faellig = k.durchfuehrungen.filter((d) => imFenster(d) && d.anzeige !== 'GEPLANT');
+      const mit = new Set(
+        k.durchfuehrungen
+          .filter((d) => imFenster(d) && d.anzeige !== 'ENTFALLEN')
+          .map((d) => d.kontrolleId),
+      );
+      const begonnen = ab <= Date.parse(`${k.stand}T23:59:59.999Z`);
+      expect(k.zeitraum).not.toBeNull();
+      expect(k.zeitraum!.nachweise).toBe(
+        faellig
+          .filter((d) => d.anzeige === 'OHNE_BEFUND' || d.anzeige === 'MIT_BEFUND')
+          .reduce((s, d) => s + d.nachweise, 0),
+      );
+      expect(k.zeitraum!.entfallen).toBe(faellig.filter((d) => d.anzeige === 'ENTFALLEN').length);
+      expect(k.zeitraum!.ohneDurchfuehrung).toEqual(
+        begonnen
+          ? k.kontrollen
+              .filter((x) => x.frequenz.turnus !== 'KEIN' && !mit.has(x.id))
+              .map((x) => x.code)
+          : [],
+      );
+      expect(k.zeitraum!.nachweise).toBeGreaterThan(0);
+    });
+
     it('falscher Mandant im Pfad: 404 (Bindung an cli.id)', async () => {
       const r = await bestaetigtSenden(app(), {
         ziel: `/v1/mandanten/${DEMO_IDS.seestern}/kontext`,
