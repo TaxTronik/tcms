@@ -31,6 +31,7 @@ import {
   type RisikenListe,
 } from '@tcms/contract';
 import { mitTenant, type Tx } from '@tcms/db';
+import { kalendertag } from '@tcms/service';
 import type { z } from 'zod';
 import type { Datenzugriff } from '../app';
 import type { Routen } from '../routen';
@@ -421,7 +422,9 @@ describe.skipIf(!AKTIV)('API risiken-kontrollen gegen PostgreSQL', () => {
     const body = {
       profilStandId: offen.id,
       profil: neu,
-      gueltigAb: new Date().toISOString().slice(0, 10),
+      // Kalendertag des Dienstes (Europe/Berlin), nicht UTC: zwischen 0 und 2 Uhr
+      // Berliner Zeit läge der UTC-Tag vor „heute“ und der Dienst wiese ab.
+      gueltigAb: kalendertag(new Date()),
       ereignisseAnlegen: true,
     };
     await negativ('POST', '/profil', body);
