@@ -81,8 +81,15 @@ function ablehnungBegruendet(
 }
 
 // -----------------------------------------------------------------------------
-// Eingaben: Lesen
+// Eingaben
+//
+// Je Operation zwei Schemas aus denselben Feldern: `…BodySchema` für den
+// HTTP-Body (Mandant und Objekt-ID stehen im Pfad) und `…Schema` für die
+// vollständige Eingabe der Service-Funktion (Pfad + Body). Beide sind strikt.
 // -----------------------------------------------------------------------------
+
+/** Query der Lese-Endpunkte (`?stand=YYYY-MM-DD`). */
+export const RisikenKontrollenQuerySchema = z.object({ stand: StandSchema.optional() }).strict();
 
 export const RisikenLesenSchema = z.object({ mandantId, stand: StandSchema.optional() }).strict();
 export const RisikoLesenSchema = z
@@ -95,12 +102,6 @@ export const KontrolleLesenSchema = z
   .object({ mandantId, kontrolleId: ObjektIdSchema, stand: StandSchema.optional() })
   .strict();
 export const ProfilLesenSchema = z.object({ mandantId, stand: StandSchema.optional() }).strict();
-/** Query der Lese-Endpunkte (`?stand=YYYY-MM-DD`). */
-export const RisikenKontrollenQuerySchema = z.object({ stand: StandSchema.optional() }).strict();
-
-// -----------------------------------------------------------------------------
-// Eingaben: Risiken
-// -----------------------------------------------------------------------------
 
 /**
  * Stand, auf dem die Änderung beruht (aus der Lese-Antwort). Ist inzwischen
@@ -108,112 +109,98 @@ export const RisikenKontrollenQuerySchema = z.object({ stand: StandSchema.option
  * Änderung auf einem nicht gesehenen Stand, keine Gabelung).
  */
 const standId = ObjektIdSchema;
+const risiko = { mandantId, risikoId: ObjektIdSchema };
+const kontrolle = { mandantId, kontrolleId: ObjektIdSchema };
+
+// --- Risiken -----------------------------------------------------------------
 
 /** Neubewertung: S, W, R und GT; Klassen berechnet der Dienst (Regel 2). */
-export const RisikoNeuBewertenSchema = z
-  .object({
-    mandantId,
-    risikoId: ObjektIdSchema,
-    standId,
-    s: SchadenSchema,
-    w: WahrscheinlichkeitSchema,
-    r: ReichweiteSchema,
-    gt: GovernanceTypSchema,
-    begruendung: BegruendungSchema,
-  })
-  .strict();
+const neuBewerten = {
+  standId,
+  s: SchadenSchema,
+  w: WahrscheinlichkeitSchema,
+  r: ReichweiteSchema,
+  gt: GovernanceTypSchema,
+  begruendung: BegruendungSchema,
+};
+export const RisikoNeuBewertenBodySchema = z.object(neuBewerten).strict();
+export const RisikoNeuBewertenSchema = z.object({ ...risiko, ...neuBewerten }).strict();
 
 /** Bestätigt die aktuelle Bewertung unverändert (neuer Stand mit gleichen Werten). */
-export const RisikoBestaetigenSchema = z
-  .object({ mandantId, risikoId: ObjektIdSchema, standId, begruendung: BegruendungSchema })
-  .strict();
+const bestaetigen = { standId, begruendung: BegruendungSchema };
+export const RisikoBestaetigenBodySchema = z.object(bestaetigen).strict();
+export const RisikoBestaetigenSchema = z.object({ ...risiko, ...bestaetigen }).strict();
 
-export const UebersteuerungBeantragenSchema = z
-  .object({
-    mandantId,
-    risikoId: ObjektIdSchema,
-    sicht: SichtSchema,
-    klasse: KlasseSchema,
-    begruendung: BegruendungSchema,
-  })
-  .strict();
+const uebersteuern = { sicht: SichtSchema, klasse: KlasseSchema, begruendung: BegruendungSchema };
+export const UebersteuerungBeantragenBodySchema = z.object(uebersteuern).strict();
+export const UebersteuerungBeantragenSchema = z.object({ ...risiko, ...uebersteuern }).strict();
 
+const entscheiden = { entscheidung: EntscheidungSchema, begruendung: optionaleBegruendung };
+export const UebersteuerungEntscheidenBodySchema = z
+  .object(entscheiden)
+  .strict()
+  .superRefine(ablehnungBegruendet);
 export const UebersteuerungEntscheidenSchema = z
-  .object({
-    mandantId,
-    uebersteuerungId: ObjektIdSchema,
-    entscheidung: EntscheidungSchema,
-    begruendung: optionaleBegruendung,
-  })
+  .object({ mandantId, uebersteuerungId: ObjektIdSchema, ...entscheiden })
   .strict()
   .superRefine(ablehnungBegruendet);
 
 /** Risiken zur Freigabe einreichen bzw. freigeben (Auswahl, ohne Dubletten). */
-export const RisikenFreigabeSchrittSchema = z
-  .object({
-    mandantId,
-    risikoIds: z
-      .array(ObjektIdSchema)
-      .min(1)
-      .max(MAX_RISIKEN_JE_SCHRITT)
-      .refine((ids) => new Set(ids).size === ids.length, 'Risiko doppelt ausgewählt'),
-  })
-  .strict();
+const freigabeSchritt = {
+  risikoIds: z
+    .array(ObjektIdSchema)
+    .min(1)
+    .max(MAX_RISIKEN_JE_SCHRITT)
+    .refine((ids) => new Set(ids).size === ids.length, 'Risiko doppelt ausgewählt'),
+};
+export const RisikenFreigabeSchrittBodySchema = z.object(freigabeSchritt).strict();
+export const RisikenFreigabeSchrittSchema = z.object({ mandantId, ...freigabeSchritt }).strict();
 
-export const RisikoZurueckweisenSchema = z
-  .object({ mandantId, risikoId: ObjektIdSchema, begruendung: BegruendungSchema })
-  .strict();
+const zurueckweisen = { begruendung: BegruendungSchema };
+export const RisikoZurueckweisenBodySchema = z.object(zurueckweisen).strict();
+export const RisikoZurueckweisenSchema = z.object({ ...risiko, ...zurueckweisen }).strict();
 
-export const RisikoakzeptanzAnfordernSchema = z
-  .object({
-    mandantId,
-    risikoId: ObjektIdSchema,
-    /** Gesetzliche:r Vertreter:in des Mandanten (aktive MandantKontaktRolle). */
-    empfaengerId: PersonIdSchema,
-    begruendung: BegruendungSchema,
-  })
-  .strict();
+const akzeptanz = {
+  /** Gesetzliche:r Vertreter:in des Mandanten (aktive MandantKontaktRolle). */
+  empfaengerId: PersonIdSchema,
+  begruendung: BegruendungSchema,
+};
+export const RisikoakzeptanzAnfordernBodySchema = z.object(akzeptanz).strict();
+export const RisikoakzeptanzAnfordernSchema = z.object({ ...risiko, ...akzeptanz }).strict();
 
-// -----------------------------------------------------------------------------
-// Eingaben: Kontrollen
-// -----------------------------------------------------------------------------
+// --- Kontrollen --------------------------------------------------------------
 
-export const DesignBeurteilenSchema = z
-  .object({
-    mandantId,
-    kontrolleId: ObjektIdSchema,
-    standId,
-    design: z.enum(['ANGEMESSEN', 'MANGEL']),
-    begruendung: BegruendungSchema,
-  })
-  .strict();
+const design = {
+  standId,
+  design: z.enum(['ANGEMESSEN', 'MANGEL']),
+  begruendung: BegruendungSchema,
+};
+export const DesignBeurteilenBodySchema = z.object(design).strict();
+export const DesignBeurteilenSchema = z.object({ ...kontrolle, ...design }).strict();
 
-export const AbweichungBeantragenSchema = z
-  .object({
-    mandantId,
-    kontrolleId: ObjektIdSchema,
-    standId,
-    turnus: TurnusSchema,
-    anlass: z.boolean(),
-    begruendung: BegruendungSchema,
-  })
-  .strict();
+const abweichung = {
+  standId,
+  turnus: TurnusSchema,
+  anlass: z.boolean(),
+  begruendung: BegruendungSchema,
+};
+export const AbweichungBeantragenBodySchema = z.object(abweichung).strict();
+export const AbweichungBeantragenSchema = z.object({ ...kontrolle, ...abweichung }).strict();
 
 /** Entscheidung über genau den gesehenen Antrag (Stand mit der offenen Abweichung). */
+const abweichungEntscheiden = { standId, ...entscheiden };
+export const AbweichungEntscheidenBodySchema = z
+  .object(abweichungEntscheiden)
+  .strict()
+  .superRefine(ablehnungBegruendet);
 export const AbweichungEntscheidenSchema = z
-  .object({
-    mandantId,
-    kontrolleId: ObjektIdSchema,
-    standId,
-    entscheidung: EntscheidungSchema,
-    begruendung: optionaleBegruendung,
-  })
+  .object({ ...kontrolle, ...abweichungEntscheiden })
   .strict()
   .superRefine(ablehnungBegruendet);
 
-export const AbweichungAufhebenSchema = z
-  .object({ mandantId, kontrolleId: ObjektIdSchema, standId, begruendung: BegruendungSchema })
-  .strict();
+const aufheben = { standId, begruendung: BegruendungSchema };
+export const AbweichungAufhebenBodySchema = z.object(aufheben).strict();
+export const AbweichungAufhebenSchema = z.object({ ...kontrolle, ...aufheben }).strict();
 
 /**
  * Zuständigkeiten einer Kontrolle. Kanzleiseite: IDs der kanzleikonsole (nur
@@ -221,30 +208,35 @@ export const AbweichungAufhebenSchema = z
  * Bei `gegenzeichnungMandant` bestätigt die Vertretung beim Mandanten; dann
  * bleibt `gegenzeichnerId` ungenutzt und muss `null` sein.
  */
-export const VerantwortlicheAendernSchema = z
-  .object({
-    mandantId,
-    kontrolleId: ObjektIdSchema,
-    standId,
-    durchfuehrendId: PersonIdSchema,
-    vertretungId: PersonIdSchema,
-    gegenzeichnerId: PersonIdSchema.nullable(),
-    gegenzeichnungMandant: z.boolean(),
-  })
+const verantwortliche = {
+  standId,
+  durchfuehrendId: PersonIdSchema,
+  vertretungId: PersonIdSchema,
+  gegenzeichnerId: PersonIdSchema.nullable(),
+  gegenzeichnungMandant: z.boolean(),
+};
+function gegenzeichnungEindeutig(
+  e: { gegenzeichnungMandant: boolean; gegenzeichnerId: string | null },
+  ctx: z.RefinementCtx,
+) {
+  if (e.gegenzeichnungMandant && e.gegenzeichnerId !== null) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['gegenzeichnerId'],
+      message: 'Bei Gegenzeichnung beim Mandanten keine gegenzeichnende Person angeben',
+    });
+  }
+}
+export const VerantwortlicheAendernBodySchema = z
+  .object(verantwortliche)
   .strict()
-  .superRefine((e, ctx) => {
-    if (e.gegenzeichnungMandant && e.gegenzeichnerId !== null) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['gegenzeichnerId'],
-        message: 'Bei Gegenzeichnung beim Mandanten keine gegenzeichnende Person angeben',
-      });
-    }
-  });
+  .superRefine(gegenzeichnungEindeutig);
+export const VerantwortlicheAendernSchema = z
+  .object({ ...kontrolle, ...verantwortliche })
+  .strict()
+  .superRefine(gegenzeichnungEindeutig);
 
-// -----------------------------------------------------------------------------
-// Eingaben: Geschäftsprofil
-// -----------------------------------------------------------------------------
+// --- Geschäftsprofil ---------------------------------------------------------
 
 const monat = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 const land = z.string().regex(/^[A-Z]{2}$/);
@@ -337,16 +329,15 @@ export type ProfilAntworten = z.infer<typeof ProfilAntwortenSchema>;
  * Jahr voraus) – kein Lese-Stichtag. `ereignisseAnlegen` legt die
  * Ereignisse der geänderten Profilfragen an (Fachkonzept §4).
  */
-export const ProfilAendernSchema = z
-  .object({
-    mandantId,
-    /** Offener Profilstand, auf dem die Änderung beruht (sonst KONFLIKT). */
-    profilStandId: ObjektIdSchema,
-    profil: ProfilAntwortenSchema,
-    gueltigAb: kalendertag,
-    ereignisseAnlegen: z.boolean(),
-  })
-  .strict();
+const profilAendern = {
+  /** Offener Profilstand, auf dem die Änderung beruht (sonst KONFLIKT). */
+  profilStandId: ObjektIdSchema,
+  profil: ProfilAntwortenSchema,
+  gueltigAb: kalendertag,
+  ereignisseAnlegen: z.boolean(),
+};
+export const ProfilAendernBodySchema = z.object(profilAendern).strict();
+export const ProfilAendernSchema = z.object({ mandantId, ...profilAendern }).strict();
 
 /**
  * Verantwortliche Person, die die kanzleikonsole ausdrücklich übergibt
@@ -362,31 +353,30 @@ export const AufnahmePersonSchema = z
  * den übergebenen Kanzleipersonen und den Rollen der Mandantenseite
  * (MandantKontaktRolle) vorbelegt.
  */
-export const RisikoAufnehmenSchema = z
-  .object({
-    mandantId,
-    code: RisikoCodeSchema,
-    verantwortliche: z
-      .object({
-        berufstraeger: AufnahmePersonSchema,
-        hauptbearbeitung: AufnahmePersonSchema,
-        /** Vertretung der Kanzleiseite (weder Berufsträger:in noch Hauptbearbeitung). */
-        vertretung: AufnahmePersonSchema.nullable(),
-      })
-      .strict()
-      .superRefine((v, ctx) => {
-        const ids = [v.berufstraeger.id, v.hauptbearbeitung.id, v.vertretung?.id]
-          .filter((x): x is string => !!x)
-          .map((x) => x.toLowerCase());
-        if (new Set(ids).size !== ids.length) {
-          ctx.addIssue({
-            code: 'custom',
-            message: 'Berufsträger:in, Hauptbearbeitung und Vertretung müssen verschieden sein',
-          });
-        }
-      }),
-  })
-  .strict();
+const aufnehmen = {
+  code: RisikoCodeSchema,
+  verantwortliche: z
+    .object({
+      berufstraeger: AufnahmePersonSchema,
+      hauptbearbeitung: AufnahmePersonSchema,
+      /** Vertretung der Kanzleiseite (weder Berufsträger:in noch Hauptbearbeitung). */
+      vertretung: AufnahmePersonSchema.nullable(),
+    })
+    .strict()
+    .superRefine((v, ctx) => {
+      const ids = [v.berufstraeger.id, v.hauptbearbeitung.id, v.vertretung?.id]
+        .filter((x): x is string => !!x)
+        .map((x) => x.toLowerCase());
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Berufsträger:in, Hauptbearbeitung und Vertretung müssen verschieden sein',
+        });
+      }
+    }),
+};
+export const RisikoAufnehmenBodySchema = z.object(aufnehmen).strict();
+export const RisikoAufnehmenSchema = z.object({ mandantId, ...aufnehmen }).strict();
 
 export type RisikenLesen = z.infer<typeof RisikenLesenSchema>;
 export type RisikoLesen = z.infer<typeof RisikoLesenSchema>;
