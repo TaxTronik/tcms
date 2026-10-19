@@ -301,6 +301,9 @@ abgeschlossener Durchführungen) und `entfallen`. Feststellungen gehen nicht ein
 Rechte-Kennzeichen für die Oberfläche berechnet der Dienst mit denselben Rechtefunktionen wie die
 Schreiboperationen: Kontext `rechte` (`bearbeiten`, `wuerdigen`) und `mandant.rechte.bearbeiten` (Anker
 pflegen), beide im historischen Stand `false`; `GET …/kontakte` liefert `rechte.bearbeiten` (Rollen setzen).
+Rollen gelten je Mandant: `PUT …/kontakte` prüft nicht, ob die Kontakt-ID bei einem anderen Mandanten
+Rollen hat (früher `409`, ein Existenz-Orakel, RT4-T-07); die Bindung Kontakt → Mandant hält die
+kanzleikonsole (`cli`), und Rollen bei einem anderen Mandanten verleihen nichts.
 Risikoinventar (`GET …/risiken`), Kontrollmatrix (`GET …/kontrollen`) und Länder-Monitor (`GET …/laender`)
 tragen `rechte: { bearbeiten }` aus derselben Quelle wie ihre Schreiboperationen (`kannBearbeiten`), im
 historischen Stand und ohne Programm `false`.

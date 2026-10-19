@@ -5,15 +5,20 @@
 // Zugriff. Lesen: Kanzleipersonen mit Leserecht; Setzen: `kannBearbeiten`.
 //
 // Regeln beim Setzen (auditiert, ein Ereignis je Änderung):
-//   - Ein Kontakt gehört zu genau einem Mandanten des Tenants.
+//   - Rollen gelten je Mandant. Zu welchem Mandanten ein Kontakt gehört,
+//     bindet die kanzleikonsole (`cli` der Akteursbestätigung); der Dienst
+//     prüft und verrät nicht, ob eine Kontakt-ID bei einem anderen Mandanten
+//     Rollen hat (RT4-T-07: sonst Existenz-Orakel wie in
+//     `pruefeKanzleiPersonen` vermieden, und eine fremde ID ließe sich
+//     dauerhaft belegen). Rollen bei einem anderen Mandanten verleihen nichts:
+//     Rechte zählen nur Rollen beim bestätigten Mandanten (`aktiveRollen`).
 //   - Die letzte aktive GV kann nicht entfernt werden, solange offene
 //     Freigaben an sie adressiert sind (erst neu adressieren oder Ersatz-GV
 //     ernennen) → `KONFLIKT`.
 // TS-05: Die Mandantenzeile wird mit FOR UPDATE gesperrt
 // (`sperreRollenZumAendern`: parallele Rollenänderungen eines Mandanten
-// nacheinander, Prüfung und Änderung in derselben Transaktion), dazu eine
-// Sperre je Kontakt (paralleles Zuordnen desselben Kontakts zu zwei
-// Mandanten). Freigabe-Operationen prüfen Rollen unter derselben Zeile
+// nacheinander, Prüfung und Änderung in derselben Transaktion).
+// Freigabe-Operationen prüfen Rollen unter derselben Zeile
 // (`halteRollenFest`): Das Entfernen der letzten GV und ein gleichzeitiges
 // Anlegen oder Neuadressieren an sie laufen nacheinander (RT4-T-06).
 // =============================================================================
@@ -29,7 +34,6 @@ import {
   type KontaktRollenAntwort,
   type KontaktRollenEingabe,
 } from '@tcms/contract';
-import { tenantSperre } from '@tcms/db';
 import { mitAudit } from '../../audit';
 import type { DienstKontext } from '../../kontext';
 import { kannLesen, type MandantRolle } from '../../rechte';
@@ -95,18 +99,8 @@ export async function setzeKontaktRollen(
   const tx = ctx.tx;
 
   // Dieselbe Zeile halten die Freigabe-Operationen (`halteRollenFest`), bevor sie Rollen prüfen.
+  // Keine tenantweite Prüfung anderer Mandanten (RT4-T-07, siehe Kopf).
   await sperreRollenZumAendern(tx, mandantId);
-  await tenantSperre(tx, `kontakt.${kontaktId}`);
-
-  const anderer = await tx.mandantKontaktRolle.count({
-    where: { kontaktId, mandantId: { not: mandantId } },
-  });
-  if (anderer > 0) {
-    throw new DienstFehler(
-      'KONFLIKT',
-      'Der Kontakt kann diesem Mandanten nicht zugeordnet werden.',
-    );
-  }
 
   const vorher = await tx.mandantKontaktRolle.findMany({
     where: { mandantId, kontaktId },

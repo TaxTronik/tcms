@@ -192,16 +192,36 @@ describe.skipIf(!AKTIV)('Mandantenanker und Kontaktrollen gegen PostgreSQL', () 
       expect(liste.kontakte.find((x) => x.kontaktId === k)?.rollen).toHaveLength(3);
     });
 
-    it('ein Kontakt gehört zu genau einem Mandanten', async () => {
+    // RT4-T-07: Früher wies der Dienst eine Kontakt-ID mit (auch deaktivierten)
+    // Rollen bei einem anderen Mandanten mit KONFLIKT ab. Das verriet Personen
+    // mit Bezug zu nur einem Mandanten, ob eine ID Kontakt eines anderen
+    // Mandanten ist, und ließ fremde IDs dauerhaft belegen. Die Bindung
+    // Kontakt → Mandant liegt bei der kanzleikonsole (`cli`); Rollen gelten je
+    // Mandant und verleihen bei einem anderen Mandanten nichts (rechte.test.ts).
+    it('Rollen je Mandant: keine tenantweite Prüfung, keine Belegung fremder IDs (RT4-T-07)', async () => {
       const k = randomUUID();
       await rollen(mA, k, ['MITARBEITER']);
-      await rollen(mA, k, []); // auch deaktiviert bleibt er Kontakt von A
-      const f = await fehlerVon(rollen(mB, k, ['MITARBEITER'], admin(mB)));
-      expect(f.code).toBe('KONFLIKT');
-      const b = await mitTenant(tenant, (tx) =>
-        tx.mandantKontaktRolle.count({ where: { mandantId: mB, kontaktId: k } }),
+      await rollen(mA, k, []); // deaktiviert bei A
+      const b = await rollen(mB, k, ['MITARBEITER'], admin(mB));
+      expect(b.geaendert).toBe(true);
+      const zeilen = await mitTenant(tenant, (tx) =>
+        tx.mandantKontaktRolle.findMany({
+          where: { kontaktId: k },
+          select: { mandantId: true, aktiv: true },
+          orderBy: { mandantId: 'asc' },
+        }),
       );
-      expect(b).toBe(0);
+      expect(zeilen.map((z) => `${z.mandantId === mA ? 'A' : 'B'}:${z.aktiv}`).sort()).toEqual([
+        'A:false',
+        'B:true',
+      ]);
+      // Gleiche Antwort für unbekannte und anderweitig vergebene IDs, ohne Spur.
+      const vorher = await mitTenant(tenant, (tx) => tx.auditEvent.count());
+      const unbekannt = await rollen(mA, randomUUID(), []);
+      const anderweitig = await rollen(mA, k, []);
+      expect(unbekannt.geaendert).toBe(false);
+      expect(anderweitig.geaendert).toBe(false);
+      expect(await mitTenant(tenant, (tx) => tx.auditEvent.count())).toBe(vorher);
     });
 
     it('letzte GV mit offener Freigabe nicht ohne Ersatz entfernbar', async () => {
@@ -252,17 +272,20 @@ describe.skipIf(!AKTIV)('Mandantenanker und Kontaktrollen gegen PostgreSQL', () 
       expect(gvAktiv).toBe(1);
     });
 
-    it('TS-05: denselben neuen Kontakt gleichzeitig zwei Mandanten zuordnen → genau einer', async () => {
+    // RT4-T-07: Zuordnungen zu verschiedenen Mandanten sperren sich nicht mehr
+    // gegenseitig; je Mandant entsteht die Rolle genau einmal.
+    it('TS-05: denselben Kontakt gleichzeitig einem Mandanten zuordnen → genau eine Rolle', async () => {
       const k = randomUUID();
       const ergebnis = await Promise.allSettled([
         rollen(mA, k, ['MITARBEITER']),
+        rollen(mA, k, ['MITARBEITER']),
         rollen(mB, k, ['MITARBEITER'], admin(mB)),
       ]);
-      expect(ergebnis.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
-      const mandanten = await mitTenant(tenant, (tx) =>
-        tx.mandantKontaktRolle.findMany({ where: { kontaktId: k }, distinct: ['mandantId'] }),
+      expect(ergebnis.filter((x) => x.status === 'fulfilled')).toHaveLength(3);
+      const zeilen = await mitTenant(tenant, (tx) =>
+        tx.mandantKontaktRolle.findMany({ where: { kontaktId: k }, select: { mandantId: true } }),
       );
-      expect(mandanten).toHaveLength(1);
+      expect(zeilen.map((z) => (z.mandantId === mA ? 'A' : 'B')).sort()).toEqual(['A', 'B']);
     });
 
     it('Rechte und Trennung', async () => {
