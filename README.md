@@ -116,7 +116,11 @@ DB_TESTS=1 \
 ```
 packages/domain   Fachlogik ohne I/O: Katalog E-Commerce, Bewertung, Häufigkeitsmatrix,
                   Statusmodelle, Phasen, Grundelemente, Formatierung (mit Tests)
-packages/db       Prisma-Schema und Migration, Client, Audit-Hashkette, Dateiablage, Seed
+packages/contract Vertrag mit der kanzleikonsole: Akteursbestätigung, Fehlercodes (ADR 0001)
+packages/db       Prisma-Schema, Init-Migration mit RLS, Rollen-Bootstrap, mitTenant,
+                  Audit-Hashkette je Tenant, Seed
+packages/service  Kern der Fachoperationen: Dienstkontext (Transaktion, Akteur, Uhr, Ports),
+                  Rechte über den Akteur, mitAudit, Nachweis-Ablage des Dienstes
 apps/web          Next.js 16 (App Router, Server Components, Server Actions)
 ```
 

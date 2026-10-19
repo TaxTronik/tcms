@@ -1,0 +1,208 @@
+// =============================================================================
+// Rechte (ADR 0001 §5, Fachkonzept Abschnitt 13). Reine Funktionen über den
+// geprüften Akteur; serverseitig in jeder Operation geprüft, nie nur durch
+// Ausblenden (AGENTS.md Regel 4).
+//
+// Grundsätze:
+//   - Kanzleipersonen handeln nur für den Mandanten, den die kanzleikonsole in
+//     der Akteursbestätigung bestätigt (`cli`); ohne `cli` oder bei einem
+//     anderen Mandanten gibt es kein Recht, auch nicht für Admins (TS-03).
+//   - Mandantenkontakte brauchen eine aktive Rolle beim eigenen Mandanten
+//     (MandantKontaktRolle); ohne aktive Rolle kein Zugriff.
+//   - IDs werden ohne Rücksicht auf Groß-/Kleinschreibung verglichen, damit
+//     dieselbe Person nie als „zweite Person" durchgeht.
+// =============================================================================
+
+import type { Akteur, MandantBezug } from '@tcms/contract';
+
+export type MandantRolle = 'GESETZLICHER_VERTRETER' | 'TAX_COMPLIANCE_BEAUFTRAGTER' | 'MITARBEITER';
+
+/** Rolle eines Mandantenkontakts (Zeile aus MandantKontaktRolle). */
+export interface KontaktRolle {
+  mandantId: string;
+  kontaktId: string;
+  rolle: MandantRolle;
+  aktiv: boolean;
+}
+
+export interface KontrollZustaendigkeit {
+  durchfuehrendId: string | null;
+  vertretungId: string | null;
+  gegenzeichnerId: string | null;
+  gegenzeichnungMandant: boolean;
+  partei: 'KANZLEI' | 'MANDANT';
+}
+
+export interface Entscheidung {
+  erlaubt: boolean;
+  grund: string | null;
+}
+
+/** Gleiche ID (UUID-Vergleich ohne Groß-/Kleinschreibung); leere Werte sind nie gleich. */
+export function gleicheId(a: string | null | undefined, b: string | null | undefined): boolean {
+  return !!a && !!b && a.toLowerCase() === b.toLowerCase();
+}
+
+/** Bestätigter Bezug einer Kanzleiperson zu genau diesem Mandanten, sonst null. */
+export function mandantBezug(a: Akteur, mandantId: string): MandantBezug | null {
+  if (a.art !== 'KANZLEI' || !a.mandant) return null;
+  return gleicheId(a.mandant.id, mandantId) ? a.mandant : null;
+}
+
+/** Aktive Rollen eines Mandantenkontakts beim angegebenen (eigenen) Mandanten. */
+export function aktiveRollen(
+  a: Akteur,
+  mandantId: string,
+  rollen: readonly KontaktRolle[],
+): Set<MandantRolle> {
+  const out = new Set<MandantRolle>();
+  if (a.art !== 'MANDANT' || !gleicheId(a.mandantId, mandantId)) return out;
+  for (const r of rollen) {
+    if (r.aktiv && gleicheId(r.kontaktId, a.id) && gleicheId(r.mandantId, mandantId)) {
+      out.add(r.rolle);
+    }
+  }
+  return out;
+}
+
+export function istBerufstraeger(a: Akteur): boolean {
+  return a.art === 'KANZLEI' && a.istBerufstraeger;
+}
+
+/** Kanzleiweite Verwaltung (z. B. Prüfung der Audit-Kette): Admin/Partner. */
+export function kannVerwalten(a: Akteur): boolean {
+  return a.art === 'KANZLEI' && a.istAdmin;
+}
+
+/**
+ * Lesen eines Mandanten: Kanzleiperson mit bestätigtem Bezug zu diesem
+ * Mandanten; Mandantenkontakt mit aktiver Rolle beim eigenen Mandanten.
+ */
+export function kannLesen(
+  a: Akteur,
+  mandantId: string,
+  rollen: readonly KontaktRolle[] = [],
+): boolean {
+  if (a.art === 'KANZLEI') return mandantBezug(a, mandantId) !== null;
+  return aktiveRollen(a, mandantId, rollen).size > 0;
+}
+
+/**
+ * Portal-Übersicht (P1) lesen: gesetzliche Vertretung und Tax-Compliance-
+ * Beauftragte. Mitarbeitende sehen nur ihnen zugewiesene Aufgaben.
+ */
+export function kannPortalLesen(
+  a: Akteur,
+  mandantId: string,
+  rollen: readonly KontaktRolle[],
+): boolean {
+  const r = aktiveRollen(a, mandantId, rollen);
+  return r.has('GESETZLICHER_VERTRETER') || r.has('TAX_COMPLIANCE_BEAUFTRAGTER');
+}
+
+export function istGesetzlicherVertreter(
+  a: Akteur,
+  mandantId: string,
+  rollen: readonly KontaktRolle[],
+): boolean {
+  return aktiveRollen(a, mandantId, rollen).has('GESETZLICHER_VERTRETER');
+}
+
+/** Bearbeiten: Kanzleiperson mit Bezug und (Admin, zuständige:r BT oder Hauptbearbeitung). */
+export function kannBearbeiten(a: Akteur, mandantId: string): boolean {
+  const bezug = mandantBezug(a, mandantId);
+  if (!bezug || a.art !== 'KANZLEI') return false;
+  return a.istAdmin || bezug.zustaendigBerufstraeger || bezug.hauptbearbeitung;
+}
+
+/** §-153-Würdigung (TS-04): Berufsträger:in mit Bezug und (Admin oder zuständig). */
+export function kannWuerdigen(a: Akteur, mandantId: string): boolean {
+  const bezug = mandantBezug(a, mandantId);
+  if (!bezug || a.art !== 'KANZLEI' || !a.istBerufstraeger) return false;
+  return a.istAdmin || bezug.zustaendigBerufstraeger;
+}
+
+/**
+ * Vertrauliche Feststellungen (Fachkonzept §13) nur für Beteiligte: Admin,
+ * zuständige:r Berufsträger:in, Hauptbearbeitung und die beteiligten Personen
+ * (erfassend, würdigend, verantwortlich) – jeweils mit Bezug zum Mandanten.
+ */
+export function kannVertraulichLesen(
+  a: Akteur,
+  mandantId: string,
+  beteiligte: readonly string[],
+): boolean {
+  const bezug = mandantBezug(a, mandantId);
+  if (!bezug || a.art !== 'KANZLEI') return false;
+  return (
+    a.istAdmin ||
+    bezug.zustaendigBerufstraeger ||
+    bezug.hauptbearbeitung ||
+    beteiligte.some((id) => gleicheId(id, a.id))
+  );
+}
+
+/** Durchführen: zugewiesene Person (oder Vertretung) auf der richtigen Seite. */
+export function kannDurchfuehren(
+  a: Akteur,
+  k: KontrollZustaendigkeit,
+  mandantId: string,
+  rollen: readonly KontaktRolle[] = [],
+): boolean {
+  const zugewiesen = gleicheId(a.id, k.durchfuehrendId) || gleicheId(a.id, k.vertretungId);
+  if (!zugewiesen) return false;
+  if (k.partei === 'MANDANT') {
+    return a.art === 'MANDANT' && aktiveRollen(a, mandantId, rollen).size > 0;
+  }
+  return a.art === 'KANZLEI' && mandantBezug(a, mandantId) !== null;
+}
+
+/**
+ * Gegenzeichnen, zweistufig modelliert. Nie durch die durchführende Person.
+ * - Mandant (Bestätigung): nur wenn die Kontrolle eine Gegenzeichnung beim
+ *   Mandanten vorsieht; zweite Person desselben Mandanten mit aktiver Rolle.
+ * - Kanzlei (Abschluss): zugewiesene Gegenzeichnung oder zuständige:r
+ *   Berufsträger:in mit Bearbeitungsrecht; bei Mandanten-Gegenzeichnung erst
+ *   nach der Bestätigung.
+ */
+export function kannGegenzeichnen(
+  a: Akteur,
+  k: KontrollZustaendigkeit,
+  mandantId: string,
+  durchgefuehrtVon: string | null,
+  mandantBestaetigt = false,
+  rollen: readonly KontaktRolle[] = [],
+): Entscheidung {
+  if (gleicheId(a.id, durchgefuehrtVon)) {
+    return { erlaubt: false, grund: 'Gegenzeichnung muss durch eine andere Person erfolgen' };
+  }
+  if (a.art === 'MANDANT') {
+    if (!k.gegenzeichnungMandant)
+      return { erlaubt: false, grund: 'Gegenzeichnung erfolgt durch die Kanzlei' };
+    const ok = aktiveRollen(a, mandantId, rollen).size > 0;
+    return {
+      erlaubt: ok,
+      grund: ok ? null : 'Bestätigung durch eine zweite Person beim Mandanten',
+    };
+  }
+  if (!mandantBezug(a, mandantId)) {
+    return { erlaubt: false, grund: 'Kein Zugriff auf diesen Mandanten' };
+  }
+  if (k.gegenzeichnungMandant && !mandantBestaetigt) {
+    return {
+      erlaubt: false,
+      grund: 'Bestätigung durch eine zweite Person beim Mandanten steht aus',
+    };
+  }
+  const ok =
+    gleicheId(a.id, k.gegenzeichnerId) || (istBerufstraeger(a) && kannBearbeiten(a, mandantId));
+  return {
+    erlaubt: ok,
+    grund: ok ? null : 'Nur die zugewiesene Gegenzeichnung oder zuständige Berufsträger:innen',
+  };
+}
+
+/** Vier-Augen: entscheidende Person ≠ beantragende Person (und beantragt muss gesetzt sein). */
+export function zweitePerson(a: Akteur, beantragtVon: string | null | undefined): boolean {
+  return !!beantragtVon && !gleicheId(a.id, beantragtVon);
+}

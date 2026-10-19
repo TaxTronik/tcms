@@ -10,8 +10,17 @@ für KI-Werkzeuge.
   Häufigkeitsmatrix Governance-Typ × Bruttoklasse, Statusmodelle, Phasen,
   Grundelemente, Prüflast, Formatierung. Änderungen hier brauchen Tests
   (`pnpm --filter @tcms/domain test`).
-- `packages/db` – Prisma-Schema, Client (Prisma 7 mit `@prisma/adapter-pg`),
-  Audit-Hashkette (`schreibeAudit`), Dateiablage der Nachweise, Seed.
+- `packages/db` – Prisma-Schema, Init-Migration mit RLS je Tabelle, Rollen-Bootstrap
+  (`prisma/init/01_bootstrap.sql`), `mitTenant` (Prisma 7 mit `@prisma/adapter-pg`),
+  Audit-Hashkette je Tenant (`schreibeAudit`), Seed. Jeder Laufzeitzugriff läuft in
+  `mitTenant`; einen ungebundenen Client gibt es nicht. Neue Tabellen brauchen
+  `tenant_id`, RLS, die Policy `tcms_tenant`, Grants für `tcms_app` und einen
+  Eintrag in der Tabellenliste der Migration – der generische DB-Test
+  (`rls.db.test.ts`) prüft das für jede Tabelle des Katalogs.
+- `packages/service` – Kern der Fachoperationen (ADR 0001 §2): `DienstKontext`
+  (Transaktion, Akteur, Uhr, Personenverzeichnis, Nachweis-Ablage), `imDienst`,
+  `mitAudit`, Rechte über den `Akteur` (`rechte.ts`, ADR 0001 §5). Änderungen
+  hier brauchen Tests (`pnpm --filter @tcms/service test`).
 - `apps/web` – Next.js 16 (App Router, Server Components, Server Actions).
   - `src/server/kontext.ts` lädt den vollständigen Tax-CMS-Kontext eines
     Mandanten zu einem Stichtag. Screens im Mandantenkontext lesen daraus.
