@@ -836,7 +836,7 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
       { anlagen: [{ ...a, mime: 'text/html' }] },
       { anlagen: [{ ...a, groesse: 11 * 1024 * 1024 }] },
       { anlagen: [{ ...a, dokumentId: '../../etc/passwd' }] },
-      { anlagen: [{ ...a, dateiname: 'rechnung‮pdf.exe' }] },
+      { anlagen: [{ ...a, dateiname: 'rechnung\u202epdf.exe' }] },
       { anlagen: [a, a] },
       { anlagen: Array.from({ length: 6 }, anlage) },
       { anlagen: [{ ...a, inhalt: 'AAAA' }] },

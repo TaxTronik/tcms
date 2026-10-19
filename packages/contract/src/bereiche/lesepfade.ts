@@ -879,7 +879,7 @@ const einzeilig = (max: number) =>
     .trim()
     .min(1)
     .max(max)
-    .regex(/^[^\u0000-\u001f\u007f‪-‮⁦-⁩]*$/, 'Unzulässige Zeichen');
+    .regex(/^[^\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]*$/, 'Unzulässige Zeichen');
 
 /** Body von `PUT /v1/mandanten/:mandantId`: Stammdaten des Mandantenankers. */
 export const MandantAnkerBodySchema = z

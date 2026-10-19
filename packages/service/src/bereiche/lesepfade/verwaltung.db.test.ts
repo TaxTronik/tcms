@@ -102,7 +102,7 @@ describe.skipIf(!AKTIV)('Mandantenanker und Kontaktrollen gegen PostgreSQL', () 
       for (const e of [
         { mandantId: m, name: '', rechtsform: 'KapG' },
         { mandantId: m, name: 'A\u0000B', rechtsform: 'KapG' },
-        { mandantId: m, name: 'A‮B', rechtsform: 'KapG' },
+        { mandantId: m, name: 'A\u202eB', rechtsform: 'KapG' },
         { mandantId: m, name: 'x'.repeat(201), rechtsform: 'KapG' },
         { mandantId: m, name: 'A', rechtsform: 'KapG', datevNr: '47a1' },
         { mandantId: m, name: 'A', rechtsform: 'KapG', tenantId: tenantB },

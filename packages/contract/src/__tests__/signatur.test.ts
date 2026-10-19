@@ -212,7 +212,7 @@ describe('pruefeAkteur – Größe und Struktur', () => {
 
   it('weist einen Header ab, der kein JSON-Objekt ist', () => {
     const p = JSON.stringify(claims());
-    for (const h of ['[]', 'null', '"EdDSA"', '1', '{', `﻿${HEADER}`]) {
+    for (const h of ['[]', 'null', '"EdDSA"', '1', '{', `\ufeff${HEADER}`]) {
       expect(grund(roh(h, p))).toBe('STRUKTUR');
     }
   });
@@ -333,7 +333,7 @@ describe('pruefeAkteur – Signatur', () => {
 
 describe('pruefeAkteur – Payload und Claims', () => {
   it('weist einen Payload ab, der kein UTF-8-JSON-Objekt ist', () => {
-    for (const p of ['[]', 'null', '"x"', '42', '{"iss":', `﻿${JSON.stringify(claims())}`]) {
+    for (const p of ['[]', 'null', '"x"', '42', '{"iss":', `\ufeff${JSON.stringify(claims())}`]) {
       expect(grund(roh(HEADER, p))).toBe('PAYLOAD');
     }
     expect(grund(roh(HEADER, new Uint8Array([0x7b, 0xff, 0x7d])))).toBe('PAYLOAD');

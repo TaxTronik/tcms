@@ -254,6 +254,12 @@ vorhandenen Tokens aufsetzen.
   Ausgaben (auch nicht in Skripten, Tests und CI).
 - Neue Abhängigkeiten nur mit exakter Version; `pnpm-workspace.yaml` bleibt so
   streng, wie `scripts/pruefe-lieferkette.sh` verlangt.
+- Keine rohen unsichtbaren oder bidirektionalen Zeichen in versionierten Dateien
+  („Trojan Source"): Richtungs- und Formatzeichen, Zeilentrenner U+2028/U+2029,
+  Steuerzeichen außer TAB/LF, unsichtbare Füller und Variantenselektoren stehen im
+  Quelltext nur als Escape; alle Dateien UTF-8 ohne BOM. Der statische Test
+  `packages/contract/src/__tests__/repo-zeichen.test.ts` prüft Index und
+  Arbeitsbaum; Ausnahmen nur je Datei und Zeichen mit Begründung.
 
 ## Prüfen vor Abschluss
 
