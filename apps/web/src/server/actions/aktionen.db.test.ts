@@ -128,6 +128,31 @@ describe.skipIf(!AKTIV)('Demo-Actions gegen PostgreSQL', () => {
   });
 
   afterAll(async () => {
+    // Eigene Fixtures und erfasste Feststellungen samt Wiedervorlagen entfernen (das Audit bleibt).
+    await imDemo(async (tx) => {
+      const ids = (
+        await tx.feststellung.findMany({
+          where: {
+            OR: [
+              { id: p153Feststellung },
+              {
+                titel: {
+                  in: [`Rundung OSS (Bearbeitung ${lauf})`, `Rundung OSS (Berufsträgerin ${lauf})`],
+                },
+              },
+            ],
+          },
+          select: { id: true },
+        })
+      ).map((f) => f.id);
+      await tx.massnahme.deleteMany({ where: { feststellungId: { in: ids } } });
+      await tx.betroffeneErklaerung.deleteMany({ where: { feststellungId: { in: ids } } });
+      await tx.feststellungRisiko.deleteMany({ where: { feststellungId: { in: ids } } });
+      await tx.feststellung.deleteMany({ where: { id: { in: ids } } });
+      await tx.freigabe.deleteMany({
+        where: { id: { in: [beschreibungsFreigabe, kenntnisnahme] } },
+      });
+    });
     // Murats zusätzliche Rolle wieder abgeben (Seed-Zustand).
     await imDemo((tx) =>
       tx.mandantKontaktRolle.updateMany({

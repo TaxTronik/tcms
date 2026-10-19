@@ -64,8 +64,15 @@ describe.skipIf(!AKTIV)('leseKontext gegen PostgreSQL', () => {
 
   it('vertraulich: Titel, Sachverhalt und Beteiligte maskiert', async () => {
     const f = await mitTenant(DEMO_TENANT_ID, async (tx) => {
+      // Eine Feststellung aus dem Seed (Nummernkreis 2026, erfasst bis zum Demo-Tag), damit
+      // Daten anderer Testläufe auf derselben Datenbank die Auswahl nicht verschieben.
       const x = await tx.feststellung.findFirstOrThrow({
-        where: { programm: { mandantId: DEMO_IDS.talwind }, erfasstVon: { not: DEMO_IDS.thomas } },
+        where: {
+          programm: { mandantId: DEMO_IDS.talwind },
+          erfasstVon: { not: DEMO_IDS.thomas },
+          nummer: { startsWith: 'F-2026-' },
+          erfasstAm: { lte: new Date('2026-10-16T23:59:59Z') },
+        },
         include: { massnahmen: { select: { verantwortlich: true } } },
         orderBy: { nummer: 'desc' },
       });
