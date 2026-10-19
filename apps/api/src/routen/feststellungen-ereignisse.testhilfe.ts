@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import type { AkteurClaims } from '@tcms/contract';
 import { mitTenant, type Tx } from '@tcms/db';
 import { expect } from 'vitest';
-import { aufbau, bestaetigtSenden, json } from '../__tests__/hilfen';
+import { aufbau, bestaetigtSenden, json, TEST_CODES } from '../__tests__/hilfen';
 import type { Routen } from '../routen';
 import { registriereAlle } from './index';
 
@@ -250,7 +250,8 @@ export async function baueApiWelt(): Promise<void> {
       ping: async () => undefined,
     },
     // Alle Bereiche gemeinsam: mehrdeutige Muster würden hier beim Start scheitern.
-    routen: registriereAlle as unknown as (r: Routen<unknown>) => void,
+    routen: (r: Routen<unknown>) =>
+      registriereAlle(r as unknown as Routen<Tx>, { codes: TEST_CODES }),
   }).app;
 }
 

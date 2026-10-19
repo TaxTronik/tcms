@@ -63,11 +63,12 @@ printf 'Pakete (oberste Ebene): %s, Größe: %s\n' \
 
 schritt 'Start mit node (NODE_ENV=production, Arbeitsverzeichnis /)'
 PORT="$(node -e "const s=require('node:net').createServer().listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})")"
-# Schlüsselpaar und Token nur als Dateien im Arbeitsverzeichnis (0600).
+# Schlüsselpaar, Token und Code-Schlüssel nur als Dateien im Arbeitsverzeichnis (0600).
 node -e "
   const c=require('node:crypto'),f=require('node:fs');
   const k=c.generateKeyPairSync('ed25519');
   f.writeFileSync(process.argv[1]+'/token', c.randomBytes(32).toString('base64url'));
+  f.writeFileSync(process.argv[1]+'/codeschluessel', c.randomBytes(32).toString('base64url'));
   f.writeFileSync(process.argv[1]+'/privat', k.privateKey.export({format:'der',type:'pkcs8'}).toString('base64'));
   f.writeFileSync(process.argv[1]+'/oeffentlich', 'sim='+k.publicKey.export({format:'der',type:'spki'}).toString('base64'));
 " "$ARBEIT"
@@ -75,8 +76,9 @@ node -e "
   # shellcheck disable=SC2030 # Umgebung nur für diesen Kindprozess
   export NODE_ENV=production HOST=127.0.0.1 PORT TCMS_LOG_LEVEL=info
   TCMS_SERVICE_TOKENS="$(cat "$ARBEIT/token")"
+  TCMS_CODE_SCHLUESSEL="$(cat "$ARBEIT/codeschluessel")"
   TCMS_ACTOR_PUBLIC_KEYS="$(cat "$ARBEIT/oeffentlich")"
-  export TCMS_SERVICE_TOKENS TCMS_ACTOR_PUBLIC_KEYS DATABASE_URL
+  export TCMS_SERVICE_TOKENS TCMS_CODE_SCHLUESSEL TCMS_ACTOR_PUBLIC_KEYS DATABASE_URL
   exec node --enable-source-maps "$ARBEIT/app/dist/server.mjs"
 ) >"$ARBEIT/dienst.log" 2>&1 &
 DIENST=$!
@@ -151,6 +153,10 @@ echo 'healthcheck.mjs nach dem Ende: Exit 1'
 # Muster aus der Datei (-f), damit das Token in keiner Kommandozeile steht.
 if grep -qFf "$ARBEIT/token" "$ARBEIT/dienst.log"; then
   echo 'Dienst-Token im Log des Dienstes' >&2
+  exit 1
+fi
+if grep -qFf "$ARBEIT/codeschluessel" "$ARBEIT/dienst.log"; then
+  echo 'Code-Schlüssel im Log des Dienstes' >&2
   exit 1
 fi
 grep -o '"ereignis":"[a-z_]*"' "$ARBEIT/dienst.log" | sort | uniq -c

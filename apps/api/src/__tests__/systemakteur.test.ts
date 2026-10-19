@@ -45,6 +45,7 @@ import {
   json,
   mandantClaims,
   systemClaims,
+  TEST_CODES,
 } from './hilfen';
 
 /** Alle Endpunkte des Systemakteurs (sortiert). */
@@ -196,7 +197,7 @@ function dienstTabelle() {
         },
         ping: async () => undefined,
       },
-      routen: registriereAlle,
+      routen: (r) => registriereAlle(r, { codes: TEST_CODES }),
       register: ENDPUNKT_LISTE,
     },
     { schreibe: () => undefined },

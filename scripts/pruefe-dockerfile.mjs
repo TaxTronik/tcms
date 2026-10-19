@@ -106,7 +106,7 @@ export function pruefeDockerfile(text, kontext) {
     if (/:latest\b/.test(x.text)) befunde.push(`Zeile ${x.zeile}: latest`);
     if (
       /^(ENV|ARG|LABEL)\s/i.test(x.text) &&
-      /(PASSWORD|PASSWORT|TOKEN|SECRET|PRIVATE)/i.test(x.text)
+      /(PASSWORD|PASSWORT|TOKEN|SECRET|PRIVATE|SCHLUESSEL)/i.test(x.text)
     ) {
       befunde.push(`Zeile ${x.zeile}: Geheimnis in ${B}`);
     }

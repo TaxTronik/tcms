@@ -50,7 +50,7 @@ export async function ladeFreigabenHistorie(
       status: spaeter ? 'OFFEN' : f.status,
       erledigtAm: spaeter ? null : iso(f.erledigtAm),
       anmerkung: spaeter ? null : f.anmerkung,
-      codeStatus: historisch ? 'KEIN' : codeStatus(f, jetzt),
+      codeStatus: historisch ? 'KEIN' : codeStatus(f, jetzt, ctx.codes),
       codeAblauf: historisch ? null : iso(f.codeAblauf),
       zustellung: zustellungen.get(f.id) ?? null,
     };

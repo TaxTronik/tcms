@@ -12,6 +12,7 @@ import {
   personAkteur,
   systemAkteur,
   verweisAblage,
+  type CodeSchluessel,
   type DienstKontext,
   type SystemKontext,
 } from '@tcms/service';
@@ -22,13 +23,18 @@ import type { RoutenKontext } from '../routen';
  * `NICHT_GEFUNDEN`, bevor die Operation läuft oder die Transaktion benutzt
  * wird (zweite Schicht neben der Akteursprüfung der Routentabelle).
  */
-export function dienstKontext(ctx: RoutenKontext<Tx, unknown, unknown>): DienstKontext {
+export function dienstKontext(
+  ctx: RoutenKontext<Tx, unknown, unknown>,
+  codes?: CodeSchluessel,
+): DienstKontext {
   return {
     tx: ctx.tx,
     akteur: personAkteur(ctx.akteur),
     uhr: echteUhr,
     personen: keinPersonenVerzeichnis,
     ablage: verweisAblage,
+    // Schlüssel der Bestätigungscodes nur für die Routen, die Codes ausstellen oder prüfen.
+    ...(codes ? { codes } : {}),
   };
 }
 
@@ -37,6 +43,14 @@ export function dienstKontext(ctx: RoutenKontext<Tx, unknown, unknown>): DienstK
  * Unzustellbarkeit melden). Jede
  * Person – auch ein Admin – erhält `NICHT_GEFUNDEN`, bevor die Operation läuft.
  */
-export function systemKontext(ctx: RoutenKontext<Tx, unknown, unknown>): SystemKontext {
-  return { tx: ctx.tx, akteur: systemAkteur(ctx.akteur), uhr: echteUhr };
+export function systemKontext(
+  ctx: RoutenKontext<Tx, unknown, unknown>,
+  codes?: CodeSchluessel,
+): SystemKontext {
+  return {
+    tx: ctx.tx,
+    akteur: systemAkteur(ctx.akteur),
+    uhr: echteUhr,
+    ...(codes ? { codes } : {}),
+  };
 }

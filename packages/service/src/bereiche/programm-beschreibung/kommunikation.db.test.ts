@@ -19,6 +19,7 @@ import {
   kanzlei,
   kontakt,
   ohneRechtA,
+  TEST_CODES,
   type Welt,
 } from './testwelt';
 
@@ -48,6 +49,7 @@ describe.skipIf(!AKTIV)('Freigaben-Historie (Service, PostgreSQL)', () => {
             erledigtAm: new Date('2026-10-19T08:00:00Z'),
             anmerkung: 'später',
             codeHash: 'b'.repeat(64),
+            codeSchluesselId: TEST_CODES.aktuelleId,
             codeFehlversuche: 1,
             codeAblauf: new Date(Date.now() + 86_400_000),
           },

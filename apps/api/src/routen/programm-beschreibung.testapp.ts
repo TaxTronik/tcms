@@ -11,7 +11,14 @@ import { randomUUID } from 'node:crypto';
 import type { AkteurClaims } from '@tcms/contract';
 import { mitTenant, type Tx } from '@tcms/db';
 import { describe, expect, it } from 'vitest';
-import { aufbau, bestaetigtSenden, json, SYSTEM_ID, type Aufbau } from '../__tests__/hilfen';
+import {
+  aufbau,
+  bestaetigtSenden,
+  json,
+  SYSTEM_ID,
+  TEST_CODES,
+  type Aufbau,
+} from '../__tests__/hilfen';
 import type { Routen } from '../routen';
 import { registriereProgrammBeschreibung } from './programm-beschreibung';
 
@@ -42,7 +49,8 @@ export function neueApiWelt(): ApiWelt {
     GV: randomUUID(),
     TCB: randomUUID(),
     t: aufbau({
-      routen: registriereProgrammBeschreibung as unknown as (r: Routen<unknown>) => void,
+      routen: (r: Routen<unknown>) =>
+        registriereProgrammBeschreibung(r as unknown as Routen<Tx>, TEST_CODES),
       daten: {
         mitTenant: (tenantId, fn) => mitTenant(tenantId, fn as (tx: Tx) => Promise<never>),
         ping: async () => undefined,

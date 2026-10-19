@@ -19,6 +19,7 @@ import {
   type NachweisVerweis,
   type PersonenVerzeichnis,
 } from '@tcms/service';
+import { demoCodeSchluessel } from './code-schluessel';
 import { demoUhr } from './zeit';
 
 // =============================================================================
@@ -205,6 +206,8 @@ export const DEMO_PORTS: DienstPorts = {
   uhr: demoUhr,
   personen: demoPersonen,
   ablage: demoAblage,
+  // Bestätigungscodes (H5): Schlüssel aus TCMS_CODE_SCHLUESSEL, erst beim ersten Code gelesen.
+  codes: demoCodeSchluessel(),
 };
 
 /**

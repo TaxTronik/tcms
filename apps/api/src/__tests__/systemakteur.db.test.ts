@@ -23,6 +23,7 @@ import {
   json,
   mandantClaims,
   systemClaims,
+  TEST_CODES,
 } from './hilfen';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
@@ -40,7 +41,8 @@ const UNZUSTELLBAR_HASH = bodySha256(new TextEncoder().encode(UNZUSTELLBAR));
 describe.skipIf(!AKTIV)('Systemakteur über alle Endpunkte (Dienst + PostgreSQL)', () => {
   const t = aufbau({
     register: ENDPUNKT_LISTE,
-    routen: registriereAlle as unknown as (r: Routen<unknown>) => void,
+    routen: (r: Routen<unknown>) =>
+      registriereAlle(r as unknown as Routen<Tx>, { codes: TEST_CODES }),
     daten: {
       mitTenant: (tenantId, fn) => mitTenant(tenantId, fn as (tx: Tx) => Promise<never>),
       ping: async () => undefined,

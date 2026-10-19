@@ -6,7 +6,7 @@
 // `alsEigentuemerOhneTrigger` für Manipulationstests (Eigentümerrolle).
 // =============================================================================
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { DienstFehler, type Akteur } from '@tcms/contract';
 import {
   AUDIT_SPERRE,
@@ -17,6 +17,7 @@ import {
   type Tx,
 } from '@tcms/db';
 import { verweisAblage } from '../../ablage';
+import { erzeugeCodeSchluessel } from './code';
 import {
   imDienst,
   imSystemdienst,
@@ -30,10 +31,13 @@ export const TEST_UHR: Uhr = {
   jetzt: () => new Date('2026-10-19T09:00:00.000Z'),
   heute: () => '2026-10-19',
 };
+/** Schlüsselbund der Bestätigungscodes für Tests: zufällig je Testlauf, nie im Repository. */
+export const TEST_CODES = erzeugeCodeSchluessel([randomBytes(32).toString('base64url')]);
 export const TEST_PORTS = {
   uhr: TEST_UHR,
   personen: keinPersonenVerzeichnis,
   ablage: verweisAblage,
+  codes: TEST_CODES,
 };
 
 export interface Welt {
@@ -162,7 +166,12 @@ export function imSystem<T>(
   fn: (ctx: SystemKontext) => Promise<T>,
   client?: PrismaClient,
 ): Promise<T> {
-  return imSystemdienst(a, TEST_UHR, fn, client ? { client } : undefined);
+  return imSystemdienst(
+    a,
+    { uhr: TEST_UHR, codes: TEST_CODES },
+    fn,
+    client ? { client } : undefined,
+  );
 }
 
 export function im<T>(

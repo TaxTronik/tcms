@@ -70,6 +70,8 @@ const M = DEMO_IDS.bergkamm;
 describe.skipIf(!AKTIV)('Demo-Actions Einrichtung, Beschreibung, Freigaben', () => {
   beforeAll(async () => {
     process.env['SESSION_SECRET'] ??= randomBytes(32).toString('hex');
+    // Schlüssel der Bestätigungscodes (H5): zufällig je Lauf, erst beim ersten Code gelesen.
+    process.env['TCMS_CODE_SCHLUESSEL'] ??= randomBytes(32).toString('base64url');
     await setzeMandantOhneTcmsZurueck(M);
   });
   afterAll(async () => {

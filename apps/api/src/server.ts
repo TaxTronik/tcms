@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { createAdaptorServer } from '@hono/node-server';
 import { mitTenant, pruefeLaufzeitverbindung, TenantFehler } from '@tcms/db';
+import { erzeugeCodeSchluessel } from '@tcms/service';
 import pg from 'pg';
 import { geordnetBeenden } from './beenden';
 import { erzeugeDienst } from './dienst';
@@ -63,6 +64,8 @@ async function starte() {
     },
     // Echte Uhr; TCMS_DEMO_TODAY wirkt nie im Dienst (ADR §7).
     uhr: { jetzt: () => new Date() },
+    // Schlüssel der Bestätigungscodes (H5): nur im Speicher, nie im Log.
+    codes: erzeugeCodeSchluessel(konfiguration.codeSchluessel),
     jti,
     daten: {
       mitTenant: (tenantId, fn) => mitTenant(tenantId, fn),
@@ -86,6 +89,7 @@ async function starte() {
       version,
       schluessel: konfiguration.akteurSchluessel.size,
       tokens: konfiguration.dienstTokens.length,
+      codeSchluessel: konfiguration.codeSchluessel.length,
     });
   });
 

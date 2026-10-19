@@ -61,6 +61,8 @@ describe.skipIf(!AKTIV)('Demo-Actions gegen PostgreSQL', () => {
 
   beforeAll(async () => {
     process.env['SESSION_SECRET'] ??= randomBytes(32).toString('hex');
+    // Schlüssel der Bestätigungscodes (H5): zufällig je Lauf, erst beim ersten Code gelesen.
+    process.env['TCMS_CODE_SCHLUESSEL'] ??= randomBytes(32).toString('base64url');
     // Eigene Fixtures je Lauf (an Jana bzw. Murat adressiert, offene §-153-Würdigung).
     const programm = await imDemo((tx) =>
       tx.tcmsProgramm.findFirstOrThrow({ where: { mandantId: DEMO_IDS.talwind } }),

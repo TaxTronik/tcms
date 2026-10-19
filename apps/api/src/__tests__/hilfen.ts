@@ -5,6 +5,7 @@
 
 import { generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
 import { AKTEUR_HEADER, bodySha256, signiereAkteur, type AkteurClaims } from '@tcms/contract';
+import { erzeugeCodeSchluessel } from '@tcms/service';
 import { baueRoutentabelle, erzeugeApp, type AppDeps, type Datenzugriff } from '../app';
 import { SpeicherJti, type JtiSpeicher } from '../jti';
 import type { LogWert } from '../log';
@@ -22,6 +23,8 @@ export const NAME = 'StB Dr. Anna Roth';
 // Je Lauf frisch erzeugt; keine echten Werte.
 export const TOKEN_ALT = randomBytes(32).toString('base64url');
 export const TOKEN_NEU = randomBytes(32).toString('base64url');
+/** Schlüsselbund der Bestätigungscodes für Tests (zufällig je Lauf, H5). */
+export const TEST_CODES = erzeugeCodeSchluessel([randomBytes(32).toString('base64url')]);
 export const SCHLUESSEL_A = generateKeyPairSync('ed25519');
 export const SCHLUESSEL_B = generateKeyPairSync('ed25519');
 export const SCHLUESSEL: ReadonlyMap<string, KeyObject> = new Map([

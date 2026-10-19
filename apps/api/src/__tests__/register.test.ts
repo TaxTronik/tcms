@@ -10,11 +10,24 @@ import { baueRoutentabelle, type AppDeps } from '../app';
 import { erzeugeDienst } from '../dienst';
 import { SpeicherJti } from '../jti';
 import { pruefeGegenRegister, type Routen } from '../routen';
-import { registriereAlle } from '../routen/index';
-import { aufbau, bestaetigtSenden, json, MANDANT, SCHLUESSEL, TOKEN_ALT } from './hilfen';
+import { registriereAlle as registriereAlleMit, type RoutenUmgebung } from '../routen/index';
+
+/** Alle Fachrouten mit der Test-Umgebung (Code-Schlüssel, H5). */
+const registriereAlle = (r: Routen<Tx>, u: RoutenUmgebung = { codes: TEST_CODES }) =>
+  registriereAlleMit(r, u);
+import {
+  aufbau,
+  bestaetigtSenden,
+  json,
+  MANDANT,
+  SCHLUESSEL,
+  TEST_CODES,
+  TOKEN_ALT,
+} from './hilfen';
 
 const stumm = { schreibe: () => undefined };
-const deps: Omit<AppDeps<Tx>, 'routen' | 'register'> = {
+const deps: Omit<AppDeps<Tx>, 'routen' | 'register'> & RoutenUmgebung = {
+  codes: TEST_CODES,
   konfiguration: { dienstTokens: [TOKEN_ALT], akteurSchluessel: SCHLUESSEL, version: '0.1.0' },
   uhr: { jetzt: () => new Date() },
   jti: new SpeicherJti(),
@@ -27,8 +40,10 @@ const deps: Omit<AppDeps<Tx>, 'routen' | 'register'> = {
   log: stumm,
 };
 
-const tabelle = (routen: (r: Routen<Tx>) => void, register?: readonly Endpunkt[]) =>
-  baueRoutentabelle<Tx>({ ...deps, routen, register }, stumm);
+const tabelle = (routen: (r: Routen<Tx>) => void, register?: readonly Endpunkt[]) => {
+  const { codes: _codes, ...app } = deps;
+  return baueRoutentabelle<Tx>({ ...app, routen, register }, stumm);
+};
 
 /** Wie `registriereAlle`, aber ohne den genannten Eintrag. */
 const ohne =

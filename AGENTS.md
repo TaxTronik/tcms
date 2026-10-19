@@ -189,8 +189,10 @@ für KI-Werkzeuge.
   gilt für Erteilen, Code anfordern, Kenntnisnahme, Neuadressieren und jedes Anlegen einer Freigabe
   (Ziele mit Version 1, Beschreibung, Risikoakzeptanz): Entfernen der letzten GV und Adressieren an
   sie laufen so nacheinander (kein Write Skew, RT4-T-06).
-- Bestätigungscodes: 6 Ziffern aus `randomInt`, nur ein an die Freigabe gebundener SHA-256 wird
-  gespeichert (`codeHash`, CHECK hex), 7 Tage gültig (echte Zeit), höchstens 5 Fehlversuche je
+- Bestätigungscodes: 6 Ziffern aus `randomInt`, nur ein an die Freigabe gebundener HMAC-SHA-256 mit
+  dem Schlüssel aus `TCMS_CODE_SCHLUESSEL` wird gespeichert (`codeHash`, CHECK hex, dazu die
+  abgeleitete Schlüsselkennung `codeSchluesselId`; der Schlüssel steht nie in der Datenbank, Hash
+  ohne bekannte Kennung gilt als abgelaufen – H5), 7 Tage gültig (echte Zeit), höchstens 5 Fehlversuche je
   Freigabe (`codeFehlversuche`, CHECK 0–5, gezählt unter Zeilensperre mit bedingtem Update, nie
   aus dem Audit), einmal verwendbar, Vergleich mit `timingSafeEqual`. Codes stehen in keiner
   Antwort, keinem Log und keinem Audit-Detail – nur im Postausgang. Höchstens 5 ausgestellte Codes

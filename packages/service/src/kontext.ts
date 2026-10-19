@@ -6,6 +6,7 @@
 // =============================================================================
 
 import { DienstFehler, type Akteur, type PersonAkteur, type SystemAkteur } from '@tcms/contract';
+import type { CodeSchluessel } from './bereiche/programm-beschreibung/code';
 import {
   eingabeFehlercode,
   mitTenant,
@@ -90,9 +91,15 @@ export interface DienstKontext {
   uhr: Uhr;
   personen: PersonenVerzeichnis;
   ablage: NachweisAblage;
+  /**
+   * Schlüsselbund der Bestätigungscodes (`TCMS_CODE_SCHLUESSEL`, Hinweis H5).
+   * Nur Operationen, die Codes ausstellen oder prüfen, brauchen ihn; fehlt er
+   * dort, brechen sie ab (fail closed, `brauchtCodeSchluessel`).
+   */
+  codes?: CodeSchluessel;
 }
 
-export type DienstPorts = Pick<DienstKontext, 'uhr' | 'personen' | 'ablage'>;
+export type DienstPorts = Pick<DienstKontext, 'uhr' | 'personen' | 'ablage' | 'codes'>;
 
 /**
  * Kontext der Systemoperationen (Stufe 4: Nachrichten abholen und Zustellung
@@ -104,7 +111,11 @@ export interface SystemKontext {
   tx: Tx;
   akteur: SystemAkteur;
   uhr: Uhr;
+  /** Schlüsselbund der Bestätigungscodes (Prüfen offener Code-Nachrichten beim Abruf). */
+  codes?: CodeSchluessel;
 }
+
+export type SystemPorts = Pick<SystemKontext, 'uhr' | 'codes'>;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -230,13 +241,13 @@ export async function imDienst<T>(
  */
 export async function imSystemdienst<T>(
   akteur: Akteur,
-  uhr: Uhr,
+  ports: SystemPorts,
   fn: (ctx: SystemKontext) => Promise<T>,
   opts?: TenantOptionen,
 ): Promise<T> {
   const a = systemAkteur(akteur);
   try {
-    return await mitTenant(a.tenantId, (tx) => fn({ tx, akteur: a, uhr }), opts);
+    return await mitTenant(a.tenantId, (tx) => fn({ tx, akteur: a, ...ports }), opts);
   } catch (e) {
     throw alsEingabefehler(e);
   }

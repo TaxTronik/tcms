@@ -20,6 +20,11 @@ const BEKANNTE_PLATZHALTER = new Set([
 const PLATZHALTER_MUSTER =
   /(ersetzen|change.?me|placeholder|platzhalter|beispiel|example|zufallswert|your.?secret|geheimnis)/i;
 
+/** Bekannter Platzhalter oder typisches Platzhalterwort (TS-02); auch für den Code-Schlüssel. */
+export function istPlatzhalter(s: string): boolean {
+  return BEKANNTE_PLATZHALTER.has(s.trim().toLowerCase()) || PLATZHALTER_MUSTER.test(s);
+}
+
 /** Liefert das Sitzungsgeheimnis oder wirft (fail closed, TS-02). */
 export function pruefeSessionSecret(wert: string | undefined): string {
   const s = wert ?? '';
@@ -28,7 +33,7 @@ export function pruefeSessionSecret(wert: string | undefined): string {
       '[auth] SESSION_SECRET fehlt oder ist kürzer als 32 Zeichen. Siehe .env.example.',
     );
   }
-  if (BEKANNTE_PLATZHALTER.has(s.trim().toLowerCase()) || PLATZHALTER_MUSTER.test(s)) {
+  if (istPlatzhalter(s)) {
     throw new Error('[auth] SESSION_SECRET ist ein Platzhalter. Eigenen Zufallswert setzen.');
   }
   if (new Set(s).size < 10) {

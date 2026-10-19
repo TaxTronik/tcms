@@ -15,6 +15,7 @@ const APP_URL = process.env.DATABASE_URL;
 const OWNER_URL = process.env.DATABASE_OWNER_URL;
 const SUPER_URL = process.env.DATABASE_SUPERUSER_URL;
 const TOKEN = randomBytes(32).toString('base64url');
+const CODE_SCHLUESSEL = randomBytes(32).toString('base64url');
 const SPKI = generateKeyPairSync('ed25519')
   .publicKey.export({ format: 'der', type: 'spki' })
   .toString('base64');
@@ -59,6 +60,7 @@ describe('server.ts', () => {
     const platzhalter = 'bitte-durch-einen-zufaelligen-dienst-token-ersetzen';
     const lauf = starte({
       TCMS_SERVICE_TOKENS: `${TOKEN},${platzhalter}`,
+      TCMS_CODE_SCHLUESSEL: CODE_SCHLUESSEL,
       TCMS_ACTOR_PUBLIC_KEYS: `kk-a=${SPKI}`,
       DATABASE_URL: 'postgresql://tcms_app:Zr8fQ2vLx9@127.0.0.1:1/tcms',
     });
@@ -66,13 +68,40 @@ describe('server.ts', () => {
     const ausgabe = lauf.ausgabe();
     expect(zeilen(ausgabe).at(-1)).toMatchObject({ ereignis: 'start_fehlgeschlagen' });
     expect(ausgabe).toContain('TCMS_SERVICE_TOKENS');
-    for (const geheim of [TOKEN, platzhalter, 'Zr8fQ2vLx9', SPKI]) {
+    for (const geheim of [TOKEN, platzhalter, 'Zr8fQ2vLx9', SPKI, CODE_SCHLUESSEL]) {
       expect(ausgabe).not.toContain(geheim);
     }
   }, 30_000);
 
+  it('startet nicht ohne gültigen TCMS_CODE_SCHLUESSEL (H5), ohne Werte zu nennen', async () => {
+    const gueltig = {
+      TCMS_SERVICE_TOKENS: TOKEN,
+      TCMS_ACTOR_PUBLIC_KEYS: `kk-a=${SPKI}`,
+      DATABASE_URL: 'postgresql://tcms_app:Zr8fQ2vLx9@127.0.0.1:1/tcms',
+    };
+    for (const schluessel of [
+      undefined,
+      'bitte-durch-einen-zufaelligen-code-schluessel-ersetzen',
+      'zu-kurz',
+      TOKEN,
+    ]) {
+      const lauf = starte({
+        ...gueltig,
+        ...(schluessel === undefined ? {} : { TCMS_CODE_SCHLUESSEL: schluessel }),
+      });
+      expect(await lauf.code, String(schluessel).slice(0, 8)).toBe(1);
+      const ausgabe = lauf.ausgabe();
+      expect(ausgabe).toContain('TCMS_CODE_SCHLUESSEL');
+      for (const geheim of [TOKEN, 'Zr8fQ2vLx9', SPKI]) expect(ausgabe).not.toContain(geheim);
+    }
+  }, 60_000);
+
   describe.skipIf(!AKTIV)('mit PostgreSQL (Bootstrap und Migration wie in Produktion)', () => {
-    const basis = () => ({ TCMS_SERVICE_TOKENS: TOKEN, TCMS_ACTOR_PUBLIC_KEYS: `kk-a=${SPKI}` });
+    const basis = () => ({
+      TCMS_SERVICE_TOKENS: TOKEN,
+      TCMS_CODE_SCHLUESSEL: CODE_SCHLUESSEL,
+      TCMS_ACTOR_PUBLIC_KEYS: `kk-a=${SPKI}`,
+    });
     const passwort = (url: string) => decodeURIComponent(new URL(url).password);
 
     // Eigentümer (besitzt Tabellen) und Superuser (umgeht RLS) dürfen nie die
@@ -132,6 +161,7 @@ describe('server.ts', () => {
         expect.arrayContaining(['gestartet', 'anfrage', 'beende']),
       );
       expect(lauf.ausgabe()).not.toContain(TOKEN);
+      expect(lauf.ausgabe()).not.toContain(CODE_SCHLUESSEL);
     }, 30_000);
   });
 });

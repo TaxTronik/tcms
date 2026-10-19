@@ -9,12 +9,13 @@ import { ENDPUNKT_LISTE } from '@tcms/contract';
 import type { Tx } from '@tcms/db';
 import { erzeugeApp, type AppDeps } from './app';
 import type { Routen } from './routen';
-import { registriereAlle } from './routen/index';
+import { registriereAlle, type RoutenUmgebung } from './routen/index';
 
 export function erzeugeDienst(
-  deps: Omit<AppDeps<Tx>, 'routen' | 'register'>,
+  deps: Omit<AppDeps<Tx>, 'routen' | 'register'> & RoutenUmgebung,
   /** Nur für Tests (Negativfälle des Abgleichs); der Dienst nutzt `registriereAlle`. */
-  routen: (r: Routen<Tx>) => void = registriereAlle,
+  routen: (r: Routen<Tx>, u: RoutenUmgebung) => void = registriereAlle,
 ) {
-  return erzeugeApp<Tx>({ ...deps, routen, register: ENDPUNKT_LISTE });
+  const { codes, ...app } = deps;
+  return erzeugeApp<Tx>({ ...app, routen: (r) => routen(r, { codes }), register: ENDPUNKT_LISTE });
 }

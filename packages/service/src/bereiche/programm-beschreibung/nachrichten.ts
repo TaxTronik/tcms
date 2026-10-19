@@ -49,7 +49,14 @@ import type { z } from 'zod';
 import { mitAudit, type Protokoll } from '../../audit';
 import type { SystemKontext } from '../../kontext';
 import { gleicheId } from '../../rechte';
-import { codePasst, istGesperrt, leseCodeZustand } from './code';
+import {
+  brauchtCodeSchluessel,
+  codePasst,
+  codeVerfahrenGueltig,
+  istGesperrt,
+  leseCodeZustand,
+  type CodeSchluessel,
+} from './code';
 import { pruefeEingabe } from './gemeinsam';
 
 // Typprüfung: Die Datenbank-Enums sind genau die Listen des Vertrags.
@@ -194,21 +201,32 @@ function grundZumVerwerfen(
   f:
     | (Pick<
         Freigabe,
-        'id' | 'status' | 'empfaengerId' | 'codeHash' | 'codeAblauf' | 'codeFehlversuche'
+        | 'id'
+        | 'status'
+        | 'empfaengerId'
+        | 'codeHash'
+        | 'codeSchluesselId'
+        | 'codeAblauf'
+        | 'codeFehlversuche'
       > & { programm: { mandantId: string } })
     | undefined,
   jetzt: Date,
+  schluessel: CodeSchluessel,
 ): VerwerfGrund | null {
   if (!f || f.status !== 'OFFEN' || f.programm.mandantId !== n.mandantId) {
     return 'FREIGABE_NICHT_OFFEN';
   }
-  // Erst: Ist es noch der aktive Code dieses Empfängers? (ersetzt, neu adressiert, gesperrt)
   const z = leseCodeZustand(f);
+  // H5: früheres Verfahren oder Schlüssel nicht mehr konfiguriert → abgelaufen.
+  if (!istGesperrt(z) && z.hash !== null && !codeVerfahrenGueltig(schluessel, z)) {
+    return 'CODE_ABGELAUFEN';
+  }
+  // Ist es noch der aktive Code dieses Empfängers? (ersetzt, neu adressiert, gesperrt)
   if (
     n.code === null ||
     istGesperrt(z) ||
     !gleicheId(f.empfaengerId, n.empfaengerId) ||
-    !codePasst(f.id, n.code, z.hash)
+    !codePasst(schluessel, f.id, n.code, z)
   ) {
     return 'CODE_UNGUELTIG';
   }
@@ -236,6 +254,7 @@ async function veralteteCodes(
   tx: Tx,
   zeilen: readonly CodeZeile[],
   jetzt: Date,
+  schluessel: CodeSchluessel,
 ): Promise<{ id: string; empfaengerId: string; grund: VerwerfGrund }[]> {
   if (zeilen.length === 0) return [];
   const freigabeIdVon = (daten: Prisma.JsonValue): string | null => {
@@ -254,6 +273,7 @@ async function veralteteCodes(
           status: true,
           empfaengerId: true,
           codeHash: true,
+          codeSchluesselId: true,
           codeAblauf: true,
           codeFehlversuche: true,
           programm: { select: { mandantId: true } },
@@ -264,7 +284,12 @@ async function veralteteCodes(
   const veraltet: { id: string; empfaengerId: string; grund: VerwerfGrund }[] = [];
   for (const n of zeilen) {
     const freigabeId = freigabeIdVon(n.daten);
-    const grund = grundZumVerwerfen(n, freigabeId ? freigaben.get(freigabeId) : undefined, jetzt);
+    const grund = grundZumVerwerfen(
+      n,
+      freigabeId ? freigaben.get(freigabeId) : undefined,
+      jetzt,
+      schluessel,
+    );
     if (grund) veraltet.push({ id: n.id, empfaengerId: n.empfaengerId, grund });
   }
   return veraltet;
@@ -292,6 +317,7 @@ export async function ladeOffeneNachrichten(
 ): Promise<{ nachrichten: OffeneNachricht[] }> {
   brauchtSystem(ctx);
   const e = pruefeEingabe(NachrichtenOffenEingabeSchema, eingabe);
+  const schluessel = brauchtCodeSchluessel(ctx.codes);
   const limit = e.limit ?? STANDARD_NACHRICHTEN_LIMIT;
   // Codefristen laufen auf echter Zeit, nie auf einer fachlichen Uhr (AGENTS.md).
   const jetzt = new Date();
@@ -326,7 +352,7 @@ export async function ladeOffeneNachrichten(
   /** Prüft Code-Nachrichten und verwirft die veralteten. */
   async function pruefeUndVerwirf(zeilen: readonly CodeZeile[]): Promise<void> {
     for (const z of zeilen) geprueft.add(z.id);
-    for (const v of await veralteteCodes(ctx.tx, zeilen, jetzt)) {
+    for (const v of await veralteteCodes(ctx.tx, zeilen, jetzt, schluessel)) {
       await verwirf({ ...v, zweck: 'FREIGABE_CODE' });
     }
   }

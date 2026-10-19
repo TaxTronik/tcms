@@ -54,11 +54,13 @@ import {
 import { halteRollenFest, ladeKontaktRollen } from '../../rollen';
 import { baueBausteine, normalisiereAbschnitte, pruefeSnapshot } from './bausteine';
 import {
+  brauchtCodeSchluessel,
   CODE_ANFORDERUNG_FENSTER_MS,
   codeAblaufAb,
   codeHash,
   codePasst,
   codeStatus,
+  codeVerfahrenGueltig,
   erzeugeCode,
   istGesperrt,
   leseCodeZustand,
@@ -94,6 +96,7 @@ const NUR_GV = 'Freigaben sind der gesetzlichen Vertretung vorbehalten.';
 const ANDERE_PERSON = 'Diese Freigabe ist an eine andere Person gerichtet.';
 const ERLEDIGT = 'Diese Freigabe ist bereits erledigt.';
 const GESPERRT = `Der Bestätigungscode ist nach ${MAX_FEHLVERSUCHE} Fehlversuchen gesperrt. Bitte wenden Sie sich an Ihre Kanzlei.`;
+const ABGELAUFEN = 'Der Code ist abgelaufen. Bitte fordern Sie einen neuen Code an.';
 const ZU_VIELE_CODES = `Sie haben in der letzten Stunde bereits ${MAX_CODE_ANFORDERUNGEN_JE_STUNDE} Codes angefordert. Bitte verwenden Sie den zuletzt erhaltenen Code oder versuchen Sie es später erneut.`;
 
 /**
@@ -226,7 +229,7 @@ export async function ladePortalFreigaben(
       code:
         code && istEmpfaenger
           ? {
-              status: codeStatus(f, jetzt),
+              status: codeStatus(f, jetzt, ctx.codes),
               ablauf: iso(f.codeAblauf),
               verbleibendeVersuche: Math.max(0, MAX_FEHLVERSUCHE - z.fehlversuche),
             }
@@ -343,6 +346,7 @@ export async function fordereFreigabeCodeAn(
   eingabe: PortalCodeAnfordernEingabe,
 ): Promise<PortalCodeAnfordernErgebnis> {
   const e = pruefeEingabe(PortalCodeAnfordernEingabeSchema, eingabe);
+  const schluessel = brauchtCodeSchluessel(ctx.codes);
   const mandantId = e.mandantId.toLowerCase();
   const { f, rollen, mandant } = await portalFreigabe(ctx, mandantId, e.freigabeId);
   pruefeFreigabeRecht(ctx, mandantId, rollen, f);
@@ -367,9 +371,10 @@ export async function fordereFreigabeCodeAn(
         status: 'OFFEN',
         empfaengerId: f.empfaengerId,
         codeHash: f.codeHash,
+        codeSchluesselId: f.codeSchluesselId,
         codeFehlversuche: f.codeFehlversuche,
       },
-      data: { codeHash: codeHash(f.id, code), codeAblauf },
+      data: { ...codeHash(schluessel, f.id, code), codeAblauf },
     });
     if (r.count !== 1) throw new DienstFehler('KONFLIKT', ERLEDIGT);
     await legeNachrichtAn(tx, {
@@ -414,6 +419,7 @@ export async function erteileFreigabe(
   eingabe: PortalFreigebenEingabe,
 ): Promise<PortalFreigebenErgebnis> {
   const e = pruefeEingabe(PortalFreigebenEingabeSchema, eingabe);
+  const schluessel = brauchtCodeSchluessel(ctx.codes);
   const mandantId = e.mandantId.toLowerCase();
   const { f, rollen } = await portalFreigabe(ctx, mandantId, e.freigabeId);
   pruefeFreigabeRecht(ctx, mandantId, rollen, f);
@@ -421,12 +427,11 @@ export async function erteileFreigabe(
   if (istGesperrt(z)) throw new DienstFehler('KONFLIKT', GESPERRT);
   if (!z.hash || !f.codeAblauf)
     throw new DienstFehler('KONFLIKT', 'Bitte fordern Sie zuerst einen Bestätigungscode an.');
+  // H5: Code des früheren Verfahrens (ohne Schlüsselkennung) oder mit einem nicht mehr
+  // konfigurierten Schlüssel gilt als abgelaufen – kein Fehlversuch, neuer Code nötig.
+  if (!codeVerfahrenGueltig(schluessel, z)) throw new DienstFehler('KONFLIKT', ABGELAUFEN);
   // Echte Zeit: Die Demo-Uhr verlängert keine Codefrist.
-  if (f.codeAblauf.getTime() < Date.now())
-    throw new DienstFehler(
-      'KONFLIKT',
-      'Der Code ist abgelaufen. Bitte fordern Sie einen neuen Code an.',
-    );
+  if (f.codeAblauf.getTime() < Date.now()) throw new DienstFehler('KONFLIKT', ABGELAUFEN);
 
   // Beschreibung: nur ein eingefrorener, unverfälschter Inhalt kann freigegeben
   // werden – vor dem Codevergleich, damit kein Versuch verbraucht wird.
@@ -458,7 +463,7 @@ export async function erteileFreigabe(
     };
   }
 
-  if (!codePasst(f.id, e.code, z.hash)) {
+  if (!codePasst(schluessel, f.id, e.code, z)) {
     const versuch = z.fehlversuche + 1;
     const sperren = versuch >= MAX_FEHLVERSUCHE;
     return mitAudit(ctx, async (tx) => {
@@ -469,10 +474,11 @@ export async function erteileFreigabe(
           id: f.id,
           status: 'OFFEN',
           codeHash: f.codeHash,
+          codeSchluesselId: f.codeSchluesselId,
           codeFehlversuche: f.codeFehlversuche,
         },
         data: sperren
-          ? { codeFehlversuche: versuch, codeHash: null, codeAblauf: null }
+          ? { codeFehlversuche: versuch, codeHash: null, codeSchluesselId: null, codeAblauf: null }
           : { codeFehlversuche: versuch },
       });
       if (r.count !== 1) throw new DienstFehler('KONFLIKT', 'Der Code ist nicht mehr gültig.');
@@ -513,10 +519,17 @@ export async function erteileFreigabe(
         status: 'OFFEN',
         empfaengerId: f.empfaengerId,
         codeHash: f.codeHash,
+        codeSchluesselId: f.codeSchluesselId,
         codeFehlversuche: f.codeFehlversuche,
         codeAblauf: { gte: new Date() },
       },
-      data: { status: 'FREIGEGEBEN', erledigtAm: zeitpunkt, codeHash: null, codeAblauf: null },
+      data: {
+        status: 'FREIGEGEBEN',
+        erledigtAm: zeitpunkt,
+        codeHash: null,
+        codeSchluesselId: null,
+        codeAblauf: null,
+      },
     });
     if (r.count !== 1)
       throw new DienstFehler(
@@ -567,6 +580,7 @@ export async function erteileFreigabe(
               anmerkung: `Gegenstandslos: v${version.nummer} wurde freigegeben`,
               erledigtAm: zeitpunkt,
               codeHash: null,
+              codeSchluesselId: null,
               codeAblauf: null,
             },
           });
@@ -702,7 +716,13 @@ export async function adressiereFreigabeNeu(
   return mitAudit(ctx, async (tx) => {
     const r = await tx.freigabe.updateMany({
       where: { id: f.id, status: 'OFFEN', empfaengerId: f.empfaengerId },
-      data: { empfaengerId, codeHash: null, codeAblauf: null, codeFehlversuche: 0 },
+      data: {
+        empfaengerId,
+        codeHash: null,
+        codeSchluesselId: null,
+        codeAblauf: null,
+        codeFehlversuche: 0,
+      },
     });
     if (r.count !== 1) throw new DienstFehler('KONFLIKT', 'Diese Anforderung hat sich geändert.');
     await legeNachrichtAn(tx, {

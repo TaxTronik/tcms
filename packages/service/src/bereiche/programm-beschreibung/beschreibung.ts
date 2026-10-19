@@ -55,7 +55,7 @@ import {
   pruefeSnapshot,
   type BeschreibungStatusWert,
 } from './bausteine';
-import { codeAblaufAb, codeHash, codeStatus, erzeugeCode } from './code';
+import { brauchtCodeSchluessel, codeAblaufAb, codeHash, codeStatus, erzeugeCode } from './code';
 import {
   aktiveKontakte,
   fachlichUngueltig,
@@ -205,7 +205,7 @@ export async function ladeBeschreibung(
         angefordertVon: f.angefordertVon,
         angefordertAm: f.angefordertAm.toISOString(),
         empfaengerId: f.empfaengerId,
-        codeStatus: k.historisch ? ('KEIN' as const) : codeStatus(f, jetzt),
+        codeStatus: k.historisch ? ('KEIN' as const) : codeStatus(f, jetzt, ctx.codes),
         codeAblauf: k.historisch ? null : iso(f.codeAblauf),
         anmerkung: spaeter ? null : f.anmerkung,
         erledigtAm: spaeter ? null : iso(f.erledigtAm),
@@ -503,6 +503,7 @@ export async function fordereBeschreibungsfreigabeAn(
   eingabe: BeschreibungFreigabeAnfordernEingabe,
 ): Promise<BeschreibungFreigabeAnfordernErgebnis> {
   const e = pruefeEingabe(BeschreibungFreigabeAnfordernEingabeSchema, eingabe);
+  const schluessel = brauchtCodeSchluessel(ctx.codes);
   const mandantId = e.mandantId.toLowerCase();
   const empfaengerId = e.empfaengerId.toLowerCase();
   const mandant = await kanzleiZugriff(ctx, mandantId, true);
@@ -578,6 +579,7 @@ export async function fordereBeschreibungsfreigabeAn(
           anmerkung: `Zurückgezogen: ersetzt durch Anforderung v${v.nummer}`,
           erledigtAm: zeitpunkt,
           codeHash: null,
+          codeSchluesselId: null,
           codeAblauf: null,
         },
       });
@@ -608,10 +610,7 @@ export async function fordereBeschreibungsfreigabeAn(
     const codeAblauf = codeAblaufAb(new Date());
     await tx.freigabe.update({
       where: { id: freigabe.id },
-      data: {
-        codeHash: codeHash(freigabe.id, code),
-        codeAblauf,
-      },
+      data: { ...codeHash(schluessel, freigabe.id, code), codeAblauf },
     });
     await legeNachrichtAn(tx, {
       mandantId,

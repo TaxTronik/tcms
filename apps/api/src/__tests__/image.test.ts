@@ -78,6 +78,11 @@ describe('Dockerfile und Build-Kontext', () => {
       ersetze('ENV NODE_ENV=production', 'ENV TCMS_SERVICE_TOKENS=x NODE_ENV=production'),
       /Geheimnis in ENV/,
     ],
+    [
+      'Code-Schlüssel (H5)',
+      ersetze('ENV NODE_ENV=production', 'ENV TCMS_CODE_SCHLUESSEL=x NODE_ENV=production'),
+      /Geheimnis in ENV/,
+    ],
     ['migrate als root', ersetze('USER 70:70\n', ''), /migrate: USER 70:70 fehlt/],
     [
       'Quelle außerhalb des Kontexts',

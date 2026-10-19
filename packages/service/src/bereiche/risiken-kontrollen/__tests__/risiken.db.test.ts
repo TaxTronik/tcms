@@ -680,7 +680,7 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
       });
       await imSystemdienst(
         { art: 'SYSTEM', tenantId: tenant, id: randomUUID(), name: 'Zustellung' },
-        UHR,
+        { uhr: UHR },
         (ctx) =>
           meldeNachrichtUnzustellbar(ctx, { nachrichtId: n!.id, grund: 'KEIN_PORTALZUGANG' }),
       );

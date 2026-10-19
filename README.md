@@ -187,13 +187,14 @@ pnpm akteur:schluessel                 # Schlüsselpaar für die Akteursbestäti
 pnpm api                               # Dienst auf HOST:PORT, Standard 0.0.0.0:3200
 ```
 
-| Variable                 | Inhalt                                                                                     |
-| ------------------------ | ------------------------------------------------------------------------------------------ |
-| `TCMS_SERVICE_TOKENS`    | Dienst-Tokens, kommagetrennt, je ≥ 32 Zeichen (z. B. `openssl rand -base64 48`)            |
-| `TCMS_ACTOR_PUBLIC_KEYS` | `kid=<base64 SPKI-DER>`, kommagetrennt, nur Ed25519 (Ausgabe von `pnpm akteur:schluessel`) |
-| `DATABASE_URL`           | Laufzeitrolle `tcms_app`; Start verweigert bei Superuser, BYPASSRLS oder Tabelleneigentum  |
-| `HOST`, `PORT`           | Bindung, Standard `0.0.0.0` und `3200`; nur im internen Netz erreichbar machen             |
-| `TCMS_LOG_LEVEL`         | optional `info` (Standard), `warn` oder `error`; andere Werte verhindern den Start         |
+| Variable                 | Inhalt                                                                                                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `TCMS_SERVICE_TOKENS`    | Dienst-Tokens, kommagetrennt, je ≥ 32 Zeichen (z. B. `openssl rand -base64 48`)                                                                                    |
+| `TCMS_CODE_SCHLUESSEL`   | Schlüssel der Bestätigungscodes (HMAC-SHA-256), kommagetrennt, Regeln wie die Tokens, nie gleich einem Token; der erste signiert (z. B. `openssl rand -base64 32`) |
+| `TCMS_ACTOR_PUBLIC_KEYS` | `kid=<base64 SPKI-DER>`, kommagetrennt, nur Ed25519 (Ausgabe von `pnpm akteur:schluessel`)                                                                         |
+| `DATABASE_URL`           | Laufzeitrolle `tcms_app`; Start verweigert bei Superuser, BYPASSRLS oder Tabelleneigentum                                                                          |
+| `HOST`, `PORT`           | Bindung, Standard `0.0.0.0` und `3200`; nur im internen Netz erreichbar machen                                                                                     |
+| `TCMS_LOG_LEVEL`         | optional `info` (Standard), `warn` oder `error`; andere Werte verhindern den Start                                                                                 |
 
 Der Dienst prüft die Konfiguration beim Start und startet nicht bei fehlenden Werten, Platzhaltern
 (`.env.example`), doppelten Einträgen oder anderen Schlüsseltypen; mit `NODE_ENV=production` auch
@@ -223,6 +224,13 @@ speisen.
 - Schlüssel: `pnpm akteur:schluessel`, öffentliche Zeile an `TCMS_ACTOR_PUBLIC_KEYS` anhängen und
   Dienst neu starten, kanzleikonsole mit neuem `kid` und privatem Schlüssel signieren lassen, nach
   mindestens 120 s (höchste Lebensdauer einer Bestätigung) den alten Eintrag entfernen.
+- Code-Schlüssel (Hinweis H5 aus RT4): neuen Schlüssel **vorn** in `TCMS_CODE_SCHLUESSEL` einfügen
+  (`NEU,ALT`) und Dienst neu starten – neue Codes trägt der neue Schlüssel, offene Codes prüft weiter
+  der alte. Nach mindestens 7 Tagen (Gültigkeit eines Codes) den alten Eintrag entfernen und neu
+  starten. Ein Code, dessen Schlüssel nicht mehr in der Liste steht, gilt als abgelaufen (Neuanforderung,
+  kein Fehlversuch). Der Schlüssel steht nie in der Datenbank; dort liegen nur der HMAC und die
+  abgeleitete Kennung (`codeSchluesselId`). Codes aus der Zeit vor dem Schlüssel (SHA-256 ohne
+  Kennung) gelten ebenso als abgelaufen.
 
 **Beispiel einer Anfrage (kanzleikonsole, Platzhalter statt Werten)**
 

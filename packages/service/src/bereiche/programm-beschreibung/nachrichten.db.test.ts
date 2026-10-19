@@ -30,6 +30,7 @@ import {
   kontakt,
   system,
   SYSTEM_ID,
+  TEST_CODES,
   zweiteVerbindung,
   type Welt,
 } from './testwelt';
@@ -82,7 +83,7 @@ describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
       const ablauf = codeAblaufAb(new Date());
       await tx.freigabe.update({
         where: { id: f.id },
-        data: { codeHash: codeHash(f.id, '123456'), codeAblauf: ablauf },
+        data: { ...codeHash(TEST_CODES, f.id, '123456'), codeAblauf: ablauf },
       });
       codeFreigabe = f.id;
       gueltigBis = ablauf.toISOString();

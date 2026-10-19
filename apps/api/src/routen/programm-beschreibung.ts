@@ -35,16 +35,23 @@ import {
   speichereBeschreibungsabschnitt,
   speichereEinrichtungsschritt,
   weiseBeschreibungsreviewZurueck,
+  type CodeSchluessel,
 } from '@tcms/service';
 import type { Routen } from '../routen';
-import { dienstKontext, systemKontext } from './kontext';
+import { dienstKontext as dienstOhneCodes, systemKontext as systemOhneCodes } from './kontext';
 
 type Params = { params: Readonly<Record<string, string>> };
 const mandant = (c: Params) => ({ mandantId: c.params.mandantId! });
 const version = (c: Params) => ({ ...mandant(c), versionId: c.params.versionId! });
 const freigabe = (c: Params) => ({ ...mandant(c), freigabeId: c.params.freigabeId! });
 
-export function registriereProgrammBeschreibung(r: Routen<Tx>): void {
+/**
+ * `codes`: Schlüsselbund der Bestätigungscodes aus `TCMS_CODE_SCHLUESSEL`
+ * (Hinweis H5); jede Route dieses Bereichs bekommt ihn im Kontext.
+ */
+export function registriereProgrammBeschreibung(r: Routen<Tx>, codes: CodeSchluessel): void {
+  const dienstKontext = (c: Parameters<typeof dienstOhneCodes>[0]) => dienstOhneCodes(c, codes);
+  const systemKontext = (c: Parameters<typeof systemOhneCodes>[0]) => systemOhneCodes(c, codes);
   // ---- Postausgang (tenantweit, nur Systemakteur) ----
   r.endpunkt(ENDPUNKTE.nachrichtenOffenLesen, (c) =>
     ladeOffeneNachrichten(systemKontext(c), { ...c.query }),

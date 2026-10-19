@@ -7,8 +7,11 @@ const spki = (k: KeyObject) => k.export({ format: 'der', type: 'spki' }).toStrin
 const A = generateKeyPairSync('ed25519').publicKey;
 const T1 = randomBytes(32).toString('base64url');
 const T2 = randomBytes(48).toString('base64');
+const C1 = randomBytes(32).toString('base64');
+const C2 = randomBytes(32).toString('base64url');
 const GUELTIG = {
   TCMS_SERVICE_TOKENS: `${T1},${T2}`,
+  TCMS_CODE_SCHLUESSEL: `${C1},${C2}`,
   TCMS_ACTOR_PUBLIC_KEYS: `kk-2026-10=${spki(A)}`,
   DATABASE_URL: 'postgresql://tcms_app:Zr8fQ2vLx9@db.intern:5432/tcms',
 };
@@ -40,6 +43,8 @@ describe('ladeKonfiguration', () => {
   it('liest eine gültige Konfiguration mit Standardwerten für HOST und PORT', () => {
     const k = ladeKonfiguration(GUELTIG);
     expect(k.dienstTokens).toEqual([T1, T2]);
+    // Reihenfolge bleibt: der erste Code-Schlüssel signiert neue Codes (Rotation).
+    expect(k.codeSchluessel).toEqual([C1, C2]);
     expect([...k.akteurSchluessel.keys()]).toEqual(['kk-2026-10']);
     expect(k.host).toBe('0.0.0.0');
     expect(k.port).toBe(3200);
@@ -70,11 +75,16 @@ describe('ladeKonfiguration', () => {
   it('weist die Platzhalter der .env.example im Repo-Root ab', () => {
     const beispiel = envAusDatei(new URL('../../../../.env.example', import.meta.url).pathname);
     expect(Object.keys(beispiel)).toEqual(
-      expect.arrayContaining(['TCMS_SERVICE_TOKENS', 'TCMS_ACTOR_PUBLIC_KEYS', 'DATABASE_URL']),
+      expect.arrayContaining([
+        'TCMS_SERVICE_TOKENS',
+        'TCMS_CODE_SCHLUESSEL',
+        'TCMS_ACTOR_PUBLIC_KEYS',
+        'DATABASE_URL',
+      ]),
     );
     // Die Datei als Ganzes startet den Dienst nie.
-    expect(probleme(beispiel).length).toBeGreaterThanOrEqual(2);
-    for (const name of ['TCMS_SERVICE_TOKENS', 'TCMS_ACTOR_PUBLIC_KEYS']) {
+    expect(probleme(beispiel).length).toBeGreaterThanOrEqual(3);
+    for (const name of ['TCMS_SERVICE_TOKENS', 'TCMS_CODE_SCHLUESSEL', 'TCMS_ACTOR_PUBLIC_KEYS']) {
       expect(probleme({ ...GUELTIG, [name]: beispiel[name] }).join(), name).toContain(name);
     }
     // Die Entwicklungsverbindung (tcms_app:tcms_app) gilt in Produktion nicht.
@@ -112,6 +122,25 @@ describe('ladeKonfiguration', () => {
     ];
     for (const [tokens, muster] of faelle) {
       expect(probleme({ ...GUELTIG, TCMS_SERVICE_TOKENS: tokens }).join(), tokens).toMatch(muster);
+    }
+  });
+
+  it('TCMS_CODE_SCHLUESSEL (H5): dieselben Regeln wie Dienst-Tokens, nie gleich einem Token', () => {
+    const faelle: [string, RegExp][] = [
+      ['a'.repeat(30) + 'B', /kürzer/],
+      [`${C1},`, /leer/],
+      [`${C1},${C1}`, /doppelt/],
+      [`${C1} x`, /Zeichen/],
+      ['ab'.repeat(20), /verschiedene/],
+      ['x'.repeat(513), /länger/],
+      ['bitte-durch-einen-zufaelligen-code-schluessel-ersetzen', /Platzhalter/],
+      ['geheimer-schluessel-geheimer-schluessel', /Platzhalter/],
+      [`${C1},${T2}`, /gleicht einem Dienst-Token/],
+    ];
+    for (const [liste, muster] of faelle) {
+      const p = probleme({ ...GUELTIG, TCMS_CODE_SCHLUESSEL: liste }).join();
+      expect(p, liste.slice(0, 12)).toContain('TCMS_CODE_SCHLUESSEL');
+      expect(p, liste.slice(0, 12)).toMatch(muster);
     }
   });
 

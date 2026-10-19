@@ -810,8 +810,12 @@ model Freigabe {
   angefordertVon   String
   angefordertAm    DateTime       @default(now())
   empfaengerId     String
-  /// SHA-256 (hex) des aktiven Bestätigungscodes, an die Freigabe gebunden.
+  /// HMAC-SHA-256 (hex) des aktiven Bestätigungscodes, an die Freigabe
+  /// gebunden; Schlüssel nur in der Umgebung (`TCMS_CODE_SCHLUESSEL`, H5).
   codeHash         String?
+  /// Kennung des Schlüssels zu `codeHash` (aus dem Schlüssel abgeleitet, 16 hex).
+  /// Fehlt sie neben einem Hash (früheres Verfahren), gilt der Code als abgelaufen.
+  codeSchluesselId String?
   codeAblauf       DateTime?
   /// Fehlversuche je Freigabe (0–5, CHECK in der Migration); nur unter
   /// Zeilensperre gelesen und bedingt geschrieben.

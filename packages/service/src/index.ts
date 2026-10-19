@@ -21,8 +21,15 @@ export {
   type NachweisVerweis,
   type PersonenVerzeichnis,
   type SystemKontext,
+  type SystemPorts,
   type Uhr,
 } from './kontext';
+export {
+  brauchtCodeSchluessel,
+  erzeugeCodeSchluessel,
+  MIN_CODE_SCHLUESSEL,
+  type CodeSchluessel,
+} from './bereiche/programm-beschreibung/code';
 export { pruefeVerweis, verweisAblage, VERWEIS_GRENZEN } from './ablage';
 export { AUDIT_SYSTEM_PRAEFIX, mitAudit, type AuditKontext, type Protokoll } from './audit';
 export { ladeKontaktRollen } from './rollen';
