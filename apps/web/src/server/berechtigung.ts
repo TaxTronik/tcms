@@ -1,5 +1,5 @@
 import 'server-only';
-import type { Akteur } from '@tcms/contract';
+import type { PersonAkteur } from '@tcms/contract';
 import * as R from '@tcms/service';
 import { fuerMandant } from './demo';
 
@@ -18,21 +18,21 @@ interface MandantRef {
 }
 
 /** Akteur mit Bezug auf diesen Mandanten (Kanzlei) bzw. unverändert (Mandantenkontakt). */
-export function mitBezug(a: Akteur, mandantId: string): Akteur {
+export function mitBezug(a: PersonAkteur, mandantId: string): PersonAkteur {
   return a.art === 'KANZLEI' ? fuerMandant(a, mandantId) : a;
 }
 
-export function kannBearbeiten(a: Akteur, m: MandantRef): boolean {
+export function kannBearbeiten(a: PersonAkteur, m: MandantRef): boolean {
   return R.kannBearbeiten(mitBezug(a, m.id), m.id);
 }
 
-export function kannWuerdigen(a: Akteur, m: MandantRef): boolean {
+export function kannWuerdigen(a: PersonAkteur, m: MandantRef): boolean {
   return R.kannWuerdigen(mitBezug(a, m.id), m.id);
 }
 
 /** Verwerfen bestätigen: zweite Person, bei möglicher Steuerwirkung mit Würdigungsrecht. */
 export function kannVerwerfenBestaetigen(
-  a: Akteur,
+  a: PersonAkteur,
   m: MandantRef,
   beantragtVon: string | null,
   auswirkung: R.Auswirkung,
@@ -42,7 +42,7 @@ export function kannVerwerfenBestaetigen(
 
 /** TS-04: „NEIN" beim Anlegen nur mit Würdigungsrecht, sonst „UNKLAR". */
 export function auswirkungBeimAnlegen(
-  a: Akteur,
+  a: PersonAkteur,
   m: MandantRef,
   angegeben: R.Auswirkung,
 ): R.Auswirkung {
@@ -50,7 +50,7 @@ export function auswirkungBeimAnlegen(
 }
 
 export function kannDurchfuehren(
-  a: Akteur,
+  a: PersonAkteur,
   k: R.KontrollZustaendigkeit,
   mandantId: string,
   rollen: readonly R.KontaktRolle[] = [],
@@ -59,7 +59,7 @@ export function kannDurchfuehren(
 }
 
 export function kannGegenzeichnen(
-  a: Akteur,
+  a: PersonAkteur,
   k: R.KontrollZustaendigkeit,
   m: MandantRef,
   durchgefuehrtVon: string | null,

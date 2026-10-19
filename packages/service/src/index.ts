@@ -10,6 +10,8 @@ export {
   kalendertag,
   keinPersonenVerzeichnis,
   normalisiereAkteur,
+  personAkteur,
+  systemAkteur,
   ZEITZONE,
   type DienstKontext,
   type DienstPorts,

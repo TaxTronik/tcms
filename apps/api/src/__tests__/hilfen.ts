@@ -115,6 +115,17 @@ export function mandantClaims(mandantId = MANDANT, over: Partial<AkteurClaims> =
   return c;
 }
 
+/** Feste ID des Systemakteurs (Dienstnutzer der kanzleikonsole je Tenant) in Tests. */
+export const SYSTEM_ID = '55555555-5555-4555-8555-555555555555';
+
+/** Claims eines Systemakteurs: ohne `rol` und `cli` (ADR 0001 §3.2). */
+export function systemClaims(over: Partial<AkteurClaims> = {}): AkteurClaims {
+  const c = claims({ knd: 'SYSTEM', sub: SYSTEM_ID, nam: 'Zustellung kanzleikonsole', ...over });
+  delete c.rol;
+  delete c.cli;
+  return c;
+}
+
 export interface Senden {
   methode?: string;
   /** Pfad mit Query, wie der Client ihn schickt (roh). */

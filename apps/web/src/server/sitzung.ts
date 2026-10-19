@@ -2,7 +2,7 @@ import 'server-only';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { cache } from 'react';
-import type { Akteur } from '@tcms/contract';
+import type { PersonAkteur } from '@tcms/contract';
 import { ladeKontaktRollen, type KontaktRolle } from '@tcms/service';
 import {
   akteurFuer,
@@ -60,7 +60,7 @@ export const aktuellePerson = cache(async (): Promise<DemoPerson | null> => {
  * Mandanten (nur bekannte Demo-Mandanten), Mandantenkontakt unverändert mit
  * seinem eigenen Mandanten. Ohne Sitzung null. Rechte prüft der Service.
  */
-export async function demoAkteur(mandantId: string | null): Promise<Akteur | null> {
+export async function demoAkteur(mandantId: string | null): Promise<PersonAkteur | null> {
   const p = await aktuellePerson();
   return p ? akteurFuer(p, mandantId) : null;
 }

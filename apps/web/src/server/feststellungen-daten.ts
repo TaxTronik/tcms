@@ -1,5 +1,9 @@
 import 'server-only';
-import { DienstFehler, type Akteur, type FeststellungDetail as DienstDetail } from '@tcms/contract';
+import {
+  DienstFehler,
+  type PersonAkteur,
+  type FeststellungDetail as DienstDetail,
+} from '@tcms/contract';
 import type { AnzeigeStatus, FeststellungStatus, Paragraph153Entscheidung } from '@tcms/domain';
 import {
   EINGABE_UNGUELTIG,
@@ -81,7 +85,7 @@ export function optional(fd: FormData, name: string): string | undefined {
  * den bisherigen Formulartext; fachliche Meldungen des Service bleiben.
  */
 export async function dienstAufruf<T>(
-  akteur: Akteur,
+  akteur: PersonAkteur,
   fn: (ctx: DienstKontext) => Promise<T>,
   texte: { ungueltig?: string; nichtGefunden?: string } = {},
 ): Promise<{ wert: T } | { fehler: string }> {
@@ -103,7 +107,7 @@ export async function dienstAufruf<T>(
 
 /** `dienstAufruf` für Actions mit Rückmeldung; nach Erfolg werden die Seiten des Mandanten neu geladen. */
 export async function dienstAktion<T>(
-  akteur: Akteur,
+  akteur: PersonAkteur,
   mandantId: string,
   fn: (ctx: DienstKontext) => Promise<T>,
   ok: (wert: T) => string,

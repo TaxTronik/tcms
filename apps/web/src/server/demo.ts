@@ -1,5 +1,5 @@
 import 'server-only';
-import type { Akteur, MandantenListe } from '@tcms/contract';
+import type { PersonAkteur, MandantenListe } from '@tcms/contract';
 import { mitTenant, type Tx } from '@tcms/db';
 import {
   DEMO_MANDANTEN,
@@ -11,7 +11,7 @@ import {
 } from '@tcms/db/demo';
 import { leseDatei, speichereDatei } from '@tcms/db/demo-ablage';
 import {
-  normalisiereAkteur,
+  personAkteur,
   type DienstPorts,
   type KontaktRolle,
   type MandantRolle,
@@ -28,17 +28,17 @@ import { demoUhr } from './zeit';
 // signierte Akteursbestätigung liefert. Fachregeln liegen in @tcms/service.
 // =============================================================================
 
-export type KanzleiAkteur = Extract<Akteur, { art: 'KANZLEI' }>;
-export type MandantAkteur = Extract<Akteur, { art: 'MANDANT' }>;
+export type KanzleiAkteur = Extract<PersonAkteur, { art: 'KANZLEI' }>;
+export type MandantAkteur = Extract<PersonAkteur, { art: 'MANDANT' }>;
 
 /**
  * Handelnde Person einer Demo-Aktion: Akteur plus (nur für Mandantenkontakte)
  * die aktiven Rollen aus MandantKontaktRolle, die Kanzlei und Portal in den
  * gemeinsamen Durchführungs-Handlungen brauchen.
  */
-export type Handelnde = Akteur & { rollen: readonly KontaktRolle[] };
+export type Handelnde = PersonAkteur & { rollen: readonly KontaktRolle[] };
 
-export function handelnde(a: Akteur, rollen: readonly KontaktRolle[] = []): Handelnde {
+export function handelnde(a: PersonAkteur, rollen: readonly KontaktRolle[] = []): Handelnde {
   return { ...a, rollen: a.art === 'MANDANT' ? rollen : [] };
 }
 
@@ -51,10 +51,10 @@ export { DEMO_TENANT_ID, demoPerson, type DemoPerson };
  * Zugriff auf alle Demo-Mandanten (Verhalten des Prototyps). Unbekannte
  * Mandanten erhalten keinen Bezug (kein Recht).
  */
-export function akteurFuer(p: DemoPerson, mandantId: string | null): Akteur {
+export function akteurFuer(p: DemoPerson, mandantId: string | null): PersonAkteur {
   if (p.art === 'MANDANT') {
     if (!p.mandantId) throw new Error('[demo] Mandantenkontakt ohne Mandant');
-    return normalisiereAkteur({
+    return personAkteur({
       art: 'MANDANT',
       tenantId: DEMO_TENANT_ID,
       id: p.id,
@@ -63,7 +63,7 @@ export function akteurFuer(p: DemoPerson, mandantId: string | null): Akteur {
     });
   }
   const m = demoMandant(mandantId);
-  return normalisiereAkteur({
+  return personAkteur({
     art: 'KANZLEI',
     tenantId: DEMO_TENANT_ID,
     id: p.id,
@@ -91,7 +91,7 @@ export function fuerMandant(a: KanzleiAkteur, mandantId: string): KanzleiAkteur 
  * Mandanten, auf die eine Kanzleiperson Zugriff hat (im Zielbild liefert die
  * kanzleikonsole diese Liste, ADR 0001 §3.3). In der Demo: alle Demo-Mandanten.
  */
-export function zugaenglicheMandanten(a: Akteur): string[] {
+export function zugaenglicheMandanten(a: PersonAkteur): string[] {
   return a.art === 'KANZLEI' ? DEMO_MANDANTEN.map((m) => m.id) : [a.mandantId];
 }
 

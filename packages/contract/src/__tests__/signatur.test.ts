@@ -1,6 +1,6 @@
 import { createHmac, generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { AKTEUR_TYP, type AkteurClaims } from '../akteur';
+import { AKTEUR_TYP, akteurAusClaims, type AkteurClaims } from '../akteur';
 import {
   bodySha256,
   parsePrivatenSchluessel,
@@ -417,6 +417,34 @@ describe('pruefeAkteur – Payload und Claims', () => {
     expect(pruefe(roh(HEADER, JSON.stringify(gueltig))).ok).toBe(true);
   });
 
+  it('akzeptiert SYSTEM nur ohne rol und cli (keine verdeckte Person, kein Mandantenpfad)', () => {
+    const basis: Record<string, unknown> = { ...claims(), knd: 'SYSTEM', nam: 'Zustellung' };
+    delete basis.rol;
+    delete basis.cli;
+    const gueltig = pruefe(roh(HEADER, JSON.stringify(basis)));
+    expect(gueltig.ok).toBe(true);
+    for (const over of [
+      { rol: { adm: true, bt: true } },
+      { rol: { adm: false, bt: false } },
+      { cli: { id: MANDANT, bt: false, hb: false } },
+      { rol: { adm: false, bt: false }, cli: { id: MANDANT, bt: false, hb: false } },
+    ]) {
+      expect(grund(roh(HEADER, JSON.stringify({ ...basis, ...over }))), JSON.stringify(over)).toBe(
+        'CLAIMS',
+      );
+    }
+    // Auch der Signierer der kanzleikonsole erzeugt kein solches Token.
+    expect(() =>
+      signiereAkteur(
+        { ...(basis as AkteurClaims), rol: { adm: true, bt: false } },
+        {
+          kid: 'kk-a',
+          privateKey: a.privateKey,
+        },
+      ),
+    ).toThrow();
+  });
+
   it('weist exp - iat > 120 und exp ≤ iat ab', () => {
     const c = (iat: number, exp: number) => JSON.stringify(claims({ iat, exp }));
     expect(grund(roh(HEADER, c(JETZT_S - 60, JETZT_S + 61)))).toBe('CLAIMS');
@@ -436,7 +464,8 @@ describe('pruefeAkteur – Payload und Claims', () => {
       { nam: 'x'.repeat(201) },
       { iat: JETZT_S + 0.5 },
       { exp: String(JETZT_S + 60) },
-      { knd: 'SYSTEM' },
+      { knd: 'ADMIN' },
+      { knd: 'system' },
     ]) {
       expect(grund(roh(HEADER, JSON.stringify({ ...c, ...over }))), JSON.stringify(over)).toBe(
         'CLAIMS',
@@ -643,5 +672,44 @@ describe('parsePrivatenSchluessel', () => {
     } catch (e) {
       expect(String(e)).not.toContain(spkiB64.slice(0, 20));
     }
+  });
+});
+
+describe('akteurAusClaims', () => {
+  it('bildet Kanzlei, Mandant und System auf je eine eigene Variante ab', () => {
+    expect(akteurAusClaims(claims())).toEqual({
+      art: 'KANZLEI',
+      tenantId: TENANT,
+      id: PERSON,
+      name: 'StB Dr. Anna Roth',
+      istAdmin: true,
+      istBerufstraeger: true,
+      mandant: { id: MANDANT, zustaendigBerufstraeger: true, hauptbearbeitung: false },
+    });
+    const kontakt = claims({ knd: 'MANDANT', cli: { id: MANDANT, bt: false, hb: false } });
+    delete kontakt.rol;
+    expect(akteurAusClaims(kontakt)).toEqual({
+      art: 'MANDANT',
+      tenantId: TENANT,
+      id: PERSON,
+      name: 'StB Dr. Anna Roth',
+      mandantId: MANDANT,
+    });
+    const system = claims({ knd: 'SYSTEM', nam: 'Zustellung kanzleikonsole' });
+    delete system.rol;
+    delete system.cli;
+    // Nur Art, Tenant, ID und Name: keine Rollen, kein Mandantenbezug.
+    expect(akteurAusClaims(system)).toEqual({
+      art: 'SYSTEM',
+      tenantId: TENANT,
+      id: PERSON,
+      name: 'Zustellung kanzleikonsole',
+    });
+  });
+
+  it('weist eine unbekannte Akteursart ab (fail closed)', () => {
+    expect(() => akteurAusClaims({ ...claims(), knd: 'ADMIN' } as unknown as AkteurClaims)).toThrow(
+      /unbekannte Akteursart/,
+    );
   });
 });

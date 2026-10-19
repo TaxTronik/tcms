@@ -20,6 +20,7 @@ import {
   json,
   mandantClaims,
   senden,
+  systemClaims,
   zaehlStrom,
 } from './hilfen';
 
@@ -651,6 +652,48 @@ describe('Schritt 7: Mandantenbindung (ADR §3.3)', () => {
     expect((await als(ziel(MANDANT_FREMD, 'portal'))).status).toBe(404);
     expect((await als('/v1/kanzlei')).status).toBe(404);
     expect((await als('/v1/ich')).status).toBe(200);
+  });
+
+  it('lässt Systemakteure auf keine Route ohne ausdrückliche Zulassung (404, kein Handler, kein Tenant)', async () => {
+    let handler = 0;
+    const t = aufbau({
+      routen: (r) => {
+        testRouten({
+          endpunkt: r.endpunkt,
+          route: (d) =>
+            r.route({
+              ...d,
+              handler: async (c) => {
+                handler++;
+                return d.handler(c as never);
+              },
+            }),
+        });
+      },
+    });
+    for (const [methode, z, body] of [
+      ['GET', '/v1/ich', undefined],
+      ['GET', '/v1/kanzlei', undefined],
+      ['GET', ziel(MANDANT), undefined],
+      ['GET', ziel(MANDANT, 'portal'), undefined],
+      ['POST', ziel(MANDANT), '{kaputt'],
+      ['POST', '/v1/fehler/konflikt', undefined],
+    ] as const) {
+      const b = new TextEncoder().encode(body ?? '');
+      const r = await bestaetigtSenden(t.app, {
+        methode,
+        ziel: z,
+        ...(body === undefined ? {} : { body }),
+        roheClaims: systemClaims({ req: { m: methode, p: z, b: bodySha256(b) } }),
+      });
+      expect(r.status, `${methode} ${z}`).toBe(404);
+      expect(await json(r)).toEqual({ ok: false, fehler: { code: 'NICHT_GEFUNDEN' } });
+    }
+    expect(handler).toBe(0);
+    expect(t.tenants).toEqual([]);
+    // Protokoll: Art des Akteurs erkennbar, keine Namen.
+    expect(t.log.filter((z) => z['akteurArt'] === 'SYSTEM')).toHaveLength(6);
+    expect(t.logRoh.join('\n')).not.toContain('Zustellung kanzleikonsole');
   });
 
   it('prüft die Bindung vor dem Body (404 statt 400 für fremde Mandanten)', async () => {

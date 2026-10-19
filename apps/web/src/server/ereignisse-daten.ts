@@ -12,7 +12,7 @@ import {
   type KontaktRolle,
   type NachweisVerweis,
 } from '@tcms/service';
-import type { Akteur } from '@tcms/contract';
+import type { PersonAkteur } from '@tcms/contract';
 import {
   EREIGNISTYPEN,
   ereignistyp,
@@ -101,7 +101,7 @@ export const PORTAL_KACHELN: { code: string; label: string; icon: string; ton: T
  * Anzeige und damit die Demo – wie die kanzleikonsole – keine Dateien
  * Unberechtigter annimmt. Die Meldung prüft der Service erneut.
  */
-export function darfPortalMelden(a: Akteur, rollen: readonly KontaktRolle[]): boolean {
+export function darfPortalMelden(a: PersonAkteur, rollen: readonly KontaktRolle[]): boolean {
   return a.art === 'MANDANT' && darfEreignisMelden(a, a.mandantId, rollen);
 }
 
@@ -245,7 +245,7 @@ export function legeAnlageAb(
  * SHA-256 des Inhalts gegen Ablagepfad und Verweis.
  */
 export async function ladeAnlageZumDownload(
-  akteur: Akteur,
+  akteur: PersonAkteur,
   eingabe: { mandantId: string; ereignisId: string; sha256: string },
 ): Promise<{ verweis: AnlageVerweis; inhalt: Buffer } | 'NICHT_GEFUNDEN' | 'UNGUELTIG' | 'DEFEKT'> {
   let verweis: AnlageVerweis;

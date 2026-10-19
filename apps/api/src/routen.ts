@@ -314,11 +314,14 @@ export function pruefeGegenRegister<Tx>(
 /**
  * Mandantenbindung (ADR §3.3). Wirft `404 NICHT_GEFUNDEN` (nicht 403, damit
  * keine Existenz verraten wird), wenn
+ * - ein Systemakteur (`knd: SYSTEM`) eine Fachroute aufruft (bisher lässt keine
+ *   Route ihn zu),
  * - eine `MANDANT`-Person eine Route ohne Portal-Kennzeichen aufruft oder
  * - der Pfad an einen Mandanten gebunden ist und `cli.id` fehlt oder abweicht.
  * Vergleich byte-genau, ohne Umwandlung der Schreibweise.
  */
 export function bindeMandant(akteur: Akteur, mandantId: string | null, portal: boolean): void {
+  if (akteur.art === 'SYSTEM') throw new DienstFehler('NICHT_GEFUNDEN');
   if (akteur.art === 'MANDANT' && !portal) throw new DienstFehler('NICHT_GEFUNDEN');
   if (mandantId === null) return;
   const bestaetigt = akteur.art === 'KANZLEI' ? akteur.mandant?.id : akteur.mandantId;

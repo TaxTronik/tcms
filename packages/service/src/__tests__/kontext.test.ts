@@ -21,7 +21,8 @@ vi.mock('@tcms/db', async (original) => {
   };
 });
 
-const { echteUhr, imDienst, kalendertag, normalisiereAkteur } = await import('../kontext');
+const { echteUhr, imDienst, kalendertag, normalisiereAkteur, personAkteur, systemAkteur } =
+  await import('../kontext');
 const { mitAudit } = await import('../audit');
 const { pruefeVerweis, verweisAblage } = await import('../ablage');
 const { keinPersonenVerzeichnis } = await import('../kontext');
@@ -38,6 +39,12 @@ const AKTEUR: Akteur = {
     zustaendigBerufstraeger: true,
     hauptbearbeitung: false,
   },
+};
+const SYSTEM: Akteur = {
+  art: 'SYSTEM',
+  tenantId: AKTEUR.tenantId,
+  id: 'cccccccc-0000-4000-8000-000000000001',
+  name: 'Zustellung kanzleikonsole',
 };
 const PORTS = {
   uhr: { jetzt: () => new Date('2026-10-16T10:00:00Z'), heute: () => '2026-10-16' },
@@ -91,9 +98,28 @@ describe('normalisiereAkteur', () => {
     ['Mandant keine UUID', { ...AKTEUR, mandant: { ...AKTEUR.mandant!, id: "x' OR 1=1" } }],
     ['Name leer', { ...AKTEUR, name: '  ' }],
     ['Name zu lang', { ...AKTEUR, name: 'x'.repeat(201) }],
-    ['unbekannte Art', { ...AKTEUR, art: 'SYSTEM' }],
+    ['unbekannte Art', { ...AKTEUR, art: 'ADMIN' }],
+    ['ohne Art', { ...AKTEUR, art: undefined }],
+    ['kein Objekt', null],
+    ['System: ID keine UUID', { ...SYSTEM, id: 'worker' }],
+    ['System: Tenant keine UUID', { ...SYSTEM, tenantId: 'x' }],
+    ['System: Name leer', { ...SYSTEM, name: ' ' }],
   ])('weist ab: %s', (_n, a) => {
     expect(() => normalisiereAkteur(a as Akteur)).toThrow(DienstFehler);
+  });
+
+  it('Systemakteur: nur Art, Tenant, ID und Name – keine Rollen, kein Mandant', () => {
+    const verkleidet = {
+      ...SYSTEM,
+      id: SYSTEM.id.toUpperCase(),
+      istAdmin: true,
+      istBerufstraeger: true,
+      mandant: AKTEUR.art === 'KANZLEI' ? AKTEUR.mandant : null,
+      mandantId: 'aaaaaaaa-0000-4000-8000-000000000001',
+    } as unknown as Akteur;
+    const n = normalisiereAkteur(verkleidet);
+    expect(n).toEqual({ ...SYSTEM });
+    expect(Object.isFrozen(n)).toBe(true);
   });
 
   it('Rollenflags nur bei true gesetzt (kein truthy-Durchrutschen)', () => {
@@ -111,6 +137,17 @@ describe('imDienst', () => {
     expect(ctx.tx).toEqual({ fake: true });
   });
 
+  it('Systemakteur: NICHT_GEFUNDEN ohne Transaktion (nur Systemoperationen)', async () => {
+    let lief = false;
+    const fehler = await imDienst(SYSTEM, PORTS, async () => {
+      lief = true;
+    }).catch((e: unknown) => e);
+    expect(fehler).toBeInstanceOf(DienstFehler);
+    expect((fehler as DienstFehler).code).toBe('NICHT_GEFUNDEN');
+    expect(lief).toBe(false);
+    expect(aufrufe.mitTenant).toEqual([]);
+  });
+
   it('öffnet bei ungültigem Akteur keine Transaktion', async () => {
     await expect(
       imDienst({ ...AKTEUR, tenantId: 'x' }, PORTS, async () => 1),
@@ -119,8 +156,49 @@ describe('imDienst', () => {
   });
 });
 
+describe('personAkteur und systemAkteur', () => {
+  const code = (fn: () => unknown) => {
+    try {
+      fn();
+    } catch (e) {
+      return e instanceof DienstFehler ? e.code : 'anderer Fehler';
+    }
+    return 'kein Fehler';
+  };
+
+  it('Personenoperationen: Systemakteur → NICHT_GEFUNDEN; Personen normalisiert', () => {
+    expect(code(() => personAkteur(SYSTEM))).toBe('NICHT_GEFUNDEN');
+    expect(personAkteur(AKTEUR)).toEqual(AKTEUR);
+    const kontakt: Akteur = {
+      art: 'MANDANT',
+      tenantId: AKTEUR.tenantId,
+      id: 'dddddddd-0000-4000-8000-000000000001',
+      name: 'Jana Weller',
+      mandantId: 'aaaaaaaa-0000-4000-8000-000000000001',
+    };
+    expect(personAkteur(kontakt)).toEqual(kontakt);
+  });
+
+  it('Systemoperationen: jede Person → NICHT_GEFUNDEN, auch Admins', () => {
+    expect(systemAkteur(SYSTEM)).toEqual(SYSTEM);
+    expect(code(() => systemAkteur(AKTEUR))).toBe('NICHT_GEFUNDEN');
+    expect(
+      code(() =>
+        systemAkteur({
+          art: 'MANDANT',
+          tenantId: AKTEUR.tenantId,
+          id: AKTEUR.id,
+          name: 'Kontakt',
+          mandantId: AKTEUR.id,
+        }),
+      ),
+    ).toBe('NICHT_GEFUNDEN');
+    expect(code(() => systemAkteur({ ...SYSTEM, id: 'x' }))).toBe('NICHT_AUTHENTIFIZIERT');
+  });
+});
+
 describe('mitAudit', () => {
-  const ctx = () => ({ tx: { fake: true } as never, akteur: normalisiereAkteur(AKTEUR), ...PORTS });
+  const ctx = () => ({ tx: { fake: true } as never, akteur: personAkteur(AKTEUR), ...PORTS });
 
   it('protokolliert mit dem Akteur des Kontexts und der Uhrzeit der Uhr', async () => {
     let zeit: Date | null = null;

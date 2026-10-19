@@ -133,7 +133,11 @@ export function baueRoutentabelle<Tx>(
     version: deps.konfiguration.version,
     datenbank: await pingeDatenbank(deps.daten, zeitlimitMs, log),
   }));
-  tabelle.eintragenAusRegister(ENDPUNKTE.ich, async ({ akteur }) => akteur);
+  tabelle.eintragenAusRegister(ENDPUNKTE.ich, async ({ akteur }) => {
+    // `ich` liefert nur Personen; Systemakteure lässt schon die Routentabelle nicht zu.
+    if (akteur.art === 'SYSTEM') throw new DienstFehler('NICHT_GEFUNDEN');
+    return akteur;
+  });
   deps.routen?.(tabelle.registrar());
   if (deps.register) pruefeGegenRegister(tabelle.eintraege(), deps.register);
   tabelle.einfrieren();

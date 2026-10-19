@@ -5,7 +5,7 @@
 // Demo-Oberfläche (apps/web) unterscheiden sich nur in den Ports.
 // =============================================================================
 
-import { DienstFehler, type Akteur } from '@tcms/contract';
+import { DienstFehler, type Akteur, type PersonAkteur, type SystemAkteur } from '@tcms/contract';
 import { mitTenant, pruefeTenantId, type TenantOptionen, type Tx } from '@tcms/db';
 
 /**
@@ -72,9 +72,15 @@ export interface NachweisAblage {
   annehmen(eingang: NachweisEingang): Promise<NachweisVerweis>;
 }
 
+/**
+ * Kontext der Fachoperationen für Personen. Der Akteur ist immer eine Person
+ * (Kanzleiperson oder Mandantenkontakt): Ein Systemakteur erhält nie einen
+ * `DienstKontext` (`personAkteur`, `imDienst`), damit keine Fachoperation
+ * und keine Rechteprüfung für Personen ihn je sieht (ADR 0001 §3.2).
+ */
 export interface DienstKontext {
   tx: Tx;
-  akteur: Akteur;
+  akteur: PersonAkteur;
   uhr: Uhr;
   personen: PersonenVerzeichnis;
   ablage: NachweisAblage;
@@ -96,6 +102,8 @@ function uuid(wert: unknown): string {
  * Ungültige IDs: `NICHT_AUTHENTIFIZIERT` ohne Detail.
  */
 export function normalisiereAkteur(a: Akteur): Akteur {
+  // Unbekannte oder fehlende Art: nicht authentifiziert (fail closed).
+  if (!a || typeof a !== 'object') throw new DienstFehler('NICHT_AUTHENTIFIZIERT');
   const name = typeof a.name === 'string' ? a.name.trim() : '';
   if (!name || name.length > 200) throw new DienstFehler('NICHT_AUTHENTIFIZIERT');
   if (a.art === 'KANZLEI') {
@@ -124,7 +132,35 @@ export function normalisiereAkteur(a: Akteur): Akteur {
       mandantId: uuid(a.mandantId),
     });
   }
+  if (a.art === 'SYSTEM') {
+    // Nur die Felder des Systemakteurs: keine Rollen, kein Mandantenbezug.
+    return Object.freeze({
+      art: 'SYSTEM',
+      tenantId: pruefeTenantIdOderFehler(a.tenantId),
+      id: uuid(a.id),
+      name,
+    });
+  }
   throw new DienstFehler('NICHT_AUTHENTIFIZIERT');
+}
+
+/**
+ * Normalisierter Akteur einer Fachoperation für Personen. Ein Systemakteur
+ * erhält `NICHT_GEFUNDEN` wie ein unbekannter Pfad (kein Hinweis auf Inhalte,
+ * ADR 0001 §3.3): Er darf ausschließlich die Systemoperationen
+ * (`SystemKontext`), nie eine Operation für Personen.
+ */
+export function personAkteur(a: Akteur): PersonAkteur {
+  const n = normalisiereAkteur(a);
+  if (n.art !== 'KANZLEI' && n.art !== 'MANDANT') throw new DienstFehler('NICHT_GEFUNDEN');
+  return n;
+}
+
+/** Normalisierter Systemakteur; jede Person erhält `NICHT_GEFUNDEN` (ADR 0001 §3.3). */
+export function systemAkteur(a: Akteur): SystemAkteur {
+  const n = normalisiereAkteur(a);
+  if (n.art !== 'SYSTEM') throw new DienstFehler('NICHT_GEFUNDEN');
+  return n;
 }
 
 function pruefeTenantIdOderFehler(id: unknown): string {
@@ -145,6 +181,7 @@ export async function imDienst<T>(
   fn: (ctx: DienstKontext) => Promise<T>,
   opts?: TenantOptionen,
 ): Promise<T> {
-  const a = normalisiereAkteur(akteur);
+  // Vor der Transaktion: Ein Systemakteur öffnet für Personenoperationen keine.
+  const a = personAkteur(akteur);
   return mitTenant(a.tenantId, (tx) => fn({ tx, akteur: a, ...ports }), opts);
 }

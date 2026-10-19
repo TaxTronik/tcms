@@ -4,7 +4,7 @@ import {
   DF_MIN_BEGRUENDUNG,
   DienstFehler,
   gueltigerNachweisDateiname,
-  type Akteur,
+  type PersonAkteur,
 } from '@tcms/contract';
 import { leseDatei } from '@tcms/db/demo-ablage';
 import type { AnzeigeStatus, Klasse } from '@tcms/domain';
@@ -342,7 +342,7 @@ const DEMO_TX = { timeoutMs: 30_000, maxWaitMs: 10_000 };
 
 /** Führt `fn` im Dienstkontext des Demo-Akteurs aus (Ports der Demo oder abweichend). */
 export function imDemoDienst<T>(
-  akteur: Akteur,
+  akteur: PersonAkteur,
   fn: (ctx: DienstKontext) => Promise<T>,
   ports: DienstPorts = DEMO_PORTS,
 ): Promise<T> {
@@ -354,7 +354,7 @@ export function imDemoDienst<T>(
  * sichtbar (fremder Mandant, unbekannt, ungültig) → null (Seite: 404).
  */
 export async function ladeDurchfuehrungDetail(
-  akteur: Akteur,
+  akteur: PersonAkteur,
   mandantId: string,
   id: string,
   stand?: string,
@@ -373,7 +373,7 @@ export async function ladeDurchfuehrungDetail(
 
 /** Lädt eine Kontrollaufgabe im Portal (P2) für den Mandantenkontakt; nicht sichtbar → null. */
 export async function ladeAufgabeDetail(
-  akteur: Extract<Akteur, { art: 'MANDANT' }>,
+  akteur: Extract<PersonAkteur, { art: 'MANDANT' }>,
   id: string,
   stand?: string,
 ): Promise<DurchfuehrungDetail | null> {
@@ -524,7 +524,7 @@ const ZU_KURZ = `Bitte eine Begründung mit mindestens ${DF_MIN_BEGRUENDUNG} Zei
 
 /** Akteur und Mandant der Handlung: Kanzlei mit Bezug auf den Mandanten des Formulars, Portal mit eigenem Mandanten. */
 export interface Handlung {
-  akteur: Akteur;
+  akteur: PersonAkteur;
   mandantId: string;
   nichtGefunden: string;
 }
