@@ -47,7 +47,17 @@ function repo(dateien: Record<string, string>): string {
   }
   git(wurzel, 'init', '-q');
   git(wurzel, 'add', '-A');
-  git(wurzel, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', 'x');
+  git(
+    wurzel,
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.invalid',
+    'commit',
+    '-q',
+    '-m',
+    'x',
+  );
   return wurzel;
 }
 
@@ -58,11 +68,9 @@ function exportiere(wurzel: string): { code: number | null; stdout: string; stde
 
 /** SHA-256 des committeten Blobs einer verfolgten Datei (der wahre Stand des Commits). */
 function blobSha256(wurzel: string, pfad: string): string {
-  const roh = execFileSync(
-    'git',
-    ['-C', wurzel, 'cat-file', 'blob', `HEAD:${pfad}`],
-    { encoding: 'buffer' },
-  );
+  const roh = execFileSync('git', ['-C', wurzel, 'cat-file', 'blob', `HEAD:${pfad}`], {
+    encoding: 'buffer',
+  });
   return execFileSync('sha256sum', [], { input: roh, encoding: 'utf8' }).slice(0, 64);
 }
 

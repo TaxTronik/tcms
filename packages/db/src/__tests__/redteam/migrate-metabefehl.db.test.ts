@@ -121,7 +121,9 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate – mitzeilige psql-Metabefehle 
       await migriere(z);
     }
     for (const name of angelegt) {
-      await abfrage(SUPER!, `DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`).catch(() => undefined);
+      await abfrage(SUPER!, `DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`).catch(
+        () => undefined,
+      );
     }
     for (const marke of markierungen) rmSync(marke, { force: true });
     for (const k of kopien) rmSync(k, { recursive: true, force: true });

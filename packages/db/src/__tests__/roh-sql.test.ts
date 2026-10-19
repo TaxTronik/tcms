@@ -77,6 +77,12 @@ const AUSNAHMEN: Record<string, { regeln: Regel[]; begruendung: string }> = {
       'Test des Migrationsläufers (nur mit TCMS_MIGRATE_TESTS=1, Superuser einer Testinstanz): ' +
       'CREATE/DROP/ALTER DATABASE mit vom Test erzeugten Namen (Hex), keine Eingabewerte.',
   },
+  'packages/db/src/__tests__/redteam/migrate-metabefehl.db.test.ts': {
+    regeln: ['pg-text'],
+    begruendung:
+      'Beweistest RT2-T-01 (nur mit TCMS_MIGRATE_TESTS=1, Superuser einer Testinstanz): ' +
+      'CREATE/DROP DATABASE mit vom Test erzeugten Namen (Hex), keine Eingabewerte.',
+  },
   'packages/db/src/__tests__/roh-sql.test.ts': {
     regeln: ['tenant-guc'],
     begruendung: 'Dieser Test: Testfälle des Prüfers enthalten verbotene Muster als Text.',
