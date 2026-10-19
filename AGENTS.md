@@ -23,8 +23,12 @@ für KI-Werkzeuge.
   Kern aller Bereiche in `src/kern/` (Export über `bereiche/lesepfade.ts`):
   `ladeKontext(ctx, { mandantId, stand? })` lädt den Tax-CMS-Kontext eines
   Mandanten zu einem Stichtag (prüft `kannLesen`, maskiert vertrauliche
-  Feststellungen), Nummernkreise je Tenant, reine Stichtag-Helfer. Änderungen
-  hier brauchen Tests (`pnpm --filter @tcms/service test`).
+  Feststellungen), Nummernkreise je Tenant, reine Stichtag-Helfer, das Lesen
+  des Geschäftsprofils (`kern/profil.ts`, Profilregeln in `@tcms/domain`) und
+  die Kontrollvorlagen für neue Kontrollen aus dem Katalog
+  (`kern/kontroll-vorlage.ts`: Vorbelegung der Zuständigkeit, erster Stand,
+  geplante Durchführungen). Regeln, die mehrere Bereiche brauchen, gibt es nur
+  einmal. Änderungen hier brauchen Tests (`pnpm --filter @tcms/service test`).
   Bereiche unter `src/bereiche/<bereich>` (z. B. `risiken-kontrollen`: Risiken,
   Kontrollen, Geschäftsprofil). TS-05 dort: Zeile in der Transaktion sperren
   (Reihenfolge Programm → Risiko → Kontrolle → Durchführung, je nach ID),

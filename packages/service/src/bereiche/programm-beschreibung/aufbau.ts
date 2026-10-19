@@ -1,8 +1,10 @@
 // =============================================================================
 // Aufbau eines Tax-CMS-Programms aus Profil, Katalog und Entscheidungen (bisher
-// apps/web/src/server/programm-aufbau.ts). Wird vom Einrichtungsassistenten
-// (Version 1) und vom Profil-Tab („Risiko aufnehmen") genutzt. Vorlage für
-// Stände, Verknüpfungen und Durchführungen ist `baueProgramm` im Seed.
+// apps/web/src/server/programm-aufbau.ts) für den Einrichtungsassistenten
+// (Plan und Version 1). Vorbelegung, Kontrollstände und Durchführungen aus
+// `kern/kontroll-vorlage.ts` (gemeinsam mit der Risikoaufnahme im Bereich
+// risiken-kontrollen, die allein die Neuplanung trägt). Vorlage ist
+// `baueProgramm` im Seed.
 //
 // Personen sind IDs der kanzleikonsole. Zuständige Berufsträger:in und
 // Hauptbearbeitung kennt das Tax-CMS nicht (ADR 0001 §5): Sie kommen als
@@ -22,7 +24,6 @@ import {
   KATALOG_KONTROLLEN,
   KATALOG_RISIKEN,
   KLASSE_LABEL,
-  kontrollenFuerRisiko,
   leiteFrequenzAb,
   monatSchluessel,
   PAKET,
@@ -32,7 +33,6 @@ import {
   ueber,
   type BruttoErgebnis,
   type FrequenzAbleitung,
-  type GovernanceTyp,
   type KatalogKontrolle,
   type KatalogRisiko,
   type Klasse,
@@ -43,6 +43,14 @@ import {
 } from '@tcms/domain';
 import type { EntwurfKontrolle, SetupEntwurf } from '@tcms/contract';
 import type { Protokoll } from '../../audit';
+import {
+  geplanteDurchfuehrung,
+  kontrollStandDaten,
+  mandantSeiteVorbelegen,
+  standardKontrollZustaendigkeit,
+  type VorbelegteZustaendigkeit,
+  type VorbelegungsRollen,
+} from '../../kern/kontroll-vorlage';
 import { risikoEntscheidung } from './entwurf';
 import { legeNachrichtAn } from './nachrichten';
 
@@ -60,64 +68,23 @@ export interface AufbauUmfeld {
   heute: Date;
 }
 
-export interface AufbauRollen {
-  bt: string;
-  hb: string;
-  /** Dritte Kanzleiperson als Vertretung (nicht Berufsträger:in, nicht Hauptbearbeitung des Mandats). */
-  kanzleiVertretung: string | null;
-  tcb: string | null;
-  mandantVertretung: string | null;
-  gv: string | null;
-}
+/** Personen für die Vorbelegung (gemeinsamer Kern, `kern/kontroll-vorlage.ts`). */
+export type AufbauRollen = VorbelegungsRollen;
 
 export function aufbauRollen(u: AufbauUmfeld): AufbauRollen {
   const bt = u.mandant.berufstraegerId;
   const hb = u.mandant.bearbeitungId;
-  const mp = u.mandantPersonen;
-  const gv = mp.find((p) => p.mandantRolle === 'GESETZLICHER_VERTRETER')?.id ?? null;
-  const tcb =
-    mp.find((p) => p.mandantRolle === 'TAX_COMPLIANCE_BEAUFTRAGTER')?.id ??
-    mp.find((p) => p.mandantRolle === 'MITARBEITER')?.id ??
-    gv;
-  const mandantVertretung =
-    mp.find((p) => p.id !== tcb && p.mandantRolle === 'MITARBEITER')?.id ??
-    mp.find((p) => p.id !== tcb && p.mandantRolle === 'GESETZLICHER_VERTRETER')?.id ??
-    null;
   const kanzleiVertretung = u.kanzlei.find((p) => p.id !== bt && p.id !== hb)?.id ?? null;
-  return { bt, hb, kanzleiVertretung, tcb, mandantVertretung, gv };
-}
-
-export interface AufbauZustaendigkeit {
-  partei: 'KANZLEI' | 'MANDANT';
-  durchfuehrendId: string | null;
-  vertretungId: string | null;
-  gegenzeichnerId: string | null;
-  gegenzeichnungMandant: boolean;
-}
-
-/** Startbelegung wie im Seed: Kanzleikontrollen Hauptbearbeitung, Mandantenkontrollen TCB, Gegenzeichnung Berufsträger:in. */
-export function standardKontrollZustaendigkeit(
-  kat: KatalogKontrolle,
-  r: AufbauRollen,
-): AufbauZustaendigkeit {
-  const mandantSeite = kat.partei === 'MANDANT';
-  const durchfuehrend =
-    kat.code === 'K-EC-20' || kat.code === 'K-EC-24' ? r.bt : mandantSeite ? r.tcb : r.hb;
-  const vertretung = mandantSeite ? r.mandantVertretung : r.kanzleiVertretung;
-  const gegenzeichnungMandant = kat.code === 'K-EC-23' && r.mandantVertretung != null;
-  const gegenzeichner = gegenzeichnungMandant
-    ? r.mandantVertretung
-    : durchfuehrend === r.bt
-      ? r.kanzleiVertretung
-      : r.bt;
   return {
-    partei: kat.partei,
-    durchfuehrendId: durchfuehrend,
-    vertretungId: vertretung,
-    gegenzeichnerId: gegenzeichner,
-    gegenzeichnungMandant,
+    bt,
+    hb,
+    kanzleiVertretung,
+    ...mandantSeiteVorbelegen(u.mandantPersonen.map((p) => ({ id: p.id, rolle: p.mandantRolle }))),
   };
 }
+
+export type AufbauZustaendigkeit = VorbelegteZustaendigkeit;
+export { standardKontrollZustaendigkeit };
 
 function zustaendigkeitAus(
   kat: KatalogKontrolle,
@@ -456,7 +423,9 @@ export async function schreibeVersion1(
       include: { staende: { select: { id: true } } },
     });
     for (const p of pk.perioden)
-      durchf.push(durchfuehrungDaten(k.id, k.staende[0]!.id, kat, p, zeitpunkt));
+      durchf.push(
+        geplanteDurchfuehrung(k.id, k.staende[0]!.id, kat.faelligNachTagen, p, zeitpunkt),
+      );
   }
   if (durchf.length) await tx.durchfuehrung.createMany({ data: durchf });
 
@@ -530,413 +499,4 @@ export async function schreibeVersion1(
     ziele: ziele.length,
     freigabeId,
   };
-}
-
-function kontrollStandDaten(
-  kat: KatalogKontrolle,
-  z: AufbauZustaendigkeit,
-  von: string,
-  zeitpunkt: Date,
-) {
-  return {
-    version: 1,
-    titel: kat.titel,
-    ziel: kat.ziel,
-    art: kat.art,
-    ausfuehrung: kat.ausfuehrung,
-    vorlageTurnus: kat.frequenz.turnus,
-    vorlageAnlass: kat.frequenz.anlass,
-    partei: z.partei,
-    schluessel: kat.schluessel,
-    durchfuehrendId: z.durchfuehrendId,
-    vertretungId: z.vertretungId,
-    gegenzeichnerId: z.gegenzeichnerId,
-    gegenzeichnungMandant: z.gegenzeichnungMandant,
-    nachweis: kat.nachweis,
-    mindestNachweise: kat.mindestNachweise,
-    schritte: kat.schritte as unknown as Prisma.InputJsonValue,
-    kennzahlen: kat.kennzahlen as unknown as Prisma.InputJsonValue,
-    toleranzEur: kat.toleranzEur,
-    faelligNachTagen: kat.faelligNachTagen,
-    design: 'NICHT_BEURTEILT' as const,
-    gueltigAb: zeitpunkt,
-    erstelltVon: von,
-    createdAt: zeitpunkt,
-  };
-}
-
-function durchfuehrungDaten(
-  kontrolleId: string,
-  standId: string,
-  kat: KatalogKontrolle,
-  p: Periode,
-  zeitpunkt: Date,
-): Prisma.DurchfuehrungCreateManyInput {
-  return {
-    kontrolleId,
-    kontrolleStandId: standId,
-    periodeLabel: p.label,
-    periodeVon: p.von,
-    periodeBis: p.bis,
-    faelligAm: addTage(p.bis, kat.faelligNachTagen),
-    status: 'GEPLANT',
-    createdAt: zeitpunkt,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Schreiben: einzelnes Risiko aus dem Profilvorschlag aufnehmen (Profil-Tab)
-// ---------------------------------------------------------------------------
-
-/** Fachlicher Abbruch beim Aufbau (Meldung für Nutzer, ohne interne Details). */
-export class AufbauFehler extends Error {}
-
-export interface AufbauAufnahmeErgebnis {
-  risikoId: string;
-  neueKontrollen: string[];
-  verknuepft: string[];
-  neuGeplant: {
-    code: string;
-    vorher: string;
-    nachher: string;
-    entfernt: number;
-    angelegt: number;
-  }[];
-  durchfuehrungen: number;
-  protokolle: Protokoll[];
-}
-
-function gueltigerStand<T extends { gueltigAb: Date; gueltigBis: Date | null }>(
-  liste: T[],
-  zeitpunkt: Date,
-): T | undefined {
-  return liste
-    .filter(
-      (s) =>
-        s.gueltigAb.getTime() <= zeitpunkt.getTime() &&
-        (s.gueltigBis == null || s.gueltigBis.getTime() > zeitpunkt.getTime()),
-    )
-    .sort((a, b) => b.gueltigAb.getTime() - a.gueltigAb.getTime())[0];
-}
-
-export async function nimmRisikoAuf(
-  tx: Tx,
-  a: {
-    programmId: string;
-    code: string;
-    grund: string;
-    u: AufbauUmfeld;
-    nutzer: Nutzer;
-    zeitpunkt: Date;
-  },
-): Promise<AufbauAufnahmeErgebnis> {
-  const { programmId, code, grund, u, nutzer, zeitpunkt } = a;
-  const kat = katalogRisiko(code);
-  if (!kat) throw new AufbauFehler('Unbekanntes Katalogrisiko.');
-  const r = aufbauRollen(u);
-  const programm = await tx.tcmsProgramm.findUniqueOrThrow({
-    where: { id: programmId },
-    include: {
-      risiken: { include: { staende: true } },
-      kontrollen: {
-        include: {
-          staende: true,
-          risiken: true,
-          durchfuehrungen: {
-            include: {
-              _count: {
-                select: { nachweise: true, feststellungen: true, nachkontrolleFuer: true },
-              },
-            },
-          },
-        },
-      },
-    },
-  });
-  const protokolle: Protokoll[] = [];
-
-  // --- Risiko anlegen oder Ablehnung aufheben ---
-  const vorhanden = programm.risiken.find((x) => x.code === code);
-  if (vorhanden && vorhanden.entscheidung === 'UEBERNOMMEN') {
-    throw new AufbauFehler(
-      vorhanden.inaktivAb
-        ? `${code} ist deaktiviert; eine Reaktivierung erfolgt im Risikoinventar.`
-        : `${code} ist bereits im Risikoinventar.`,
-    );
-  }
-  const standDaten = {
-    titel: kat.titel,
-    fehlerquelle: kat.fehlerquelle,
-    folge: kat.folge,
-    normanker: kat.normanker as unknown as Prisma.InputJsonValue,
-    s: kat.s,
-    w: kat.w,
-    r: kat.r,
-    gt: kat.gt,
-    modell: BEWERTUNGSMODELL_VERSION,
-    gueltigAb: zeitpunkt,
-    erstelltVon: nutzer.id,
-    createdAt: zeitpunkt,
-  };
-  let risikoId: string;
-  if (vorhanden) {
-    await tx.risiko.update({
-      where: { id: vorhanden.id },
-      data: {
-        entscheidung: 'UEBERNOMMEN',
-        vorschlagsgrund: grund,
-        freigabe: 'BEWERTET',
-        ownerId: vorhanden.ownerId ?? r.tcb,
-        aktivAb: zeitpunkt,
-      },
-    });
-    if (!gueltigerStand(vorhanden.staende, zeitpunkt)) {
-      const version = Math.max(0, ...vorhanden.staende.map((x) => x.version)) + 1;
-      await tx.risikoStand.create({ data: { risikoId: vorhanden.id, version, ...standDaten } });
-    }
-    risikoId = vorhanden.id;
-  } else {
-    const neu = await tx.risiko.create({
-      data: {
-        programmId,
-        code,
-        kern: kat.kern,
-        entscheidung: 'UEBERNOMMEN',
-        vorschlagsgrund: grund,
-        freigabe: 'BEWERTET',
-        ownerId: r.tcb,
-        aktivAb: zeitpunkt,
-        createdAt: zeitpunkt,
-        staende: { create: { version: 1, ...standDaten } },
-      },
-    });
-    risikoId = neu.id;
-  }
-  protokolle.push({
-    aktion: 'tcms.risiko.aufgenommen',
-    objektTyp: 'Risiko',
-    objektId: risikoId,
-    programmId,
-    detail: {
-      code,
-      vorschlagsgrund: grund,
-      vorher: vorhanden ? vorhanden.entscheidung : null,
-      quelle: 'Profilvorschlag',
-    },
-  });
-
-  // --- Bruttoklassen der aktiven Risiken (mit dem neuen) ---
-  const bruttoJe = new Map<string, RisikoFuerFrequenz>();
-  const risikoIdJe = new Map<string, string>([[code, risikoId]]);
-  for (const x of programm.risiken) {
-    if (
-      x.entscheidung !== 'UEBERNOMMEN' ||
-      (x.inaktivAb && x.inaktivAb.getTime() <= zeitpunkt.getTime())
-    )
-      continue;
-    const s = gueltigerStand(x.staende, zeitpunkt);
-    if (!s) continue;
-    bruttoJe.set(x.code, {
-      code: x.code,
-      gt: s.gt as GovernanceTyp,
-      brutto: berechneBrutto(s.s, s.w, s.r as 1 | 2 | 3).klasse,
-    });
-    risikoIdJe.set(x.code, x.id);
-  }
-  const ohneNeues = new Map(bruttoJe);
-  bruttoJe.set(code, { code, gt: kat.gt, brutto: berechneBrutto(kat.s, kat.w, kat.r).klasse });
-
-  // --- Planungshorizont für Durchführungen ---
-  const heute = u.heute;
-  const start =
-    programm.wirksamAb && addTage(programm.wirksamAb, -1).getTime() > heute.getTime()
-      ? addTage(programm.wirksamAb, -1)
-      : heute;
-  let ende: Date | null = programm.wirksamBis;
-  for (const k of programm.kontrollen) {
-    for (const d of k.durchfuehrungen) {
-      if (!d.ausserplanmaessig && (!ende || d.periodeBis.getTime() > ende.getTime()))
-        ende = d.periodeBis;
-    }
-  }
-  const turnus = programm.erklaerungsTurnus as Turnus;
-
-  const neueKontrollen: string[] = [];
-  const verknuepft: string[] = [];
-  const neuGeplant: AufbauAufnahmeErgebnis['neuGeplant'] = [];
-  let anzahlDurchf = 0;
-
-  for (const kk of kontrollenFuerRisiko(code)) {
-    const bestehend = programm.kontrollen.find(
-      (k) =>
-        k.code === kk.code && !(k.entfallenAb && k.entfallenAb.getTime() <= zeitpunkt.getTime()),
-    );
-    if (bestehend) {
-      if (!bestehend.risiken.some((x) => x.risikoId === risikoId)) {
-        await tx.risikoKontrolle.create({ data: { risikoId, kontrolleId: bestehend.id } });
-        verknuepft.push(kk.code);
-      }
-      const stand = gueltigerStand(bestehend.staende, zeitpunkt);
-      if (!stand) continue;
-      const vorlage = { turnus: stand.vorlageTurnus as Turnus, anlass: stand.vorlageAnlass };
-      const idZuCode = new Map([...risikoIdJe.entries()].map(([c, id]) => [id, c]));
-      const verkn = (m: Map<string, RisikoFuerFrequenz>) =>
-        [...new Set([...bestehend.risiken.map((x) => idZuCode.get(x.risikoId)), code])]
-          .filter((c): c is string => !!c && m.has(c))
-          .map((c) => m.get(c)!);
-      const vorher = leiteFrequenzAb(vorlage, verkn(ohneNeues), turnus).effektiv;
-      const nachher = leiteFrequenzAb(vorlage, verkn(bruttoJe), turnus).effektiv;
-      if (stand.abweichungTurnus == null && vorher.turnus !== nachher.turnus && ende) {
-        const ergebnis = await planeKuenftigNeu(tx, {
-          kontrolle: bestehend,
-          standId: stand.id,
-          faelligNachTagen: stand.faelligNachTagen,
-          turnus: nachher.turnus,
-          start,
-          ende,
-          heute,
-          zeitpunkt,
-        });
-        neuGeplant.push({
-          code: kk.code,
-          vorher: vorher.turnus,
-          nachher: nachher.turnus,
-          ...ergebnis,
-        });
-        anzahlDurchf += ergebnis.angelegt;
-      }
-      continue;
-    }
-    // Neue Kontrolle aus dem Katalog, verknüpft mit allen aktiven Risiken, die sie abdeckt.
-    const codes = kk.risiken.filter((c) => bruttoJe.has(c));
-    const z = standardKontrollZustaendigkeit(kk, r);
-    const k = await tx.kontrolle.create({
-      data: {
-        programmId,
-        code: kk.code,
-        aktivAb: zeitpunkt,
-        createdAt: zeitpunkt,
-        staende: { create: kontrollStandDaten(kk, z, nutzer.id, zeitpunkt) },
-        risiken: { create: codes.map((c) => ({ risikoId: risikoIdJe.get(c)! })) },
-      },
-      include: { staende: { select: { id: true } } },
-    });
-    neueKontrollen.push(kk.code);
-    const ableitung = leiteFrequenzAb(
-      kk.frequenz,
-      codes.map((c) => bruttoJe.get(c)!),
-      turnus,
-    );
-    if (ende && ende.getTime() >= start.getTime()) {
-      const daten = perioden(ableitung.effektiv.turnus, start, ende).map((p) =>
-        durchfuehrungDaten(k.id, k.staende[0]!.id, kk, p, zeitpunkt),
-      );
-      if (daten.length) await tx.durchfuehrung.createMany({ data: daten });
-      anzahlDurchf += daten.length;
-    }
-    protokolle.push({
-      aktion: 'tcms.kontrolle.angelegt',
-      objektTyp: 'Kontrolle',
-      objektId: k.id,
-      programmId,
-      detail: {
-        code: kk.code,
-        risiken: codes,
-        frequenz: ableitung.effektiv,
-        anlass: `Risiko ${code} aufgenommen`,
-      },
-    });
-  }
-  if (neuGeplant.length) {
-    protokolle.push({
-      aktion: 'tcms.durchfuehrungen.neu_geplant',
-      objektTyp: 'TcmsProgramm',
-      objektId: programmId,
-      programmId,
-      detail: { anlass: `Risiko ${code} aufgenommen`, kontrollen: neuGeplant },
-    });
-  }
-  return {
-    risikoId,
-    neueKontrollen,
-    verknuepft,
-    neuGeplant,
-    durchfuehrungen: anzahlDurchf,
-    protokolle,
-  };
-}
-
-/**
- * Plant künftige Durchführungen einer Kontrolle nach einem neuen Turnus.
- * Entfernt werden nur geplante, noch nicht begonnene Perioden ohne Nachweise
- * und ohne Bezug zu Feststellungen; laufende und abgeschlossene bleiben.
- */
-async function planeKuenftigNeu(
-  tx: Tx,
-  a: {
-    kontrolle: {
-      id: string;
-      durchfuehrungen: {
-        id: string;
-        status: string;
-        ausserplanmaessig: boolean;
-        periodeVon: Date;
-        periodeBis: Date;
-        begonnenAm: Date | null;
-        _count: { nachweise: number; feststellungen: number; nachkontrolleFuer: number };
-      }[];
-    };
-    standId: string;
-    faelligNachTagen: number;
-    turnus: Turnus;
-    start: Date;
-    ende: Date;
-    heute: Date;
-    zeitpunkt: Date;
-  },
-): Promise<{ entfernt: number; angelegt: number }> {
-  const entfernbar = a.kontrolle.durchfuehrungen.filter(
-    (d) =>
-      d.status === 'GEPLANT' &&
-      !d.ausserplanmaessig &&
-      d.begonnenAm == null &&
-      d.periodeVon.getTime() > a.heute.getTime() &&
-      d._count.nachweise === 0 &&
-      d._count.feststellungen === 0 &&
-      d._count.nachkontrolleFuer === 0,
-  );
-  if (entfernbar.length)
-    await tx.durchfuehrung.deleteMany({ where: { id: { in: entfernbar.map((d) => d.id) } } });
-  const ids = new Set(entfernbar.map((d) => d.id));
-  const bleibend = a.kontrolle.durchfuehrungen.filter(
-    (d) => !ids.has(d.id) && !d.ausserplanmaessig,
-  );
-  const letztesEnde = bleibend.reduce<Date | null>(
-    (m, d) => (!m || d.periodeBis.getTime() > m.getTime() ? d.periodeBis : m),
-    null,
-  );
-  const ab =
-    letztesEnde && addTage(letztesEnde, 1).getTime() > a.start.getTime()
-      ? addTage(letztesEnde, 1)
-      : a.start;
-  const neu = perioden(a.turnus, ab, a.ende).filter(
-    (p) =>
-      p.von.getTime() >= ab.getTime() ||
-      (letztesEnde == null && p.bis.getTime() >= a.start.getTime()),
-  );
-  if (neu.length) {
-    await tx.durchfuehrung.createMany({
-      data: neu.map((p) => ({
-        kontrolleId: a.kontrolle.id,
-        kontrolleStandId: a.standId,
-        periodeLabel: p.label,
-        periodeVon: p.von,
-        periodeBis: p.bis,
-        faelligAm: addTage(p.bis, a.faelligNachTagen),
-        status: 'GEPLANT' as const,
-        createdAt: a.zeitpunkt,
-      })),
-    });
-  }
-  return { entfernt: entfernbar.length, angelegt: neu.length };
 }

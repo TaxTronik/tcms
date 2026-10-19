@@ -43,13 +43,10 @@ export {
 } from './programm-beschreibung/code';
 export {
   appetitAusZielen,
-  AufbauFehler,
   aufbauRollen,
   berechnePlan,
-  nimmRisikoAuf,
   pruefeKontrollZustaendigkeiten,
   standardKontrollZustaendigkeit,
-  type AufbauAufnahmeErgebnis,
   type AufbauPerson,
   type AufbauPlan,
   type AufbauPlanKontrolle,
@@ -59,11 +56,9 @@ export {
   type AufbauZustaendigkeit,
 } from './programm-beschreibung/aufbau';
 export {
-  leseEinrichtungsProfil,
   leseEntwurf,
   mindestEnde,
   neuerEntwurf,
-  pruefeEinrichtungsProfil,
   pruefeSchritt1,
   pruefeSchritt2,
   pruefeSchritt3,

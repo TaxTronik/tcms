@@ -9,6 +9,7 @@ import {
   isoDatum,
   katalogRisiko,
   KLASSE_LABEL,
+  profilDiff,
   schlageRisikenVor,
   type RisikoVorschlag,
 } from '@tcms/domain';
@@ -19,7 +20,6 @@ import { TcmsKopf } from '@/components/tcms/kopf';
 import { ProfilAenderung, RisikoAufnehmen } from '@/components/profil/profil-aktionen';
 import { ProfilAnzeige, ProfilDiffListe } from '@/components/profil/profil-anzeige';
 import type { PersonInfo } from '@/components/profil/profil-formular';
-import { profilDiff } from '@/components/profil/profil-logik';
 import { leseEntwurf } from '@/components/setup/entwurf';
 import { aendereProfil, nimmVorgeschlagenesRisikoAuf } from '@/server/actions/profil';
 import { KEIN_RECHT } from '@/server/aktion';

@@ -35,7 +35,7 @@ import {
   type SetupEntwurf,
 } from '@tcms/contract';
 import { Prisma, type Tx } from '@tcms/db';
-import { isoDatum, katalogRisiko, KATALOG_KONTROLLEN, PAKET } from '@tcms/domain';
+import { inhaltGleich, isoDatum, katalogRisiko, KATALOG_KONTROLLEN, PAKET } from '@tcms/domain';
 import { mitAudit, type Protokoll } from '../../audit';
 import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
@@ -49,9 +49,8 @@ import {
   type AufbauPlan,
   type AufbauUmfeld,
 } from './aufbau';
+import { leseProfil } from '../../kern/profil';
 import {
-  inhaltGleich,
-  leseEinrichtungsProfil,
   leseEntwurf,
   pruefeSchritt1,
   pruefeSchritt2,
@@ -310,7 +309,7 @@ export async function speichereEinrichtungsschritt(
         !inhaltGleich(alt.zeitraum, neu.zeitraum);
       break;
     case 2: {
-      const { profil, fehler } = leseEinrichtungsProfil(e.daten.profil);
+      const { profil, fehler } = leseProfil(e.daten.profil);
       if (!profil) fachlichUngueltig('Das Geschäftsprofil ist unvollständig.', 'schritt2', fehler);
       neu.profil = profil;
       geaendert = !inhaltGleich(alt.profil, neu.profil);

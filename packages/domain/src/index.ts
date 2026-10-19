@@ -13,6 +13,7 @@ export * from './katalog/kontrollen';
 export * from './katalog/ereignisse';
 export * from './katalog/profil';
 export * from './katalog/ziele';
+export * from './profil-regeln';
 
 export const PAKET = { id: 'ecommerce', name: 'E-Commerce', version: '1.0' } as const;
 

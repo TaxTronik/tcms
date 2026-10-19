@@ -10,13 +10,10 @@ import type { PersonKurz } from './kontext';
 
 export {
   appetitAusZielen as appetitAus,
-  AufbauFehler,
   aufbauRollen as rollen,
   berechnePlan,
-  nimmRisikoAuf,
   pruefeKontrollZustaendigkeiten as pruefeKontrollen,
   standardKontrollZustaendigkeit as standardZustaendigkeit,
-  type AufbauAufnahmeErgebnis as AufnahmeErgebnis,
   type AufbauPlan as Plan,
   type AufbauPlanKontrolle as PlanKontrolle,
   type AufbauPlanRisiko as PlanRisiko,

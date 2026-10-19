@@ -2,11 +2,12 @@ import type { ReactNode } from 'react';
 import {
   fmtEurGanz,
   fmtMonatJahr,
+  LAGER_ART_LABEL,
   LAND_NAME,
   PROFIL_FRAGEN,
+  type FrageDiff,
   type Geschaeftsprofil,
 } from '@tcms/domain';
-import { LAGER_ART_LABEL, type FrageDiff } from './profil-logik';
 
 // =============================================================================
 // Lesbare Darstellung eines Profilstands (P1–P12) und Diff zum Vorgänger.

@@ -1,46 +1,53 @@
 // =============================================================================
 // Geschäftsprofil P1–P12: Bereinigung, Pflichtangaben, lesbare Zeilen, Diff
 // zwischen zwei Ständen und die daraus folgenden Trigger (Fachkonzept §4, §7).
-// Reine Funktionen ohne I/O. Inhaltlich gleich mit
-// apps/web/src/components/profil/profil-logik.ts (dort für Client-Komponenten,
-// die den Dienst nicht importieren dürfen); Zielbild: beide aus
-// `@tcms/domain` (Vorschlag im Bericht).
+// Reine Funktionen ohne I/O und ohne zod: Der Service (Strukturprüfung mit dem
+// Vertragsschema `ProfilAntwortenSchema`) und die Client-Komponenten der Demo
+// nutzen dieselbe Quelle.
 // =============================================================================
 
-import { ProfilAntwortenSchema, type ProfilAntworten } from '@tcms/contract';
+import { bewerteSchwelle } from './schwelle';
+import { fmtEurGanz, fmtMonatJahr } from './format';
+import { ereignistyp } from './katalog/ereignisse';
 import {
-  bewerteSchwelle,
-  ereignistyp,
-  fmtEurGanz,
-  fmtMonatJahr,
   PROFIL_FRAGEN,
   schlageRisikenVor,
   type Geschaeftsprofil,
-} from '@tcms/domain';
+  type LagerArt,
+} from './katalog/profil';
 
 type FrageKey = keyof Geschaeftsprofil;
 
-// Typcheck: Das Contract-Schema beschreibt genau das Domain-Profil.
-type Gleich<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
-const _vertragPasst: Gleich<ProfilAntworten, Geschaeftsprofil> = true;
-void _vertragPasst;
+export const LAGER_ART_LABEL: Record<LagerArt, string> = {
+  EIGEN: 'eigenes Lager',
+  FBA: 'Amazon FBA',
+  'PAN-EU': 'Amazon PAN-EU',
+  CEE: 'Amazon CEE',
+  '3PL': '3PL-Dienstleister',
+};
 
 function frageNr(key: string): string {
   return PROFIL_FRAGEN.find((f) => f.key === key)?.nr ?? key.toUpperCase();
 }
 
-/** Strukturprüfung; liefert das bereinigte Profil oder lesbare Fehler je Profilfrage. */
-export function leseProfil(roh: unknown): { profil: Geschaeftsprofil | null; fehler: string[] } {
-  const p = ProfilAntwortenSchema.safeParse(roh);
-  if (!p.success) {
-    const fragen = [...new Set(p.error.issues.map((i) => frageNr(String(i.path[0] ?? ''))))];
-    return {
-      profil: null,
-      fehler: fragen.map((f) => `${f}: Angaben unvollständig oder im falschen Format.`),
-    };
-  }
-  const profil: Geschaeftsprofil = structuredClone(p.data);
-  // Leere Zeilen aus dem Formular entfernen, Listen eindeutig machen.
+/**
+ * Lesbare Strukturfehler je Profilfrage aus den Pfaden einer Schemaprüfung
+ * (ohne Eingabewerte, damit keine Inhalte in Fehlermeldungen gelangen).
+ */
+export function profilStrukturFehler(
+  issues: readonly { path: readonly PropertyKey[] }[],
+): string[] {
+  const fragen = [...new Set(issues.map((i) => frageNr(String(i.path[0] ?? ''))))];
+  return fragen.map((f) => `${f}: Angaben unvollständig oder im falschen Format.`);
+}
+
+/**
+ * Bereinigt ein strukturell geprüftes Profil: leere Zeilen aus dem Formular
+ * entfernen, Listen eindeutig machen. Arbeitet auf einer Kopie; die Eingabe
+ * bleibt unverändert.
+ */
+export function bereinigeProfil(geprueft: Geschaeftsprofil): Geschaeftsprofil {
+  const profil: Geschaeftsprofil = structuredClone(geprueft);
   profil.p1.marktplaetze = [...new Set(profil.p1.marktplaetze.filter(Boolean))];
   profil.p3.laender = [...new Set(profil.p3.laender)];
   profil.p4.warengruppen = profil.p4.warengruppen.filter((w) => w.name.length > 0);
@@ -50,7 +57,7 @@ export function leseProfil(roh: unknown): { profil: Geschaeftsprofil | null; feh
   profil.p9.lokaleUstNr = [...new Set(profil.p9.lokaleUstNr)];
   profil.p11.anbieter = profil.p11.vorhanden ? profil.p11.anbieter.filter((a) => a.length > 0) : [];
   if (!profil.p1.eigenerShop) profil.p1.shopSystem = '';
-  return { profil, fehler: [] };
+  return profil;
 }
 
 /** Fachliche Pflichtangaben (Einrichtung und Profiländerung). */
@@ -76,7 +83,7 @@ export function pruefeProfil(p: Geschaeftsprofil): string[] {
 const jn = (b: boolean) => (b ? 'ja' : 'nein');
 const liste = (xs: readonly string[], leer = '—') => (xs.length ? xs.join(', ') : leer);
 
-/** Lesbare Zeilen je Profilfrage (Diff, Ereignistexte). */
+/** Lesbare Zeilen je Profilfrage (Anzeige, Diff, Ereignistexte). */
 export function profilZeilen(p: Geschaeftsprofil): Record<FrageKey, string[]> {
   return {
     p1: [
@@ -176,7 +183,10 @@ function stabil(wert: unknown): string {
   return `{${e.map(([k, v]) => `${JSON.stringify(k)}:${stabil(v)}`).join(',')}}`;
 }
 
-const gleich = (x: unknown, y: unknown) => stabil(x) === stabil(y);
+/** Inhaltsgleichheit unabhängig von der Schlüsselreihenfolge (JSONB-Werte, Entwürfe). */
+export function inhaltGleich(x: unknown, y: unknown): boolean {
+  return stabil(x) === stabil(y);
+}
 
 /** Ereignistypen, die eine Profiländerung auslöst (dedupliziert, Reihenfolge P1 → P12). */
 export function ereignisseFuerAenderung(
@@ -187,6 +197,7 @@ export function ereignisseFuerAenderung(
   const add = (typ: string, frage: FrageKey, stichwort?: string) => {
     if (!out.some((o) => o.typ === typ)) out.push({ typ, frage, stichwort });
   };
+  const gleich = inhaltGleich;
   if (!gleich(alt.p1, neu.p1)) add('T-01', 'p1');
   if (!gleich(alt.p2, neu.p2)) add('T-02', 'p2');
   if (!gleich(alt.p3.laender, neu.p3.laender)) add('T-03', 'p3', 'Zielländer');

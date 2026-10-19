@@ -1,7 +1,9 @@
 // =============================================================================
 // Geschäftsprofil (Profil-Tab), bisher apps/web/src/server/actions/profil.ts
 // und programm-aufbau.ts (`nimmRisikoAuf`): Profiländerung als neuer Stand mit
-// Triggern (Fachkonzept §4, §7) und Aufnahme vorgeschlagener Risiken.
+// Triggern (Fachkonzept §4, §7) und Aufnahme vorgeschlagener Risiken – die
+// einzige Risikoaufnahme mit Neuplanung im Service. Profilregeln aus
+// `@tcms/domain`, Kontrollvorlagen aus `kern/kontroll-vorlage.ts`.
 //
 // TS-05: Beide Operationen sperren zuerst das Programm des Mandanten
 // (SELECT … FOR UPDATE), dann betroffene Risiken und Kontrollen (Reihenfolge
@@ -24,21 +26,34 @@ import {
   addTage,
   BEWERTUNGSMODELL_VERSION,
   brutto as berechneBrutto,
+  ereignisseFuerAenderung,
   ereignistyp,
   fmtDatum,
+  gleichesProfil,
   katalogRisiko,
   kontrollenFuerRisiko,
   leiteFrequenzAb,
+  neuZuBewerten,
   perioden,
+  profilDiff,
   PROFIL_FRAGEN,
+  pruefeProfil,
   schlageRisikenVor,
+  type FrageDiff,
   type Geschaeftsprofil,
-  type KatalogKontrolle,
-  type Periode,
   type RisikoFuerFrequenz,
   type Turnus,
 } from '@tcms/domain';
 import { mitAudit, type Protokoll } from '../../audit';
+import {
+  geplanteDurchfuehrung,
+  gueltigerStand,
+  kontrollStandDaten,
+  mandantSeiteVorbelegen,
+  standardKontrollZustaendigkeit,
+  type VorbelegungsRollen,
+} from '../../kern/kontroll-vorlage';
+import { leseProfil } from '../../kern/profil';
 import { naechsteEreignisnummern } from '../../kern/nummern';
 import { heuteDatum, tagAlsDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
@@ -55,15 +70,6 @@ import {
 } from './gemeinsam';
 import { pruefeKanzleiPersonen } from './kontrollen';
 import { loescheUnberuehrte } from './planung';
-import {
-  ereignisseFuerAenderung,
-  gleichesProfil,
-  leseProfil,
-  neuZuBewerten,
-  profilDiff,
-  pruefeProfil,
-  type FrageDiff,
-} from './profil-regeln';
 
 const TAG_MS = 86_400_000;
 
@@ -323,16 +329,6 @@ export async function profilAendern(
 // Vorgeschlagenes Risiko aufnehmen
 // -----------------------------------------------------------------------------
 
-interface Rollen {
-  bt: string;
-  hb: string;
-  /** Vertretung der Kanzleiseite (nicht Berufsträger:in, nicht Hauptbearbeitung). */
-  kanzleiVertretung: string | null;
-  tcb: string | null;
-  mandantVertretung: string | null;
-  gv: string | null;
-}
-
 /**
  * Rollen für die Vorbelegung: Kanzleiseite aus der ausdrücklichen Eingabe der
  * kanzleikonsole (nie für Rechte), Mandantenseite aus MandantKontaktRolle
@@ -342,120 +338,18 @@ async function rollenFuer(
   tx: Tx,
   mandantId: string,
   v: RisikoAufnehmen['verantwortliche'],
-): Promise<Rollen> {
+): Promise<VorbelegungsRollen> {
   const kontakte = await tx.mandantKontaktRolle.findMany({
     where: { mandantId, aktiv: true },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     select: { kontaktId: true, rolle: true },
   });
-  const erste = (rolle: string, ohne?: string | null) =>
-    kontakte.find((k) => k.rolle === rolle && k.kontaktId !== ohne)?.kontaktId ?? null;
-  const gv = erste('GESETZLICHER_VERTRETER');
-  const tcb = erste('TAX_COMPLIANCE_BEAUFTRAGTER') ?? erste('MITARBEITER') ?? gv;
-  const mandantVertretung =
-    erste('MITARBEITER', tcb) ?? erste('GESETZLICHER_VERTRETER', tcb) ?? null;
   return {
     bt: kanonisch(v.berufstraeger.id),
     hb: kanonisch(v.hauptbearbeitung.id),
     kanzleiVertretung: v.vertretung ? kanonisch(v.vertretung.id) : null,
-    tcb,
-    mandantVertretung,
-    gv,
+    ...mandantSeiteVorbelegen(kontakte.map((k) => ({ id: k.kontaktId, rolle: k.rolle }))),
   };
-}
-
-interface Zustaendigkeit {
-  partei: 'KANZLEI' | 'MANDANT';
-  durchfuehrendId: string | null;
-  vertretungId: string | null;
-  gegenzeichnerId: string | null;
-  gegenzeichnungMandant: boolean;
-}
-
-/** Startbelegung wie im Seed: Kanzleikontrollen Hauptbearbeitung, Mandantenkontrollen TCB, Gegenzeichnung Berufsträger:in. */
-function standardZustaendigkeit(kat: KatalogKontrolle, r: Rollen): Zustaendigkeit {
-  const mandantSeite = kat.partei === 'MANDANT';
-  const durchfuehrend =
-    kat.code === 'K-EC-20' || kat.code === 'K-EC-24' ? r.bt : mandantSeite ? r.tcb : r.hb;
-  const vertretung = mandantSeite ? r.mandantVertretung : r.kanzleiVertretung;
-  const gegenzeichnungMandant = kat.code === 'K-EC-23' && r.mandantVertretung != null;
-  const gegenzeichner = gegenzeichnungMandant
-    ? r.mandantVertretung
-    : durchfuehrend === r.bt
-      ? r.kanzleiVertretung
-      : r.bt;
-  return {
-    partei: kat.partei,
-    durchfuehrendId: durchfuehrend,
-    vertretungId: vertretung,
-    gegenzeichnerId: gegenzeichner,
-    gegenzeichnungMandant,
-  };
-}
-
-function kontrollStandDaten(
-  kat: KatalogKontrolle,
-  z: Zustaendigkeit,
-  von: string,
-  zeitpunkt: Date,
-) {
-  return {
-    version: 1,
-    titel: kat.titel,
-    ziel: kat.ziel,
-    art: kat.art,
-    ausfuehrung: kat.ausfuehrung,
-    vorlageTurnus: kat.frequenz.turnus,
-    vorlageAnlass: kat.frequenz.anlass,
-    partei: z.partei,
-    schluessel: kat.schluessel,
-    durchfuehrendId: z.durchfuehrendId,
-    vertretungId: z.vertretungId,
-    gegenzeichnerId: z.gegenzeichnerId,
-    gegenzeichnungMandant: z.gegenzeichnungMandant,
-    nachweis: kat.nachweis,
-    mindestNachweise: kat.mindestNachweise,
-    schritte: kat.schritte as unknown as Prisma.InputJsonValue,
-    kennzahlen: kat.kennzahlen as unknown as Prisma.InputJsonValue,
-    toleranzEur: kat.toleranzEur,
-    faelligNachTagen: kat.faelligNachTagen,
-    design: 'NICHT_BEURTEILT' as const,
-    gueltigAb: zeitpunkt,
-    erstelltVon: von,
-    createdAt: zeitpunkt,
-  };
-}
-
-function durchfuehrungDaten(
-  kontrolleId: string,
-  standId: string,
-  faelligNachTagen: number,
-  p: Periode,
-  zeitpunkt: Date,
-): Prisma.DurchfuehrungCreateManyInput {
-  return {
-    kontrolleId,
-    kontrolleStandId: standId,
-    periodeLabel: p.label,
-    periodeVon: p.von,
-    periodeBis: p.bis,
-    faelligAm: addTage(p.bis, faelligNachTagen),
-    status: 'GEPLANT',
-    createdAt: zeitpunkt,
-  };
-}
-
-function gueltigerStand<T extends { gueltigAb: Date; gueltigBis: Date | null }>(
-  liste: readonly T[],
-  zeitpunkt: Date,
-): T | undefined {
-  return liste
-    .filter(
-      (s) =>
-        s.gueltigAb.getTime() <= zeitpunkt.getTime() &&
-        (s.gueltigBis == null || s.gueltigBis.getTime() > zeitpunkt.getTime()),
-    )
-    .sort((a, b) => b.gueltigAb.getTime() - a.gueltigAb.getTime())[0];
 }
 
 /**
@@ -519,7 +413,7 @@ async function planeKuenftigNeu(
   if (neu.length) {
     await tx.durchfuehrung.createMany({
       data: neu.map((p) =>
-        durchfuehrungDaten(a.kontrolleId, a.standId, a.faelligNachTagen, p, a.zeitpunkt),
+        geplanteDurchfuehrung(a.kontrolleId, a.standId, a.faelligNachTagen, p, a.zeitpunkt),
       ),
     });
   }
@@ -769,7 +663,7 @@ export async function vorgeschlagenesRisikoAufnehmen(
         }
         // Neue Kontrolle aus dem Katalog, verknüpft mit allen aktiven Risiken, die sie abdeckt.
         const codes = kk.risiken.filter((c) => bruttoJe.has(c));
-        const z = standardZustaendigkeit(kk, r);
+        const z = standardKontrollZustaendigkeit(kk, r);
         const k = await tx.kontrolle.create({
           data: {
             programmId: programm.id,
@@ -789,7 +683,7 @@ export async function vorgeschlagenesRisikoAufnehmen(
         );
         if (ende && ende.getTime() >= start.getTime()) {
           const daten = perioden(ableitung.effektiv.turnus, start, ende).map((p) =>
-            durchfuehrungDaten(k.id, k.staende[0]!.id, kk.faelligNachTagen, p, zeitpunkt),
+            geplanteDurchfuehrung(k.id, k.staende[0]!.id, kk.faelligNachTagen, p, zeitpunkt),
           );
           if (daten.length) await tx.durchfuehrung.createMany({ data: daten });
           anzahlDurchf += daten.length;

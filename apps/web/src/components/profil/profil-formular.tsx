@@ -3,6 +3,7 @@
 import { useId, useState, type ReactNode } from 'react';
 import {
   EU_LAENDER,
+  LAGER_ART_LABEL,
   LAGER_ARTEN,
   LAND_NAME,
   lagerOhneRegistrierung,
@@ -14,7 +15,6 @@ import {
   type LagerArt,
 } from '@tcms/domain';
 import { Icon } from '../icon';
-import { LAGER_ART_LABEL } from './profil-logik';
 
 // =============================================================================
 // Formular für das Geschäftsprofil P1–P12 (Einrichtungsassistent Schritt 2 und
