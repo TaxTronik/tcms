@@ -76,7 +76,10 @@ für KI-Werkzeuge.
    Optionen sind gleichrangig, ohne Vorauswahl und ohne Empfehlung. Auch die
    Einstufung „keine steuerliche Auswirkung" beim Anlegen ist eine
    Würdigungsentscheidung: ohne `kannWuerdigen` entsteht die Feststellung als
-   „unklar" (`auswirkungBeimAnlegen`, TS-04).
+   „unklar" (`auswirkungBeimAnlegen`, TS-04). Im Service entsteht jede
+   Feststellung über `legeFeststellungAn` (manuell, Ereignisfolge,
+   Gegenzeichnung), das diese Regel anwendet; die §-153-Entscheidung hat keinen
+   Standardwert und nennt die bisher gesehene Entscheidung (`bisher`).
 6. Historische Stichtage (`?stand=YYYY-MM-DD`) sind schreibgeschützt.
    Mutationen sind dort deaktiviert.
 7. Keine KI-Entscheidungen. Vorschläge (z. B. Risikovorschlag aus dem
@@ -96,7 +99,9 @@ für KI-Werkzeuge.
   Kanzleipersonen handeln nur mit bestätigtem Mandantenbezug (`cli`),
   Mandantenkontakte nur mit aktiver `MandantKontaktRolle`.
 - Fremde Mandanten und Objekte: `404` bzw. „nicht gefunden", nie ein Hinweis
-  auf ihre Existenz.
+  auf ihre Existenz. RLS trennt nur Tenants: Jede Objekt-ID aus Pfad oder Body
+  prüft der Service gegen das Programm des Mandanten der Anfrage, bei
+  Änderungen mit `SELECT … FOR UPDATE` in derselben Transaktion (TS-05).
 - `TCMS_DEMO_TODAY` wirkt nur über die Demo-Uhr in `apps/web`; Audit-
   Zeitstempel und Sicherheitsfristen (Codes) sind immer echte Zeit.
 

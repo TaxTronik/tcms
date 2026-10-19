@@ -218,6 +218,29 @@ await fetch(`<interne-url>${pfad}`, {
 });
 ```
 
+**Feststellungen, Ereignisse, Portal-Meldung, Länder-Monitor** (Pfade unter
+`/v1/mandanten/{mandantId}`; Vertrag in `packages/contract/src/bereiche/feststellungen-ereignisse.ts`).
+Lesende Endpunkte nehmen `?stand=YYYY-MM-DD`, schreibende nie (TS-07). Vertrauliche Feststellungen
+liefert der Dienst für Nicht-Beteiligte nur maskiert (`maskiert: true`, Nummer und Status).
+
+| Methode | Pfad                                                                      | Recht                                        |
+| ------- | ------------------------------------------------------------------------- | -------------------------------------------- |
+| GET     | `feststellungen`, `feststellungen/{id}`                                   | Kanzlei mit Bezug (`kannLesen`)              |
+| POST    | `feststellungen` (201), `…/{id}/weiter` (`von`), `…/{id}/wuerdigung`      | `kannBearbeiten`; „NEIN" nur `kannWuerdigen` |
+| POST    | `…/{id}/erklaerungen`, `…/{id}/massnahmen`, `…/{id}/nachkontrolle`        | `kannBearbeiten` (201)                       |
+| POST    | `…/{id}/p153` (`entscheidung`, `bisher`), `…/{id}/vertraulich`            | `kannWuerdigen`                              |
+| POST    | `…/{id}/verwerfen/beantragen` · `bestaetigen` · `ablehnen`                | `kannBearbeiten`, Bestätigung zweite Person  |
+| POST    | `massnahmen/{id}/erledigen`                                               | `kannBearbeiten` oder verantwortlich         |
+| GET     | `ereignisse`, `ereignisse/{id}`, `ereignisse/{id}/anlagen/{sha256}`       | Kanzlei mit Bezug                            |
+| POST    | `ereignisse` (201), `…/{id}/in-pruefung`, `…/{id}/folgen` (201)           | `kannBearbeiten`                             |
+| POST    | `…/{id}/folgen/anlegen`, `…/folgen/{folgeId}/verwerfen`, `…/abschliessen` | `kannBearbeiten`                             |
+| POST    | `…/folgen/{folgeId}/erledigen`                                            | `kannBearbeiten` oder zuständig              |
+| POST    | `…/{id}/verwerfen/beantragen` · `bestaetigen` · `ablehnen`                | `kannBearbeiten`, Bestätigung zweite Person  |
+| GET     | `portal/ereignisse` (Portal)                                              | aktive Rolle beim eigenen Mandanten          |
+| POST    | `portal/ereignisse` (Portal, 201, Anlagen nur als Verweise)               | GV oder TCB des eigenen Mandanten            |
+| GET     | `laender`                                                                 | Kanzlei mit Bezug                            |
+| POST    | `laender` (201), `laender/staende` (201)                                  | `kannBearbeiten`                             |
+
 Antworten: `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder? } }`. Jeder
 Fehler bei Token, Bestätigung oder `jti` ergibt dieselbe Antwort `401 NICHT_AUTHENTIFIZIERT` (mit
 `Connection: close`); der Grund steht nur im Log (JSON-Zeilen auf stdout, mit Request-ID, ohne
