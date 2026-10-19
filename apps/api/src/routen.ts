@@ -6,9 +6,15 @@
 // `[a-z0-9-]+` und Parametern `:name`; mehrdeutige Muster derselben Methode
 // werden beim Start abgewiesen, damit keine Anfrage eine unerwartete Route
 // trifft.
+//
+// Fachrouten entstehen aus dem Endpunktregister des Vertrags
+// (`Routen.endpunkt`, `ENDPUNKTE` aus @tcms/contract): Methode, Muster,
+// Portal-Kennzeichen, Schemas und Erfolgsstatus stehen nur dort, die Routen
+// liefern nur den Handler. `pruefeGegenRegister` vergleicht beim Start die
+// Tabelle mit dem Register (eine Quelle der Wahrheit).
 // =============================================================================
 
-import { DienstFehler, type Akteur } from '@tcms/contract';
+import { DienstFehler, type Akteur, type Endpunkt } from '@tcms/contract';
 import type { z } from 'zod';
 
 export const METHODEN = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
@@ -42,11 +48,23 @@ export interface RoutenDefinition<
   body?: SB;
   /** zod-Schema der Query als Objekt; ohne Schema ist keine Query erlaubt. */
   query?: SQ;
+  /** zod-Schema der Pfadparameter (streng); ohne Schema werden sie nicht geprüft. */
+  params?: z.ZodType;
   status?: 200 | 201;
   handler: (ctx: RoutenKontext<Tx, Ausgabe<SB>, Ausgabe<SQ>>) => Promise<unknown>;
 }
 
+type SchemaOderLeer<S> = S extends z.ZodType ? z.output<S> : undefined;
+
+/** Handler eines Registereintrags: Body und Query typisiert, Ergebnis wie `antwortSchema`. */
+export type EndpunktHandler<Tx, E extends Endpunkt> = (
+  ctx: RoutenKontext<Tx, SchemaOderLeer<E['bodySchema']>, SchemaOderLeer<E['querySchema']>>,
+) => Promise<z.input<E['antwortSchema']>>;
+
 export interface Routen<Tx> {
+  /** Fachroute aus dem Endpunktregister (der einzige Weg für Produktionsrouten). */
+  endpunkt<E extends Endpunkt>(endpunkt: E, handler: EndpunktHandler<Tx, E>): void;
+  /** Freie Route; nur für Tests. Der Dienst weist sie beim Start ab (`pruefeGegenRegister`). */
   route<SB extends z.ZodType | undefined = undefined, SQ extends z.ZodType | undefined = undefined>(
     def: RoutenDefinition<Tx, SB, SQ>,
   ): void;
@@ -65,7 +83,10 @@ export interface RoutenEintrag<Tx> {
   mandantGebunden: boolean;
   body: z.ZodType | undefined;
   query: z.ZodType | undefined;
+  params: z.ZodType | undefined;
   status: 200 | 201;
+  /** Registereintrag, aus dem die Route entstand (`undefined` bei freien Routen). */
+  endpunkt: Endpunkt | undefined;
   handler: (ctx: RoutenKontext<Tx, unknown, unknown>) => Promise<unknown>;
 }
 
@@ -83,7 +104,10 @@ export class RoutenTabelle<Tx> {
   #eingefroren = false;
 
   /** Trägt eine Route mit Akteursbestätigung ein; wirft bei ungültigem oder mehrdeutigem Muster. */
-  eintragen(def: RoutenDefinition<Tx, z.ZodType | undefined, z.ZodType | undefined>) {
+  eintragen(
+    def: RoutenDefinition<Tx, z.ZodType | undefined, z.ZodType | undefined>,
+    endpunkt?: Endpunkt,
+  ) {
     const { segmente, mandantGebunden } = this.#pruefe(def.methode, def.pfad);
     this.#eintraege.push({
       methode: def.methode,
@@ -95,30 +119,67 @@ export class RoutenTabelle<Tx> {
       mandantGebunden,
       body: def.body,
       query: def.query,
+      params: def.params,
       status: def.status ?? 200,
+      endpunkt,
       handler: def.handler as RoutenEintrag<Tx>['handler'],
     });
   }
 
+  /** Route aus einem Registereintrag: alles außer dem Handler kommt aus dem Register. */
+  eintragenAusRegister<E extends Endpunkt>(endpunkt: E, handler: EndpunktHandler<Tx, E>) {
+    if (!endpunkt.akteur) throw new Error(`Routen: ${endpunkt.name} braucht eingebauten Handler`);
+    this.eintragen(
+      {
+        methode: endpunkt.methode,
+        pfad: endpunkt.pfad,
+        portal: endpunkt.portal,
+        body: endpunkt.bodySchema ?? undefined,
+        query: endpunkt.querySchema ?? undefined,
+        params: endpunkt.paramsSchema,
+        status: endpunkt.erfolgStatus,
+        handler: handler as RoutenDefinition<
+          Tx,
+          z.ZodType | undefined,
+          z.ZodType | undefined
+        >['handler'],
+      },
+      endpunkt,
+    );
+  }
+
   /** Nur für eingebaute Routen (Health): Dienst-Token genügt, keine Eingaben. */
-  eintragenOhneAkteur(def: { methode: Methode; pfad: string; handler: () => Promise<unknown> }) {
-    const { segmente, mandantGebunden } = this.#pruefe(def.methode, def.pfad);
-    if (mandantGebunden) throw new Error('Routen: Mandantenpfade brauchen eine Akteursbestätigung');
+  eintragenOhneAkteur(endpunkt: Endpunkt, handler: () => Promise<unknown>) {
+    const { methode, pfad } = endpunkt;
+    if (endpunkt.akteur || endpunkt.bodySchema || endpunkt.querySchema) {
+      throw new Error(`Routen: ${endpunkt.name} ist keine Route ohne Akteur`);
+    }
+    const { segmente, mandantGebunden } = this.#pruefe(methode, pfad);
+    if (mandantGebunden || segmente.some((s) => s.startsWith(':'))) {
+      throw new Error('Routen: Routen ohne Akteur haben keine Parameter');
+    }
     this.#eintraege.push({
-      methode: def.methode,
-      pfad: def.pfad,
+      methode,
+      pfad,
       segmente,
       akteur: false,
-      ohneAkteur: def.handler,
+      ohneAkteur: handler,
       portal: false,
       mandantGebunden: false,
       body: undefined,
       query: undefined,
+      params: undefined,
       status: 200,
+      endpunkt,
       handler: async () => {
         throw new Error('Routen: Route ohne Akteur hat keinen Akteur-Handler');
       },
     });
+  }
+
+  /** Eingetragene Routen in Eintragsreihenfolge (Abgleich mit dem Register, Tests). */
+  eintraege(): readonly RoutenEintrag<Tx>[] {
+    return this.#eintraege;
   }
 
   #pruefe(methode: Methode, pfad: string) {
@@ -138,6 +199,7 @@ export class RoutenTabelle<Tx> {
   /** Registrierungs-Schnittstelle für `AppDeps.routen` (immer mit Akteur). */
   registrar(): Routen<Tx> {
     return {
+      endpunkt: (e, handler) => this.eintragenAusRegister(e, handler),
       route: (def) =>
         this.eintragen(def as RoutenDefinition<Tx, z.ZodType | undefined, z.ZodType | undefined>),
     };
@@ -194,6 +256,59 @@ function zerlegeMuster(pfad: string): string[] {
 function mehrdeutig(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
   return a.every((s, i) => s === b[i] || s.startsWith(':') || b[i]!.startsWith(':'));
+}
+
+/**
+ * Vergleicht die Routentabelle mit dem Endpunktregister: Jede Route stammt aus
+ * genau einem Registereintrag und stimmt mit ihm überein (Methode, Muster,
+ * Portal, Akteur, Schemas, Status); jeder Registereintrag hat genau eine Route.
+ * Wirft mit allen Abweichungen (nur Namen und Muster, keine Werte).
+ */
+export function pruefeGegenRegister<Tx>(
+  eintraege: readonly RoutenEintrag<Tx>[],
+  register: readonly Endpunkt[],
+): void {
+  const fehler: string[] = [];
+  const namen = new Map<string, Endpunkt>();
+  for (const e of register) {
+    if (namen.has(e.name)) fehler.push(`Registereintrag ${e.name} doppelt`);
+    namen.set(e.name, e);
+  }
+  const gesehen = new Map<string, number>();
+  for (const r of eintraege) {
+    const e = r.endpunkt;
+    if (!e) {
+      fehler.push(`Route ohne Registereintrag: ${r.methode} ${r.pfad}`);
+      continue;
+    }
+    if (!namen.has(e.name)) {
+      fehler.push(`Route ohne Registereintrag: ${r.methode} ${r.pfad} (${e.name})`);
+      continue;
+    }
+    if (namen.get(e.name) !== e) {
+      fehler.push(`Route ${r.methode} ${r.pfad} verweist auf fremden Eintrag ${e.name}`);
+      continue;
+    }
+    gesehen.set(e.name, (gesehen.get(e.name) ?? 0) + 1);
+    const gleich =
+      r.methode === e.methode &&
+      r.pfad === e.pfad &&
+      r.portal === e.portal &&
+      r.akteur === e.akteur &&
+      r.mandantGebunden === e.mandantenbezogen &&
+      r.status === e.erfolgStatus &&
+      r.body === (e.bodySchema ?? undefined) &&
+      r.query === (e.querySchema ?? undefined) &&
+      r.params === (e.akteur ? e.paramsSchema : undefined);
+    if (!gleich) fehler.push(`Route ${r.methode} ${r.pfad} weicht von ${e.name} ab`);
+  }
+  for (const e of register) {
+    const n = gesehen.get(e.name) ?? 0;
+    if (n !== 1) fehler.push(`Registereintrag ${e.name} hat ${n} Routen statt genau einer`);
+  }
+  if (fehler.length > 0) {
+    throw new Error(`Routen weichen vom Endpunktregister ab:\n- ${fehler.join('\n- ')}`);
+  }
 }
 
 /**

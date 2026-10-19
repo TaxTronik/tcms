@@ -10,13 +10,12 @@
 
 import { readFileSync } from 'node:fs';
 import { createAdaptorServer } from '@hono/node-server';
-import { mitTenant, pruefeLaufzeitverbindung, type Tx } from '@tcms/db';
+import { mitTenant, pruefeLaufzeitverbindung } from '@tcms/db';
 import pg from 'pg';
-import { erzeugeApp } from './app';
+import { erzeugeDienst } from './dienst';
 import { PgJti, starteJtiAufraeumen } from './jti';
 import { KonfigurationsFehler, ladeKonfiguration } from './konfiguration';
 import { jsonLogger } from './log';
-import { registriereAlle } from './routen/index';
 
 const log = jsonLogger();
 
@@ -40,7 +39,8 @@ async function starte() {
 
   const jti = new PgJti(pool);
   const stoppeAufraeumen = starteJtiAufraeumen(jti, { log });
-  const app = erzeugeApp<Tx>({
+  // Alle Fachrouten aus dem Endpunktregister, beim Aufbau dagegen geprüft.
+  const app = erzeugeDienst({
     konfiguration: {
       dienstTokens: konfiguration.dienstTokens,
       akteurSchluessel: konfiguration.akteurSchluessel,
@@ -55,7 +55,6 @@ async function starte() {
         await pool.query('SELECT 1');
       },
     },
-    routen: registriereAlle,
     log,
   });
 

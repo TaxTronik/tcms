@@ -11,7 +11,7 @@
 //   6. Akteursbestätigung gegen tatsächliche Methode, rohes Target, Body-Hash
 //   7. jti einmalig
 //   8. Mandantenbindung (ADR §3.3) – sonst 404
-//   9. erst jetzt Query und JSON lesen und validieren
+//   9. erst jetzt Pfadparameter, Query und JSON lesen und validieren
 //  10. Route in genau einer Tenant-Transaktion (`mitTenant`)
 // Jeder Authentifizierungsfehler (4, 6, 7) ergibt dieselbe Antwort
 // `401 NICHT_AUTHENTIFIZIERT` mit `Connection: close`; der Grund steht nur im
@@ -24,12 +24,14 @@ import { randomUUID, type KeyObject } from 'node:crypto';
 import {
   AKTEUR_HEADER,
   DienstFehler,
+  ENDPUNKTE,
   FEHLER_STATUS,
   MAX_BODY_BYTES,
   akteurAusClaims,
   bodySha256,
   parseJsonStrikt,
   pruefeAkteur,
+  type Endpunkt,
   type Fehler,
   type PruefGrund,
 } from '@tcms/contract';
@@ -43,6 +45,7 @@ import {
   MANDANT_PARAM,
   RoutenTabelle,
   bindeMandant,
+  pruefeGegenRegister,
   type Methode,
   type Routen,
   type RoutenEintrag,
@@ -77,6 +80,11 @@ export interface AppDeps<Tx = unknown> {
   daten: Datenzugriff<Tx>;
   /** Fachliche Routen; jede verlangt Dienst-Token und Akteursbestätigung. */
   routen?: (r: Routen<Tx>) => void;
+  /**
+   * Endpunktregister, gegen das die Routentabelle beim Aufbau geprüft wird
+   * (Dienst: `ENDPUNKT_LISTE`, siehe `dienst.ts`). Abweichung → Start bricht ab.
+   */
+  register?: readonly Endpunkt[];
   log?: Logger;
 }
 
@@ -111,30 +119,33 @@ const MAX_MELDUNG = 500;
 
 type Bindings = { incoming?: unknown };
 
+/**
+ * Baut die Routentabelle: eingebaute Routen (`health`, `ich`) und Fachrouten
+ * aus dem Endpunktregister, mit `register` dagegen geprüft, danach eingefroren.
+ */
+export function baueRoutentabelle<Tx>(
+  deps: Pick<AppDeps<Tx>, 'konfiguration' | 'daten' | 'routen' | 'register'>,
+  log: Logger,
+): RoutenTabelle<Tx> {
+  const zeitlimitMs = deps.konfiguration.healthZeitlimitMs ?? 2000;
+  const tabelle = new RoutenTabelle<Tx>();
+  tabelle.eintragenOhneAkteur(ENDPUNKTE.health, async () => ({
+    version: deps.konfiguration.version,
+    datenbank: await pingeDatenbank(deps.daten, zeitlimitMs, log),
+  }));
+  tabelle.eintragenAusRegister(ENDPUNKTE.ich, async ({ akteur }) => akteur);
+  deps.routen?.(tabelle.registrar());
+  if (deps.register) pruefeGegenRegister(tabelle.eintraege(), deps.register);
+  tabelle.einfrieren();
+  return tabelle;
+}
+
 export function erzeugeApp<Tx = unknown>(deps: AppDeps<Tx>): Hono<{ Bindings: Bindings }> {
   const log = deps.log ?? jsonLogger();
   const tokenGueltig = erzeugeTokenPruefung(deps.konfiguration.dienstTokens);
   const schluessel = deps.konfiguration.akteurSchluessel;
   if (schluessel.size === 0) throw new Error('Akteursbestätigung: keine Schlüssel konfiguriert');
-  const zeitlimitMs = deps.konfiguration.healthZeitlimitMs ?? 2000;
-
-  const tabelle = new RoutenTabelle<Tx>();
-  tabelle.eintragenOhneAkteur({
-    methode: 'GET',
-    pfad: '/v1/health',
-    handler: async () => ({
-      version: deps.konfiguration.version,
-      datenbank: await pingeDatenbank(deps.daten, zeitlimitMs, log),
-    }),
-  });
-  tabelle.eintragen({
-    methode: 'GET',
-    pfad: '/v1/ich',
-    portal: true,
-    handler: async ({ akteur }) => akteur,
-  });
-  deps.routen?.(tabelle.registrar());
-  tabelle.einfrieren();
+  const tabelle = baueRoutentabelle(deps, log);
 
   async function verarbeite(
     c: Context<{ Bindings: Bindings }>,
@@ -195,7 +206,8 @@ export function erzeugeApp<Tx = unknown>(deps: AppDeps<Tx>): Hono<{ Bindings: Bi
     bindeMandant(akteur, mandantId, route.portal);
     if (mandantId !== null) felder.mandantId = mandantId;
 
-    // 9. Erst jetzt Query und JSON.
+    // 9. Erst jetzt Pfadparameter (Schema aus dem Register), Query und JSON.
+    route.params?.parse(treffer.params);
     const query = leseQuery(route, ziel.query);
     const eingabe = leseJson(route, body, c.req.raw.headers.get('content-type'));
 

@@ -1,17 +1,28 @@
 // Routentabelle „risiken-kontrollen" ohne Datenbank: jede Route ist an den
 // Mandanten gebunden, keine ist ein Portal-Endpunkt (Mandantenkontakte → 404),
 // schreibende Routen nehmen keinen Stichtag (TS-07), lesende nur `stand`.
+import type { Endpunkt } from '@tcms/contract';
 import { describe, expect, it } from 'vitest';
 import type { Tx } from '@tcms/db';
-import { RoutenTabelle, type RoutenDefinition } from '../routen';
+import { RoutenTabelle } from '../routen';
 import { registriereRisikenKontrollen } from '../routen/risiken-kontrollen';
 
+/** Die Routen des Bereichs, wie sie aus dem Endpunktregister entstehen. */
 function definitionen() {
-  const liste: RoutenDefinition<Tx, never, never>[] = [];
+  const liste: Endpunkt[] = [];
   registriereRisikenKontrollen({
-    route: (def) => liste.push(def as unknown as RoutenDefinition<Tx, never, never>),
+    endpunkt: (e) => liste.push(e),
+    route: () => {
+      throw new Error('Fachrouten nur aus dem Endpunktregister');
+    },
   });
-  return liste;
+  return liste.map((e) => ({
+    methode: e.methode,
+    pfad: e.pfad,
+    portal: e.portal,
+    body: e.bodySchema ?? undefined,
+    query: e.querySchema ?? undefined,
+  }));
 }
 
 describe('Routen risiken-kontrollen', () => {
