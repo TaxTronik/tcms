@@ -143,12 +143,17 @@ export async function ladeBeteiligte(
   };
   merke(d.durchgefuehrtVon);
   for (const n of d.nachweise) merke(n.hochgeladenVon);
+  // Zwei Zweige als UNION, damit je ein Index greift: (tenant_id, objektTyp, objektId)
+  // und – vorgeschlagen – (tenant_id, (detail->>'durchfuehrungId')).
+  const aktionen = [...DURCHFUEHRUNGS_AKTIONEN];
   const audit = await tx.$queryRaw<{ actorId: string | null }[]>`
-    SELECT DISTINCT "actorId"
-      FROM "AuditEvent"
-     WHERE aktion = ANY(${[...DURCHFUEHRUNGS_AKTIONEN]}::text[])
-       AND (("objektTyp" = 'Durchfuehrung' AND "objektId" = ${d.id})
-            OR detail->>'durchfuehrungId' = ${d.id})`;
+    SELECT "actorId" FROM "AuditEvent"
+     WHERE aktion = ANY(${aktionen}::text[])
+       AND "objektTyp" = 'Durchfuehrung' AND "objektId" = ${d.id}
+    UNION
+    SELECT "actorId" FROM "AuditEvent"
+     WHERE aktion = ANY(${aktionen}::text[])
+       AND detail->>'durchfuehrungId' = ${d.id}`;
   for (const e of audit) merke(e.actorId);
   return [...ids].sort();
 }
