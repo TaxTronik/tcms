@@ -115,6 +115,13 @@ für KI-Werkzeuge.
   `@tcms/db`. Kein anderer Code setzt `tcms.tenant_id` oder öffnet eigene
   Tenant-Transaktionen. Ausnahmen ohne Tenant sind nur `akteur_jti` (ohne
   RLS, `tcms_app` nur SELECT/INSERT/DELETE) und der Ping von `/v1/health`.
+  `mitTenant` rollt zurück, wenn der Kontext bis zum Commit umgesetzt wurde.
+- RLS schützt nicht gegen beliebiges SQL derselben Rolle (ADR 0001 §10, RT-02):
+  Raw-SQL nur als parametrisiertes Tagged Template (`$queryRaw`/`$executeRaw`),
+  nie `$queryRawUnsafe`/`$executeRawUnsafe`, `Prisma.raw` oder zusammengesetzte
+  Texte; `pg` nur mit festem SQL-Text. Der statische Test
+  `packages/db/src/__tests__/roh-sql.test.ts` erzwingt das; Ausnahmen nur für
+  Tests und Seed, mit Begründung.
 - Rechte nur über die Funktionen aus `@tcms/service` mit dem `Akteur`;
   Kanzleipersonen handeln nur mit bestätigtem Mandantenbezug (`cli`),
   Mandantenkontakte nur mit aktiver `MandantKontaktRolle`.

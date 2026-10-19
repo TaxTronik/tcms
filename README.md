@@ -104,7 +104,12 @@ auf ein Objekt eines anderen Tenants scheitert also schon in der Datenbank.
   `mitTenant` weist eine Laufzeitverbindung ab, deren Rolle Superuser ist, `BYPASSRLS` hat oder
   Tabellen besitzt; `pruefeLaufzeitverbindung()` prüft das beim Start des Dienstes.
 - Zugriff nur über `mitTenant(tenantId, fn)` aus `@tcms/db`: prüft die UUID, öffnet eine Transaktion
-  und setzt `tcms.tenant_id` transaktionslokal. Ohne Kontext sieht `tcms_app` keine Zeile.
+  und setzt `tcms.tenant_id` transaktionslokal. Ohne Kontext sieht `tcms_app` keine Zeile. Ist der
+  Kontext vor dem Commit umgesetzt, rollt `mitTenant` zurück (`TenantFehler`, Log ohne Details).
+- RLS schützt nicht gegen beliebiges SQL der Laufzeitrolle (bekanntes Restrisiko, ADR 0001 §10).
+  Raw-SQL daher nur als parametrisiertes Tagged Template; der statische Test
+  `packages/db/src/__tests__/roh-sql.test.ts` verbietet `…RawUnsafe`, `Prisma.raw`, zusammengesetzte
+  SQL-Texte und `set_config` außerhalb von `tenant.ts`.
 - Audit: Hashkette je Tenant (Kettenversion 2), Advisory-Lock je Tenant, `(tenant_id, prevHash)`
   eindeutig. `schreibeAudit(tx, …)` nimmt den Tenant aus dem Kontext und vergibt unter der Sperre
   die Position `pos` (je Tenant lückenlos 1, 2, 3, …, `(tenant_id, pos)` eindeutig). Alle Ausgaben

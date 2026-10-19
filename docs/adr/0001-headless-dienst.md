@@ -113,7 +113,8 @@ wird der Body geparst.
 - `mitTenant(tenantId, fn)` öffnet eine Transaktion und setzt
   `set_config('tcms.tenant_id', tenantId, true)`. Ohne gesetzten Tenant sieht
   die App-Rolle nichts. Jede API-Anfrage läuft vollständig in genau einer
-  solchen Transaktion (Lesen wie Schreiben).
+  solchen Transaktion (Lesen wie Schreiben). Vor dem Commit prüft `mitTenant`,
+  dass der Kontext unverändert ist; sonst Rollback (Abschnitt 10.1).
 - Tabelle `akteur_jti (jti PK, exp)`: nicht mandantengebunden, nur INSERT und
   Löschen abgelaufener Einträge.
 - Audit: Kette **je Tenant**; Advisory-Lock je Tenant (nicht global); der Hash
@@ -208,3 +209,60 @@ Dienst.
 | TS-09 | Anhang-Download von Ereignissen ohne Integritätsprüfung; Nachweis-Download nicht auditiert                    | Downloads laufen über die kanzleikonsole (Abschnitt 6)                                                                                                                                  |
 | TS-10 | Audit-Hash deckt `actorName` und `programmId` nicht ab                                                        | Kettenversion 2 (Abschnitt 4)                                                                                                                                                           |
 | TS-11 | Datenbank-Container mit Standardpasswort auf allen Schnittstellen                                             | Compose nur für Entwicklung, Port an `127.0.0.1` gebunden                                                                                                                               |
+
+## 10. Bekannte Restrisiken
+
+### 10.1 RLS schützt nicht gegen SQL-Injection derselben Rolle (RT-02)
+
+Der Tenant-Kontext `tcms.tenant_id` ist ein gewöhnlicher GUC, den jede Rolle mit
+`set_config` setzen kann. Wer beliebiges SQL als `tcms_app` ausführt – über eine
+SQL-Injection oder mit den Zugangsdaten der Laufzeitrolle –, liest und schreibt
+damit jeden Tenant; RLS hält das nicht auf. Eine konkrete Injection ist nicht
+bekannt (Angriffsdurchlauf vom 2026-10-19). Entscheidung des
+Produktverantwortlichen: das Restrisiko dokumentieren und die Voraussetzung
+„keine Injection" maschinell absichern. Eine fälschungssichere Tenant-Bindung
+(z. B. Bindung je Transaktion über eine `SECURITY DEFINER`-Funktion von
+`tcms_owner` in eine für `tcms_app` nicht schreibbare Tabelle, oder eine Rolle je
+Tenant) bleibt eine Option für Stufe 2.
+
+Gegenmittel:
+
+- **Parametrisierte Abfragen erzwungen.** Der statische Test
+  `packages/db/src/__tests__/roh-sql.test.ts` prüft alle Quelltexte (Apps, Pakete,
+  Seed, Skripte) mit dem TypeScript-Parser: kein `$queryRawUnsafe` oder
+  `$executeRawUnsafe`, kein `Prisma.raw`, `sql.raw` oder `.raw(…)`;
+  `$queryRaw`/`$executeRaw` nur als Tagged Template (Werte werden Parameter);
+  `pg`-Abfragen nur mit festem SQL-Text; `set_config` und `tcms.tenant_id` nur in
+  `packages/db/src/tenant.ts`. Ausnahmen nur für Tests und den Seed, je Datei und
+  Regel begründet; Laufzeitcode kann nicht freigestellt werden.
+- **Prüfung des Kontexts vor dem Commit.** `mitTenant` prüft nach dem Callback in
+  derselben Transaktion, dass `tcms.tenant_id` noch genau der gesetzte Tenant ist;
+  sonst Rollback, `TenantFehler` (Dienst: `500 INTERN`) und eine Log-Zeile
+  `tenant_kontext_veraendert` ohne Details. Das Ergebnis des Callbacks verlässt
+  die Transaktion nicht. Grenze: Beliebiges SQL kann den Kontext vor dem Commit
+  zurücksetzen. Die Prüfung fängt ein versehentliches oder naives Umsetzen ab; eine
+  Sicherheitsgrenze gegen einen Angreifer mit SQL ist sie nicht.
+- **Audit nur anhängen.** `tcms_app` hat auf `AuditEvent` weder UPDATE noch
+  DELETE: Auch mit SQL lässt sich die Kette weder umschreiben noch kürzen.
+  Anhängen bleibt möglich; der Hash bindet Inhalte, er authentifiziert keine
+  Person (Abschnitt 4).
+- **Zugangsdaten und Netz.** `DATABASE_URL` nur im Dienst, Datenbank nur im
+  internen Netz (Abschnitt 8).
+
+Bekannte Restfälle (als solche gekennzeichnet in
+`packages/service/src/__tests__/redteam/rls-tenant-pivot.db.test.ts`): reiner
+SQL-Zugriff der Rolle außerhalb von `mitTenant`; Umsetzen und Zurücksetzen des
+Kontexts innerhalb derselben Transaktion.
+
+### 10.2 Weitere bekannte Grenzen
+
+- **Audit-Position (RT-03).** `pos` gehört nicht zum Hash (Kettenversion 2); die
+  Kettenprüfung verlangt sie lückenlos. Eine Änderung setzt UPDATE-Rechte voraus,
+  die die Laufzeitrolle nicht hat. Der globale Schlüssel `seq` bleibt in der
+  Datenbank lesbar (nur mit SQL, siehe 10.1).
+- **Vertraulichkeit (RT-01)** gilt für die Feststellung selbst. Texte außerhalb der
+  Feststellung bleiben für alle mit Leserecht sichtbar: Beschreibung und Folgetexte
+  eines Ereignisses, aus dem eine Feststellung entstand, der Ergebniskommentar einer
+  Durchführung mit Befund, die für eine Nachkontrolle gewählte Kontrolle.
+  Admins/Partner gehören nach Fachkonzept §13 zum Kreis der Beteiligten und sehen im
+  tenantweiten Audit alle Details.
