@@ -6,6 +6,7 @@ import {
   fmtDatum,
   fmtDatumKurz,
   fmtDatumZeit,
+  isoDatum,
   type AnzeigeStatus,
 } from '@tcms/domain';
 import { Icon } from '@/components/icon';
@@ -21,12 +22,10 @@ import {
   speichereAufgabe,
 } from '@/server/actions/portal-aufgabe';
 import {
-  darfPortalLesen,
-  ladeDurchfuehrungDetail,
+  ladeAufgabeDetail,
   MIN_BEFUND_KOMMENTAR,
   ohneInhalte,
   personName,
-  rechteFuer,
   statusZumStand,
   type DurchfuehrungDetail,
 } from '@/server/durchfuehrung-daten';
@@ -85,14 +84,15 @@ export default async function Kontrollaufgabe({
   params: Promise<{ id: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const nutzer = (await brauchtPortal()).handelnde;
+  const nutzer = (await brauchtPortal()).akteur;
   const { id } = await params;
   const sp = await searchParams;
   const { stand, historisch } = leseStand(sp['stand']);
-  const d = await ladeDurchfuehrungDetail(id, stand, historisch);
-  if (!d || !darfPortalLesen(nutzer, d) || !d.vorhandenZumStand) notFound();
+  // Sichtbarkeit (eigene Seite, zugewiesen oder GV/TCB) und Rechte prüft der Service.
+  const d = await ladeAufgabeDetail(nutzer, id, historisch ? isoDatum(stand) : undefined);
+  if (!d || !d.vorhandenZumStand) notFound();
 
-  const r = rechteFuer(nutzer, d, historisch);
+  const r = d.rechte;
   const felder = { id: d.id, stand: historisch ? (sp['stand']?.toString() ?? '') : '' };
   const gzm = d.kontrolle.gegenzeichnungMandant;
   const bearbeitbar = r.bearbeiten.erlaubt;

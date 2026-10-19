@@ -1,28 +1,50 @@
 import 'server-only';
-import type { Prisma, Tx } from '@tcms/db';
-import { addTage, fmtDatum, statusAm, type AnzeigeStatus, type Klasse } from '@tcms/domain';
+import { randomUUID } from 'node:crypto';
 import {
-  fehlendeWerte,
+  DF_MIN_BEGRUENDUNG,
+  DienstFehler,
+  gueltigerNachweisDateiname,
+  type Akteur,
+} from '@tcms/contract';
+import { leseDatei } from '@tcms/db/demo-ablage';
+import type { AnzeigeStatus, Klasse } from '@tcms/domain';
+import {
+  bestaetigeDurchfuehrung as dienstBestaetige,
+  entferneNachweis as dienstEntferneNachweis,
+  haengeNachweisAn as dienstHaengeNachweisAn,
+  imDienst,
+  ladeDurchfuehrung,
+  ladeKontrollaufgabe,
+  reicheDurchfuehrungEin as dienstReicheEin,
+  speichereDurchfuehrung as dienstSpeichere,
+  verweisAblage,
+  weiseDurchfuehrungZurueck as dienstWeiseZurueck,
+  type DienstKontext,
+  type DienstPorts,
+  type NachweisVerweis,
+} from '@tcms/service';
+import {
   MAX_DATEI_BYTES,
-  normalisiereWerte,
   parseDezimal,
-  werteZeilen,
   type KennzahlDef,
   type Werte,
 } from '@/components/durchfuehrung/werte';
-import { kannPortalLesen, type NachweisVerweis } from '@tcms/service';
-import {
-  db,
-  demoAblage,
-  demoPersonen,
-  zustaendigkeit as mandantZustaendigkeit,
-  type Handelnde,
-} from './demo';
-import { aktualisiereMandant, KEIN_RECHT, mitAudit, type Protokoll } from './aktion';
+import { aktualisiereMandant } from './aktion';
+import { DEMO_PORTS, demoAblage, demoPersonen, zustaendigkeit } from './demo';
 import type { Ergebnis } from './ergebnis';
-import { kannBearbeiten, kannDurchfuehren, kannGegenzeichnen, kannWuerdigen } from './berechtigung';
-import { auditGrenze, heute, leseStand, tagesende } from './zeit';
-import type { KontrollZustaendigkeit } from '@tcms/service';
+import { brauchtKanzleiFuer, brauchtPortal } from './sitzung';
+import { leseStand } from './zeit';
+
+// =============================================================================
+// Kontrolldurchführung (S8, P2) in der Demo: dünne Hülle um @tcms/service.
+// Laden, Rechte und alle Handlungen prüft der Service (ADR 0001 §2); die Demo
+// bildet nur die JSON-Antwort auf die bisherigen Anzeige-Typen ab (Date,
+// Personen aus dem Demo-Verzeichnis, Zuständigkeit des Mandanten) und spielt
+// für Nachweise die kanzleikonsole: Sie legt Dateien lokal ab und reicht dem
+// Service nur den Verweis (ADR 0001 §6).
+// =============================================================================
+
+export { DF_MIN_BEFUND_KOMMENTAR as MIN_BEFUND_KOMMENTAR } from '@tcms/contract';
 
 /** Zuständigkeit eines Mandanten zur Anzeige (Demo-Verzeichnis); Rechte laufen über den Akteur. */
 export interface MandantZustaendigkeit {
@@ -30,34 +52,6 @@ export interface MandantZustaendigkeit {
   berufstraegerId: string;
   bearbeitungId: string;
 }
-
-// =============================================================================
-// Kontrolldurchführung (S8, P2): Laden der Detaildaten, Rechte je Handlung
-// und die Kernlogik der Handlungen, die Kanzlei (S8) und Portal (P2) teilen.
-// Die Server Actions in actions/durchfuehrung.ts und actions/portal-aufgabe.ts
-// sind dünne Hüllen um diese Funktionen; jede Änderung läuft über mitAudit.
-// =============================================================================
-
-const NUR_AKTUELL = 'Änderungen nur im aktuellen Stand möglich';
-
-type GespeicherterStatus =
-  | 'GEPLANT'
-  | 'IN_DURCHFUEHRUNG'
-  | 'ZUR_GEGENZEICHNUNG'
-  | 'ZURUECKGEWIESEN'
-  | 'OHNE_BEFUND'
-  | 'MIT_BEFUND'
-  | 'ENTFALLEN';
-const BEARBEITBAR: readonly GespeicherterStatus[] = ['IN_DURCHFUEHRUNG', 'ZURUECKGEWIESEN'];
-const OFFEN: readonly GespeicherterStatus[] = ['GEPLANT', 'IN_DURCHFUEHRUNG', 'ZURUECKGEWIESEN'];
-/** Audit-Aktionen, deren Akteur an der Durchführung beteiligt war (Vier-Augen). */
-const DURCHFUEHRUNGS_AKTIONEN = [
-  'tcms.durchfuehrung.begonnen',
-  'tcms.durchfuehrung.gespeichert',
-  'tcms.durchfuehrung.nachweis_hochgeladen',
-  'tcms.durchfuehrung.nachweis_entfernt',
-  'tcms.durchfuehrung.eingereicht',
-];
 
 export interface PersonInfo {
   id: string;
@@ -100,12 +94,49 @@ export interface DurchfuehrungKurz {
   anzeige: AnzeigeStatus;
 }
 
+export interface Recht {
+  erlaubt: boolean;
+  grund: string | null;
+}
+
+export interface DurchfuehrungRechte {
+  beginnen: Recht;
+  /** Schritte, Werte, Ergebnis, Nachweise (ggf. mit implizitem Beginn). */
+  bearbeiten: Recht;
+  gegenzeichnen: Recht;
+  mandantBestaetigen: Recht;
+  zurueckweisen: Recht;
+  entfallenBeantragen: Recht;
+  entfallenFreigeben: Recht;
+  entfallenAblehnen: Recht;
+  nachtrag: Recht;
+}
+
+export interface EinreichPruefung {
+  schritteErledigt: number;
+  schritteGesamt: number;
+  werteFehlend: string[];
+  ausserhalb: string[];
+  nachweise: number;
+  mindestNachweise: number;
+  ergebnis: 'OHNE_BEFUND' | 'MIT_BEFUND' | null;
+  kommentarFehlt: boolean;
+  maengel: string[];
+}
+
+type GespeicherterStatus =
+  | 'GEPLANT'
+  | 'IN_DURCHFUEHRUNG'
+  | 'ZUR_GEGENZEICHNUNG'
+  | 'ZURUECKGEWIESEN'
+  | 'OHNE_BEFUND'
+  | 'MIT_BEFUND'
+  | 'ENTFALLEN';
+
 export interface DurchfuehrungDetail {
   id: string;
   mandantId: string;
-  mandantName: string;
   mandant: MandantZustaendigkeit;
-  programmId: string;
   kontrolle: {
     id: string;
     code: string;
@@ -130,7 +161,6 @@ export interface DurchfuehrungDetail {
     designVon: string | null;
     designAm: Date | null;
   };
-  zustaendigkeit: KontrollZustaendigkeit;
   periodeLabel: string;
   periodeVon: Date;
   periodeBis: Date;
@@ -175,312 +205,85 @@ export interface DurchfuehrungDetail {
   /** Personen, die an der Durchführung mitgewirkt haben (dürfen nicht gegenzeichnen). */
   beteiligte: string[];
   personen: Record<string, PersonInfo>;
+  /** Rechte des Akteurs je Handlung (vom Service, zum aktuellen Stand). */
+  rechte: DurchfuehrungRechte;
+  /** Prüfung des gespeicherten Stands für das Einreichen (vom Service). */
+  pruefung: EinreichPruefung;
 }
 
 // ---------------------------------------------------------------------------
-// Dateiablage (gemeinsame Ablage aus @tcms/db, Layout <sha[0:2]>/<sha256>)
+// Abbildung der Service-Antwort (JSON) auf die Anzeige-Typen der Demo
 // ---------------------------------------------------------------------------
 
-/** Demo: legt eine Datei über den Ablage-Port ab (Dienst: nur Verweise, ADR 0001 §6). */
-export function legeNachweisdateiAb(
-  inhalt: Buffer,
-  dateiname: string,
-  mime: string,
-): Promise<NachweisVerweis> {
-  return demoAblage.annehmen({ art: 'DATEI', dateiname, mime, inhalt });
-}
+type DienstDetail = Awaited<ReturnType<typeof ladeDurchfuehrung>>;
+type DienstAufgabe = Awaited<ReturnType<typeof ladeKontrollaufgabe>>;
 
-/** Demo: liest eine abgelegte Datei und prüft dabei den SHA-256 (TS-09). */
-export function leseNachweisdatei(
-  n: Pick<NachweisVerweis, 'dokumentId' | 'sha256'>,
-): Promise<Buffer> {
-  return demoAblage.lese(n);
-}
+const zeit = (iso: string): Date => new Date(iso);
+const zeitN = (iso: string | null): Date | null => (iso ? new Date(iso) : null);
+const tag = (iso: string): Date => new Date(`${iso}T00:00:00.000Z`);
 
-// ---------------------------------------------------------------------------
-// Laden
-// ---------------------------------------------------------------------------
-
-function ladeRoh(id: string) {
-  return db.durchfuehrung.findUnique({
-    where: { id },
-    include: {
-      kontrolleStand: true,
-      kontrolle: {
-        include: {
-          programm: { include: { mandant: true } },
-          risiken: { include: { risiko: { include: { staende: true } } } },
-        },
-      },
-      nachweise: { orderBy: { hochgeladenAm: 'asc' } },
-      feststellungen: {
-        select: {
-          id: true,
-          nummer: true,
-          titel: true,
-          status: true,
-          schwere: true,
-          erfasstAm: true,
-        },
-        orderBy: { nummer: 'asc' },
-      },
-    },
-  });
-}
-
-const vorStand = (d: Date | null | undefined, ende: Date): Date | null =>
-  d && d.getTime() <= ende.getTime() ? d : null;
-
-function verlaufText(
-  aktion: string,
-  detail: Record<string, unknown>,
-  partei: 'KANZLEI' | 'MANDANT',
-): string {
-  const s = (k: string) => (typeof detail[k] === 'string' ? (detail[k] as string) : '');
-  switch (aktion) {
-    case 'tcms.durchfuehrung.begonnen':
-      return 'Durchführung begonnen';
-    case 'tcms.durchfuehrung.gespeichert':
-      return typeof detail['erledigt'] === 'number'
-        ? `Entwurf gespeichert (${detail['erledigt']} von ${detail['gesamt']} Schritten)`
-        : 'Entwurf gespeichert';
-    case 'tcms.durchfuehrung.nachweis_hochgeladen':
-      return `Nachweis hochgeladen: ${s('dateiname')}`;
-    case 'tcms.durchfuehrung.nachweis_entfernt':
-      return `Nachweis entfernt: ${s('dateiname')}`;
-    case 'tcms.durchfuehrung.eingereicht':
-      return partei === 'MANDANT' ? 'an die Kanzlei übermittelt' : 'zur Gegenzeichnung eingereicht';
-    case 'tcms.durchfuehrung.mandant_bestaetigt':
-      return 'Vollständigkeit bestätigt (zweite Person beim Mandanten)';
-    case 'tcms.durchfuehrung.gegengezeichnet':
-      return detail['ergebnis'] === 'MIT_BEFUND'
-        ? 'gegengezeichnet – abgeschlossen mit Befund'
-        : 'gegengezeichnet – abgeschlossen ohne Befund';
-    case 'tcms.durchfuehrung.zurueckgewiesen':
-      return `zurückgewiesen: ${s('begruendung')}`;
-    case 'tcms.durchfuehrung.entfallen_beantragt':
-      return `Entfallen beantragt: ${s('begruendung')}`;
-    case 'tcms.durchfuehrung.entfallen':
-      return 'Entfallen freigegeben';
-    case 'tcms.durchfuehrung.entfallen_abgelehnt':
-      return s('begruendung')
-        ? `Entfallen-Antrag abgelehnt: ${s('begruendung')}`
-        : 'Entfallen-Antrag zurückgezogen';
-    case 'tcms.durchfuehrung.nachtrag_angelegt':
-      return `Nachtrag angelegt: ${s('begruendung')}`;
-    case 'tcms.feststellung.erfasst':
-      return `Feststellung ${s('nummer')} erfasst`;
-    default: {
-      const teil = aktion.split('.').pop() ?? aktion;
-      return teil.replace(/_/g, ' ');
-    }
+function personenVerzeichnis(): Record<string, PersonInfo> {
+  const out: Record<string, PersonInfo> = {};
+  for (const p of demoPersonen.alle()) {
+    out[p.id] = { id: p.id, name: p.name, art: p.art, funktion: p.funktion };
   }
+  return out;
 }
 
-/** Lädt eine Durchführung mit allen Detaildaten zum Stichtag. */
-export async function ladeDurchfuehrungDetail(
-  id: string,
-  stand: Date,
-  historisch: boolean,
-): Promise<DurchfuehrungDetail | null> {
-  const d = await ladeRoh(id);
-  if (!d) return null;
-  const ende = tagesende(stand);
-  const ks = d.kontrolleStand;
-  const programm = d.kontrolle.programm;
-  const partei = ks.partei;
-
-  const personenRoh = demoPersonen
-    .alle()
-    .map((p) => ({ id: p.id, name: p.name, art: p.art, funktion: p.funktion }));
-  const [audit, letzteRoh, nachtraegeRoh, original] = await Promise.all([
-    db.auditEvent.findMany({
-      where: {
-        OR: [
-          { objektTyp: 'Durchfuehrung', objektId: id },
-          { detail: { path: ['durchfuehrungId'], equals: id } },
-          { detail: { path: ['nachtragZuId'], equals: id } },
-        ],
-      },
-      orderBy: { seq: 'desc' },
-    }),
-    db.durchfuehrung.findMany({
-      where: {
-        kontrolleId: d.kontrolleId,
-        id: { not: id },
-        periodeVon: { lt: d.periodeVon },
-        nachtragZuId: null,
-      },
-      orderBy: { periodeVon: 'desc' },
-      take: 3,
-    }),
-    db.durchfuehrung.findMany({ where: { nachtragZuId: id }, orderBy: { createdAt: 'asc' } }),
-    d.nachtragZuId
-      ? db.durchfuehrung.findUnique({
-          where: { id: d.nachtragZuId },
-          select: { id: true, periodeLabel: true },
-        })
-      : null,
-  ]);
-  const personen: Record<string, PersonInfo> = {};
-  for (const p of personenRoh) personen[p.id] = p;
-
-  const kurz = (x: (typeof letzteRoh)[number]): DurchfuehrungKurz => ({
-    id: x.id,
-    periodeLabel: x.periodeLabel,
-    anzeige: statusAm(x, stand),
-  });
-
-  // Audit-Zeitstempel sind echte Zeit (auditGrenze, zeit.ts).
-  const auditGrenzeMs = auditGrenze(stand).getTime();
-  const auditImStand = audit.filter((e) => e.at.getTime() <= auditGrenzeMs);
-  const letztesEreignis = (aktion: string) => auditImStand.find((e) => e.aktion === aktion) ?? null;
-
-  const verlauf: VerlaufEintrag[] = auditImStand.map((e) => ({
-    seq: e.seq,
-    at: e.at,
-    actorId: e.actorId,
-    actorName: e.actorName,
-    aktion: e.aktion,
-    text: verlaufText(e.aktion, (e.detail ?? {}) as Record<string, unknown>, partei),
-  }));
-  // Abgeleitete Zustände (nicht gespeichert, daher „System").
-  if (d.periodeBis.getTime() <= ende.getTime() && !d.ausserplanmaessig) {
-    verlauf.push({
-      seq: -1,
-      at: d.periodeBis,
-      actorId: null,
-      actorName: 'System',
-      aktion: 'system.faellig',
-      text: `fällig (Periodenende ${fmtDatum(d.periodeBis)})`,
-      system: true,
-    });
-  }
-  const anzeige = statusAm(d, stand);
-  if (anzeige === 'UEBERFAELLIG') {
-    verlauf.push({
-      seq: -2,
-      at: addTage(d.faelligAm, 1),
-      actorId: null,
-      actorName: 'System',
-      aktion: 'system.ueberfaellig',
-      text: `überfällig (Fälligkeit ${fmtDatum(d.faelligAm)} überschritten)`,
-      system: true,
-    });
-  }
-  verlauf.sort((a, b) => b.at.getTime() - a.at.getTime() || b.seq - a.seq);
-
-  const beteiligte = new Set<string>();
-  if (d.durchgefuehrtVon) beteiligte.add(d.durchgefuehrtVon);
-  for (const n of d.nachweise) beteiligte.add(n.hochgeladenVon);
-  for (const e of audit)
-    if (e.actorId && DURCHFUEHRUNGS_AKTIONEN.includes(e.aktion)) beteiligte.add(e.actorId);
-
-  const schritteDef = (ks.schritte as unknown as { titel: string; hinweis: string }[]) ?? [];
-  const antworten = Array.isArray(d.schritte)
-    ? (d.schritte as unknown as { erledigt?: boolean; kommentar?: string }[])
-    : [];
-  const nachweiseImStand = d.nachweise.filter((n) => n.hochgeladenAm.getTime() <= ende.getTime());
-  const bestaetigt = letztesEreignis('tcms.durchfuehrung.mandant_bestaetigt');
-  const zurueck = letztesEreignis('tcms.durchfuehrung.zurueckgewiesen');
-  const entfallenFrei = letztesEreignis('tcms.durchfuehrung.entfallen');
-
-  const risiken = d.kontrolle.risiken
-    .map((rk) => {
-      const st = [...rk.risiko.staende]
-        .filter((s) => s.gueltigAb.getTime() <= ende.getTime())
-        .sort((a, b) => b.gueltigAb.getTime() - a.gueltigAb.getTime())[0];
-      return {
-        id: rk.risiko.id,
-        code: rk.risiko.code,
-        titel: st?.titel ?? rk.risiko.code,
-        aktiv: rk.risiko.entscheidung === 'UEBERNOMMEN',
-      };
-    })
-    .filter((r) => r.aktiv)
-    .map(({ aktiv: _a, ...r }) => r)
-    .sort((a, b) => a.code.localeCompare(b.code));
-
-  const zustaendigkeit: KontrollZustaendigkeit = {
-    durchfuehrendId: ks.durchfuehrendId,
-    vertretungId: ks.vertretungId,
-    gegenzeichnerId: ks.gegenzeichnerId,
-    gegenzeichnungMandant: ks.gegenzeichnungMandant,
-    partei: ks.partei,
-  };
-
+function alsDetail(d: DienstDetail | DienstAufgabe): DurchfuehrungDetail {
+  const personen = personenVerzeichnis();
+  const z = zustaendigkeit(d.mandantId);
+  const kanzlei = 'verlauf' in d ? d : null;
+  const werte: Werte = {};
+  for (const w of d.werte)
+    werte[w.key] = { wert: w.wert, bemerkung: w.bemerkung, erklaert: w.erklaert };
+  const kurz = (x: { id: string; periodeLabel: string; anzeige: AnzeigeStatus }) => ({ ...x });
   return {
     id: d.id,
-    mandantId: programm.mandantId,
-    mandantName: programm.mandant.name,
+    mandantId: d.mandantId,
     mandant: {
-      id: programm.mandant.id,
-      berufstraegerId: mandantZustaendigkeit(programm.mandant.id).berufstraegerId ?? '',
-      bearbeitungId: mandantZustaendigkeit(programm.mandant.id).bearbeitungId ?? '',
+      id: d.mandantId,
+      berufstraegerId: z.berufstraegerId ?? '',
+      bearbeitungId: z.bearbeitungId ?? '',
     },
-    programmId: programm.id,
     kontrolle: {
-      id: d.kontrolle.id,
-      code: d.kontrolle.code,
-      standId: ks.id,
-      version: ks.version,
-      gueltigAb: ks.gueltigAb,
-      titel: ks.titel,
-      ziel: ks.ziel,
-      art: ks.art,
-      ausfuehrung: ks.ausfuehrung,
-      partei: ks.partei,
-      schluessel: ks.schluessel,
-      nachweis: ks.nachweis,
-      mindestNachweise: ks.mindestNachweise,
-      toleranzEur: ks.toleranzEur == null ? null : Number(ks.toleranzEur),
-      faelligNachTagen: ks.faelligNachTagen,
-      durchfuehrendId: ks.durchfuehrendId,
-      vertretungId: ks.vertretungId,
-      gegenzeichnerId: ks.gegenzeichnerId,
-      gegenzeichnungMandant: ks.gegenzeichnungMandant,
-      design: ks.design,
-      designVon: ks.designVon,
-      designAm: ks.designAm,
+      ...d.kontrolle,
+      gueltigAb: zeit(d.kontrolle.gueltigAb),
+      design: kanzlei?.kontrolle.design ?? 'NICHT_BEURTEILT',
+      designVon: kanzlei?.kontrolle.designVon ?? null,
+      designAm: zeitN(kanzlei?.kontrolle.designAm ?? null),
     },
-    zustaendigkeit,
     periodeLabel: d.periodeLabel,
-    periodeVon: d.periodeVon,
-    periodeBis: d.periodeBis,
-    faelligAm: d.faelligAm,
+    periodeVon: tag(d.periodeVon),
+    periodeBis: tag(d.periodeBis),
+    faelligAm: tag(d.faelligAm),
     status: d.status,
-    anzeige,
+    anzeige: d.anzeige,
     ausserplanmaessig: d.ausserplanmaessig,
-    anlass: d.anlass,
-    schritte: schritteDef.map((s, i) => ({
-      titel: s.titel,
-      hinweis: s.hinweis,
-      erledigt: antworten[i]?.erledigt === true,
-      kommentar: typeof antworten[i]?.kommentar === 'string' ? antworten[i]!.kommentar! : '',
-    })),
-    kennzahlen: (ks.kennzahlen as unknown as KennzahlDef[]) ?? [],
-    werte: normalisiereWerte(d.werte),
+    anlass: kanzlei?.anlass ?? null,
+    schritte: d.schritte,
+    kennzahlen: d.kontrolle.kennzahlen,
+    werte,
     ergebnis: d.ergebnis,
     ergebnisKommentar: d.ergebnisKommentar,
     durchgefuehrtVon: d.durchgefuehrtVon,
-    begonnenAm: historisch ? vorStand(d.begonnenAm, ende) : d.begonnenAm,
-    eingereichtAm: historisch ? vorStand(d.eingereichtAm, ende) : d.eingereichtAm,
-    mandantBestaetigtVon: bestaetigt || !historisch ? d.mandantBestaetigtVon : null,
-    mandantBestaetigtAm: bestaetigt?.at ?? null,
-    gegengezeichnetVon:
-      historisch && !vorStand(d.abgeschlossenAm, ende) ? null : d.gegengezeichnetVon,
-    abgeschlossenAm: historisch ? vorStand(d.abgeschlossenAm, ende) : d.abgeschlossenAm,
+    begonnenAm: zeitN(d.begonnenAm),
+    eingereichtAm: zeitN(d.eingereichtAm),
+    mandantBestaetigtVon: d.mandantBestaetigtVon,
+    mandantBestaetigtAm: zeitN(d.mandantBestaetigtAm),
+    gegengezeichnetVon: d.gegengezeichnetVon,
+    abgeschlossenAm: zeitN(d.abgeschlossenAm),
     zurueckgewiesenVon: d.zurueckgewiesenVon,
-    zurueckgewiesenAm: zurueck?.at ?? null,
+    zurueckgewiesenAm: zeitN(d.zurueckgewiesenAm),
     zurueckweisungsgrund: d.zurueckweisungsgrund,
     entfallenBegruendung: d.entfallenBegruendung,
-    entfallenVon: d.entfallenVon,
-    entfallenAm: historisch ? vorStand(d.entfallenAm, ende) : d.entfallenAm,
-    entfallenFreigegebenVon: entfallenFrei?.actorId ?? null,
-    nachtragZuId: d.nachtragZuId,
-    createdAt: d.createdAt,
-    vorhandenZumStand: !(d.ausserplanmaessig && d.createdAt.getTime() > ende.getTime()),
-    nachweise: nachweiseImStand.map((n) => ({
+    entfallenVon: kanzlei?.entfallenVon ?? null,
+    entfallenAm: zeitN(d.entfallenAm),
+    entfallenFreigegebenVon: kanzlei?.entfallenFreigegebenVon ?? null,
+    nachtragZuId: kanzlei?.nachtragZuId ?? null,
+    createdAt: zeit(d.createdAt),
+    vorhandenZumStand: d.vorhandenZumStand,
+    nachweise: d.nachweise.map((n) => ({
       id: n.id,
       dateiname: n.dateiname,
       mime: n.mime,
@@ -488,28 +291,90 @@ export async function ladeDurchfuehrungDetail(
       sha256: n.sha256,
       gesperrt: n.gesperrt,
       hochgeladenVon: n.hochgeladenVon,
-      hochgeladenAm: n.hochgeladenAm,
+      hochgeladenAm: zeit(n.hochgeladenAm),
     })),
-    nachweiseAusgeblendet: d.nachweise.length - nachweiseImStand.length,
-    feststellungen: d.feststellungen
-      .filter((f) => f.erfasstAm.getTime() <= ende.getTime())
-      .map((f) => ({
-        id: f.id,
-        nummer: f.nummer,
-        titel: f.titel,
-        status: f.status,
-        schwere: f.schwere,
-      })),
-    risiken,
-    letzte: letzteRoh
-      .filter((x) => !(x.ausserplanmaessig && x.createdAt.getTime() > ende.getTime()))
-      .map(kurz),
-    nachtraege: nachtraegeRoh.filter((x) => x.createdAt.getTime() <= ende.getTime()).map(kurz),
-    original: original ?? null,
-    verlauf,
-    beteiligte: [...beteiligte],
+    nachweiseAusgeblendet: d.nachweiseAusgeblendet,
+    feststellungen: (kanzlei?.feststellungen ?? []).map((f) => ({
+      id: f.id,
+      nummer: f.nummer,
+      titel: f.titel,
+      status: f.status,
+      schwere: f.schwere,
+    })),
+    risiken: kanzlei?.risiken ?? [],
+    letzte: (kanzlei?.letzte ?? []).map(kurz),
+    nachtraege: (kanzlei?.nachtraege ?? []).map(kurz),
+    original: d.original,
+    verlauf: (kanzlei?.verlauf ?? []).map((v) => ({
+      seq: v.seq,
+      at: zeit(v.at),
+      actorId: v.actorId,
+      actorName: v.system ? 'System' : ((v.actorId && personen[v.actorId]?.name) ?? '—'),
+      aktion: v.aktion,
+      text: v.text,
+      system: v.system,
+    })),
+    beteiligte: kanzlei?.beteiligte ?? [],
     personen,
+    rechte: d.rechte,
+    pruefung: d.pruefung,
   };
+}
+
+/** Optionen der Demo-Transaktionen (wie `mitAudit` der Demo). */
+const DEMO_TX = { timeoutMs: 30_000, maxWaitMs: 10_000 };
+
+/** Führt `fn` im Dienstkontext des Demo-Akteurs aus (Ports der Demo oder abweichend). */
+export function imDemoDienst<T>(
+  akteur: Akteur,
+  fn: (ctx: DienstKontext) => Promise<T>,
+  ports: DienstPorts = DEMO_PORTS,
+): Promise<T> {
+  return imDienst(akteur, ports, fn, DEMO_TX);
+}
+
+/**
+ * Lädt eine Kontrolldurchführung (Kanzlei, S8) über den Service. Nicht
+ * sichtbar (fremder Mandant, unbekannt, ungültig) → null (Seite: 404).
+ */
+export async function ladeDurchfuehrungDetail(
+  akteur: Akteur,
+  mandantId: string,
+  id: string,
+  stand?: string,
+): Promise<DurchfuehrungDetail | null> {
+  try {
+    const d = await imDemoDienst(akteur, (ctx) =>
+      ladeDurchfuehrung(ctx, { mandantId, durchfuehrungId: id, ...(stand ? { stand } : {}) }),
+    );
+    return alsDetail(d);
+  } catch (e) {
+    if (e instanceof DienstFehler && (e.code === 'NICHT_GEFUNDEN' || e.code === 'UNGUELTIG'))
+      return null;
+    throw e;
+  }
+}
+
+/** Lädt eine Kontrollaufgabe im Portal (P2) für den Mandantenkontakt; nicht sichtbar → null. */
+export async function ladeAufgabeDetail(
+  akteur: Extract<Akteur, { art: 'MANDANT' }>,
+  id: string,
+  stand?: string,
+): Promise<DurchfuehrungDetail | null> {
+  try {
+    const d = await imDemoDienst(akteur, (ctx) =>
+      ladeKontrollaufgabe(ctx, {
+        mandantId: akteur.mandantId,
+        durchfuehrungId: id,
+        ...(stand ? { stand } : {}),
+      }),
+    );
+    return alsDetail(d);
+  } catch (e) {
+    if (e instanceof DienstFehler && (e.code === 'NICHT_GEFUNDEN' || e.code === 'UNGUELTIG'))
+      return null;
+    throw e;
+  }
 }
 
 export function personName(
@@ -543,665 +408,299 @@ export function ohneInhalte(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Prüfung der Einreichung (gespeicherter bzw. übergebener Stand)
-// ---------------------------------------------------------------------------
-
-export interface EinreichPruefung {
-  schritteErledigt: number;
-  schritteGesamt: number;
-  werteFehlend: string[];
-  ausserhalb: string[];
-  nachweise: number;
-  mindestNachweise: number;
-  ergebnis: 'OHNE_BEFUND' | 'MIT_BEFUND' | null;
-  kommentarFehlt: boolean;
-  maengel: string[];
-}
-
-export const MIN_BEFUND_KOMMENTAR = 20;
-
-export function pruefeEinreichung(x: {
-  schritte: { erledigt: boolean }[];
-  kennzahlen: KennzahlDef[];
-  werte: Werte;
-  toleranzEur: number | null;
-  nachweise: number;
-  mindestNachweise: number;
-  ergebnis: 'OHNE_BEFUND' | 'MIT_BEFUND' | null;
-  ergebnisKommentar: string | null;
-}): EinreichPruefung {
-  const erledigt = x.schritte.filter((s) => s.erledigt).length;
-  const werteFehlend = fehlendeWerte(x.kennzahlen, x.werte);
-  const ausserhalb = werteZeilen(x.kennzahlen, x.werte, x.toleranzEur)
-    .filter((z) => z.lage === 'AUSSERHALB')
-    .map((z) => z.def.label);
-  const kommentarFehlt =
-    x.ergebnis === 'MIT_BEFUND' && (x.ergebnisKommentar ?? '').trim().length < MIN_BEFUND_KOMMENTAR;
-  const maengel: string[] = [];
-  if (erledigt < x.schritte.length)
-    maengel.push(`${x.schritte.length - erledigt} von ${x.schritte.length} Schritten offen`);
-  if (werteFehlend.length) maengel.push(`Werte fehlen: ${werteFehlend.join(', ')}`);
-  if (ausserhalb.length && x.ergebnis !== 'MIT_BEFUND')
-    maengel.push(`Abweichung außerhalb der Toleranz ohne Erklärung: ${ausserhalb.join(', ')}`);
-  if (x.nachweise < x.mindestNachweise)
-    maengel.push(`Nachweise: ${x.nachweise} von mindestens ${x.mindestNachweise}`);
-  if (!x.ergebnis) maengel.push('Ergebnis nicht gewählt');
-  if (kommentarFehlt)
-    maengel.push(`Befund beschreiben (mindestens ${MIN_BEFUND_KOMMENTAR} Zeichen)`);
-  return {
-    schritteErledigt: erledigt,
-    schritteGesamt: x.schritte.length,
-    werteFehlend,
-    ausserhalb,
-    nachweise: x.nachweise,
-    mindestNachweise: x.mindestNachweise,
-    ergebnis: x.ergebnis,
-    kommentarFehlt,
-    maengel,
-  };
-}
-
+/** Prüfung des gespeicherten Stands für das Einreichen (berechnet im Service). */
 export function pruefungAus(d: DurchfuehrungDetail): EinreichPruefung {
-  return pruefeEinreichung({
-    schritte: d.schritte,
-    kennzahlen: d.kennzahlen,
-    werte: d.werte,
-    toleranzEur: d.kontrolle.toleranzEur,
-    nachweise: d.nachweise.length,
-    mindestNachweise: d.kontrolle.mindestNachweise,
-    ergebnis: d.ergebnis,
-    ergebnisKommentar: d.ergebnisKommentar,
-  });
+  return d.pruefung;
 }
 
 // ---------------------------------------------------------------------------
-// Rechte je Handlung (serverseitig in jeder Action geprüft, in der UI für
-// disabled + Tooltip verwendet)
+// Helfer der Server Actions
 // ---------------------------------------------------------------------------
-
-export interface Recht {
-  erlaubt: boolean;
-  grund: string | null;
-}
-
-export interface DurchfuehrungRechte {
-  beginnen: Recht;
-  /** Schritte, Werte, Ergebnis, Nachweise (ggf. mit implizitem Beginn). */
-  bearbeiten: Recht;
-  gegenzeichnen: Recht;
-  mandantBestaetigen: Recht;
-  zurueckweisen: Recht;
-  entfallenBeantragen: Recht;
-  entfallenFreigeben: Recht;
-  entfallenAblehnen: Recht;
-  nachtrag: Recht;
-}
-
-const ja: Recht = { erlaubt: true, grund: null };
-const nein = (grund: string): Recht => ({ erlaubt: false, grund });
-
-function statusGrund(s: GespeicherterStatus): string {
-  switch (s) {
-    case 'ZUR_GEGENZEICHNUNG':
-      return 'Einreichung liegt vor — keine Änderung mehr möglich';
-    case 'OHNE_BEFUND':
-    case 'MIT_BEFUND':
-      return 'Abgeschlossen — unveränderlich; Korrekturen entstehen als Nachtrag';
-    case 'ENTFALLEN':
-      return 'Entfallen — keine Änderung möglich';
-    case 'GEPLANT':
-      return 'Durchführung noch nicht begonnen';
-    default:
-      return 'In diesem Status nicht möglich';
-  }
-}
-
-/** Portal: Lesen für gesetzliche Vertreter, Tax-Compliance-Beauftragte und zugewiesene Personen. */
-export interface PortalLeseBezug {
-  mandantId: string;
-  kontrolle: Pick<
-    DurchfuehrungDetail['kontrolle'],
-    'partei' | 'durchfuehrendId' | 'vertretungId' | 'gegenzeichnerId'
-  >;
-}
-
-export function darfPortalLesen(n: Handelnde, d: PortalLeseBezug): boolean {
-  if (n.art !== 'MANDANT' || n.mandantId !== d.mandantId) return false;
-  if (d.kontrolle.partei !== 'MANDANT') return false;
-  // Ohne aktive Rolle beim Mandanten kein Zugriff (ADR 0001 §5).
-  if (!n.rollen.some((r) => r.aktiv && r.mandantId === d.mandantId && r.kontaktId === n.id))
-    return false;
-  if (kannPortalLesen(n, d.mandantId, n.rollen)) return true;
-  return [
-    d.kontrolle.durchfuehrendId,
-    d.kontrolle.vertretungId,
-    d.kontrolle.gegenzeichnerId,
-  ].includes(n.id);
-}
-
-function durchfuehrenGrund(n: Handelnde, d: DurchfuehrungDetail): string {
-  if (d.kontrolle.partei === 'MANDANT' && n.art === 'KANZLEI')
-    return 'Diese Kontrolle führt der Mandant im Portal durch';
-  if (d.kontrolle.partei === 'KANZLEI' && n.art === 'MANDANT')
-    return 'Diese Kontrolle führt die Kanzlei durch';
-  return `Durchführung durch ${personName(d, d.kontrolle.durchfuehrendId)} oder Vertretung ${personName(d, d.kontrolle.vertretungId)}`;
-}
-
-export function rechteFuer(
-  n: Handelnde,
-  d: DurchfuehrungDetail,
-  historisch: boolean,
-): DurchfuehrungRechte {
-  const m = d.mandant;
-  const darfDurchfuehren = kannDurchfuehren(n, d.zustaendigkeit, d.mandantId, n.rollen);
-  const beteiligt = d.beteiligte.includes(n.id);
-  const vierAugen = 'Gegenzeichnung muss durch eine andere Person erfolgen (Vier-Augen-Prinzip)';
-
-  const beginnen = ((): Recht => {
-    if (historisch) return nein(NUR_AKTUELL);
-    if (d.status !== 'GEPLANT')
-      return nein(BEARBEITBAR.includes(d.status) ? 'Bereits begonnen' : statusGrund(d.status));
-    if (d.anzeige === 'GEPLANT')
-      return nein(`Periode endet am ${fmtDatum(d.periodeBis)} — Beginn danach möglich`);
-    if (!darfDurchfuehren) return nein(durchfuehrenGrund(n, d));
-    return ja;
-  })();
-
-  const bearbeiten = ((): Recht => {
-    if (historisch) return nein(NUR_AKTUELL);
-    if (d.status === 'GEPLANT') return beginnen;
-    if (!BEARBEITBAR.includes(d.status)) return nein(statusGrund(d.status));
-    if (!darfDurchfuehren) return nein(durchfuehrenGrund(n, d));
-    return ja;
-  })();
-
-  /** Kanzlei-Gegenzeichnung (bei Mandanten-Gegenzeichnung: Abschluss nach der Bestätigung). */
-  const kanzleiPruefer = ((): Recht => {
-    if (historisch) return nein(NUR_AKTUELL);
-    if (d.status !== 'ZUR_GEGENZEICHNUNG')
-      return nein(
-        d.status === 'OHNE_BEFUND' || d.status === 'MIT_BEFUND'
-          ? 'Bereits gegengezeichnet'
-          : 'Nur für eingereichte Durchführungen',
-      );
-    if (n.art !== 'KANZLEI') return nein('Abschluss durch die Kanzlei');
-    if (beteiligt) return nein(vierAugen);
-    // Abschluss durch die Kanzlei; die ausstehende Mandanten-Bestätigung prüft `gegenzeichnen` gesondert.
-    const g = kannGegenzeichnen(n, d.zustaendigkeit, m, d.durchgefuehrtVon, true, n.rollen);
-    return g.erlaubt ? ja : nein(g.grund ?? KEIN_RECHT);
-  })();
-
-  const gegenzeichnen = ((): Recht => {
-    if (!kanzleiPruefer.erlaubt) return kanzleiPruefer;
-    if (d.kontrolle.gegenzeichnungMandant && !d.mandantBestaetigtVon)
-      return nein('Bestätigung durch eine zweite Person beim Mandanten steht aus');
-    return ja;
-  })();
-
-  const mandantBestaetigen = ((): Recht => {
-    if (historisch) return nein(NUR_AKTUELL);
-    if (!d.kontrolle.gegenzeichnungMandant)
-      return nein('Für diese Kontrolle ist keine Bestätigung beim Mandanten vorgesehen');
-    if (d.status !== 'ZUR_GEGENZEICHNUNG') return nein('Nur für übermittelte Aufgaben');
-    if (d.mandantBestaetigtVon)
-      return nein(`Bereits bestätigt durch ${personName(d, d.mandantBestaetigtVon)}`);
-    if (n.art !== 'MANDANT' || !darfPortalLesen(n, d))
-      return nein('Bestätigung durch eine zweite Person beim Mandanten');
-    if (beteiligt)
-      return nein(
-        'Die Bestätigung erfolgt durch eine zweite Person, nicht durch die durchführende',
-      );
-    const g = kannGegenzeichnen(n, d.zustaendigkeit, m, d.durchgefuehrtVon, false, n.rollen);
-    return g.erlaubt ? ja : nein(g.grund ?? KEIN_RECHT);
-  })();
-
-  const zurueckweisen = n.art === 'KANZLEI' ? kanzleiPruefer : mandantBestaetigen;
-
-  const hatAntrag = d.status !== 'ENTFALLEN' && !!d.entfallenBegruendung;
-  const entfallenBeantragen = ((): Recht => {
-    if (historisch) return nein(NUR_AKTUELL);
-    if (n.art !== 'KANZLEI') return nein(KEIN_RECHT);
-    if (!OFFEN.includes(d.status))
-      return nein(
-        d.status === 'ZUR_GEGENZEICHNUNG'
-          ? 'Eingereicht — zuerst zurückweisen'
-          : statusGrund(d.status),
-      );
-    if (hatAntrag) return nein('Ein Antrag liegt bereits vor');
-    if (!darfDurchfuehren && !kannBearbeiten(n, m)) return nein(KEIN_RECHT);
-    return ja;
-  })();
-  const entfallenFreigeben = ((): Recht => {
-    if (historisch) return nein(NUR_AKTUELL);
-    if (!hatAntrag) return nein('Kein Antrag offen');
-    if (!kannWuerdigen(n, m))
-      return nein('Freigabe durch die zuständige Berufsträgerin bzw. den zuständigen Berufsträger');
-    if (n.id === d.entfallenVon) return nein('Freigabe durch eine zweite Person');
-    return ja;
-  })();
-  const entfallenAblehnen = ((): Recht => {
-    if (historisch) return nein(NUR_AKTUELL);
-    if (!hatAntrag) return nein('Kein Antrag offen');
-    if (n.id === d.entfallenVon) return ja;
-    return entfallenFreigeben;
-  })();
-
-  const nachtrag = ((): Recht => {
-    if (historisch) return nein(NUR_AKTUELL);
-    if (n.art !== 'KANZLEI') return nein(KEIN_RECHT);
-    if (d.status !== 'OHNE_BEFUND' && d.status !== 'MIT_BEFUND')
-      return nein('Nachträge nur zu abgeschlossenen Durchführungen');
-    if (!darfDurchfuehren && !kannBearbeiten(n, m)) return nein(KEIN_RECHT);
-    return ja;
-  })();
-
-  return {
-    beginnen,
-    bearbeiten,
-    gegenzeichnen,
-    mandantBestaetigen,
-    zurueckweisen,
-    entfallenBeantragen,
-    entfallenFreigeben,
-    entfallenAblehnen,
-    nachtrag,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Kernlogik der gemeinsamen Handlungen
-// ---------------------------------------------------------------------------
-
-/** Fachlicher Abbruch innerhalb einer Transaktion (wird zu { fehler }). */
-export class Abbruch extends Error {}
 
 export function text(fd: FormData, key: string): string {
   const v = fd.get(key);
   return typeof v === 'string' ? v : '';
 }
 
-/** true, wenn das Formular aus einem historischen Stand gesendet wurde. */
+/** true, wenn das Formular aus einem historischen Stand gesendet wurde (Bedienung; der Service nimmt keinen Stichtag an). */
 export function ausHistorischemStand(fd: FormData): boolean {
   const s = text(fd, 'stand');
   return !!s && leseStand(s).historisch;
 }
 
-/** Lädt den aktuellen Stand (heute) für eine Action. */
-export async function ladeFuerAktion(id: string): Promise<DurchfuehrungDetail | null> {
-  if (!id) return null;
-  return ladeDurchfuehrungDetail(id, heute(), false);
-}
-
-export async function fuehreAus(fn: () => Promise<Ergebnis>): Promise<Ergebnis> {
-  try {
-    return await fn();
-  } catch (e) {
-    if (e instanceof Abbruch) return { fehler: e.message };
-    if (e && typeof e === 'object' && 'code' in e && (e as { code?: string }).code === 'P2002') {
-      return {
-        fehler: 'Gleichzeitige Änderung erkannt. Bitte die Seite neu laden und erneut versuchen.',
-      };
-    }
-    throw e;
+/**
+ * Fehler des Service als Meldung der Action. Nicht sichtbare Objekte ergeben
+ * immer dieselbe Meldung; andere Fehler werden weitergeworfen.
+ */
+export function alsErgebnis(e: unknown, nichtGefunden: string): Ergebnis {
+  if (!(e instanceof DienstFehler)) throw e;
+  if (e.code === 'NICHT_GEFUNDEN') return { fehler: nichtGefunden };
+  if (e.code === 'UNGUELTIG' && e.felder) {
+    const details = Object.values(e.felder).flat();
+    return {
+      fehler: details.length
+        ? `${e.message.replace(/\.$/, '')}: ${details.join(', ')}.`
+        : e.message,
+    };
   }
+  return { fehler: e.message === e.code ? 'Aktion nicht möglich.' : e.message };
 }
 
-async function statusSperre(
-  tx: Tx,
-  id: string,
-  erlaubt: readonly GespeicherterStatus[],
-): Promise<void> {
-  // Zeilensperre, damit parallele Handlungen denselben Übergang nicht doppelt ausführen.
-  await tx.$queryRaw`SELECT id FROM "Durchfuehrung" WHERE id = ${id} FOR UPDATE`;
-  const akt = await tx.durchfuehrung.findUnique({ where: { id }, select: { status: true } });
-  if (!akt || !erlaubt.includes(akt.status))
-    throw new Abbruch('Der Status hat sich zwischenzeitlich geändert. Bitte die Seite neu laden.');
-}
+// ---------------------------------------------------------------------------
+// Nachweise: Demo als kanzleikonsole (Dateiablage), Service nur mit Verweis
+// ---------------------------------------------------------------------------
 
-function protokoll(
-  d: DurchfuehrungDetail,
-  aktion: string,
-  detail: Record<string, unknown> = {},
-  objekt?: { typ: string; id: string },
-): Protokoll {
-  return {
-    aktion,
-    objektTyp: objekt?.typ ?? 'Durchfuehrung',
-    objektId: objekt?.id ?? d.id,
-    programmId: d.programmId,
-    detail: { kontrolle: d.kontrolle.code, periode: d.periodeLabel, ...detail },
-  };
-}
+/** Ports der Demo für das Anhängen: Der Service erhält nur Verweise (ADR 0001 §6). */
+export const VERWEIS_PORTS: DienstPorts = { ...DEMO_PORTS, ablage: verweisAblage };
 
-/** Status GEPLANT → IN_DURCHFUEHRUNG (explizit oder implizit beim ersten Speichern/Upload). */
-async function beginneInTx(
-  tx: Tx,
-  d: DurchfuehrungDetail,
-  nutzer: Handelnde,
-  zeitpunkt: Date,
-): Promise<Protokoll> {
-  await tx.durchfuehrung.update({
-    where: { id: d.id },
-    data: {
-      status: 'IN_DURCHFUEHRUNG',
-      begonnenAm: zeitpunkt,
-      durchgefuehrtVon: nutzer.id,
-      schritte: d.schritte.map((s) => ({
-        erledigt: s.erledigt,
-        kommentar: s.kommentar,
-      })) as unknown as Prisma.InputJsonValue,
-    },
-  });
-  return protokoll(d, 'tcms.durchfuehrung.begonnen');
-}
-
-export async function kernBeginnen(nutzer: Handelnde, fd: FormData): Promise<Ergebnis> {
-  return fuehreAus(async () => {
-    if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
-    const d = await ladeFuerAktion(text(fd, 'id'));
-    if (!d) return { fehler: 'Durchführung nicht gefunden.' };
-    const r = rechteFuer(nutzer, d, false).beginnen;
-    if (!r.erlaubt) return { fehler: r.grund ?? KEIN_RECHT };
-    await mitAudit(nutzer, async (tx, zeitpunkt) => {
-      await statusSperre(tx, d.id, ['GEPLANT']);
-      return { wert: null, protokoll: await beginneInTx(tx, d, nutzer, zeitpunkt) };
-    });
-    aktualisiereMandant(d.mandantId);
-    return { ok: 'Durchführung begonnen.' };
-  });
-}
-
-/** Schritte, Werte und Ergebnis speichern; mit absicht=einreichen zusätzlich prüfen und einreichen. */
-export async function kernSpeichern(nutzer: Handelnde, fd: FormData): Promise<Ergebnis> {
-  return fuehreAus(async () => {
-    if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
-    const d = await ladeFuerAktion(text(fd, 'id'));
-    if (!d) return { fehler: 'Durchführung nicht gefunden.' };
-    const r = rechteFuer(nutzer, d, false).bearbeiten;
-    if (!r.erlaubt) return { fehler: r.grund ?? KEIN_RECHT };
-    const einreichen = text(fd, 'absicht') === 'einreichen';
-
-    const schritte = d.schritte.map((_, i) => ({
-      erledigt: fd.get(`schritt_${i}_erledigt`) === 'on',
-      kommentar: text(fd, `schritt_${i}_kommentar`).trim().slice(0, 2000),
-    }));
-    const werte: Werte = {};
-    const unlesbar: string[] = [];
-    for (const k of d.kennzahlen) {
-      const bemerkung = text(fd, `bemerkung_${k.key}`).trim().slice(0, 1000);
-      const erklaert = fd.get(`erklaert_${k.key}`) === 'on';
-      if (k.differenzAus) {
-        werte[k.key] = { wert: null, bemerkung, erklaert };
-        continue;
-      }
-      const w = parseDezimal(text(fd, `wert_${k.key}`));
-      if (w === 'fehler') unlesbar.push(k.label);
-      else werte[k.key] = { wert: w, bemerkung, erklaert };
-    }
-    if (unlesbar.length)
-      return { fehler: `Bitte Beträge im Format 1.234,56 eingeben: ${unlesbar.join(', ')}.` };
-    const e = text(fd, 'ergebnis');
-    const ergebnis = e === 'OHNE_BEFUND' || e === 'MIT_BEFUND' ? e : null;
-    const ergebnisKommentar = text(fd, 'ergebnisKommentar').trim().slice(0, 4000) || null;
-    const kanal = nutzer.art === 'MANDANT' ? 'Portal' : 'Kanzlei';
-
-    const maengel = await mitAudit(nutzer, async (tx, zeitpunkt) => {
-      await statusSperre(tx, d.id, d.status === 'GEPLANT' ? ['GEPLANT'] : BEARBEITBAR);
-      const protokolle: Protokoll[] = [];
-      if (d.status === 'GEPLANT') protokolle.push(await beginneInTx(tx, d, nutzer, zeitpunkt));
-      await tx.durchfuehrung.update({
-        where: { id: d.id },
-        data: {
-          schritte: schritte as unknown as Prisma.InputJsonValue,
-          werte: werte as unknown as Prisma.InputJsonValue,
-          ergebnis,
-          ergebnisKommentar,
-        },
-      });
-      protokolle.push(
-        protokoll(d, 'tcms.durchfuehrung.gespeichert', {
-          erledigt: schritte.filter((s) => s.erledigt).length,
-          gesamt: schritte.length,
-          werte: Object.values(werte).filter((w) => w.wert != null).length,
-          ergebnis,
-          kanal,
-        }),
-      );
-      if (!einreichen) return { wert: [] as string[], protokoll: protokolle };
-
-      const nachweise = await tx.nachweis.findMany({
-        where: { durchfuehrungId: d.id },
-        orderBy: { hochgeladenAm: 'asc' },
-      });
-      const p = pruefeEinreichung({
-        schritte,
-        kennzahlen: d.kennzahlen,
-        werte,
-        toleranzEur: d.kontrolle.toleranzEur,
-        nachweise: nachweise.length,
-        mindestNachweise: d.kontrolle.mindestNachweise,
-        ergebnis,
-        ergebnisKommentar,
-      });
-      if (p.maengel.length) return { wert: p.maengel, protokoll: protokolle };
-      await tx.durchfuehrung.update({
-        where: { id: d.id },
-        data: {
-          status: 'ZUR_GEGENZEICHNUNG',
-          eingereichtAm: zeitpunkt,
-          durchgefuehrtVon: nutzer.id,
-          mandantBestaetigtVon: null,
-        },
-      });
-      await tx.nachweis.updateMany({ where: { durchfuehrungId: d.id }, data: { gesperrt: true } });
-      protokolle.push(
-        protokoll(d, 'tcms.durchfuehrung.eingereicht', {
-          ergebnis,
-          kanal,
-          nachweise: nachweise.map((n) => ({ id: n.id, dateiname: n.dateiname, sha256: n.sha256 })),
-        }),
-      );
-      return { wert: [] as string[], protokoll: protokolle };
-    });
-    aktualisiereMandant(d.mandantId);
-    if (einreichen && maengel.length)
-      return {
-        fehler: `Entwurf gespeichert, aber noch nicht eingereicht: ${maengel.join(' · ')}.`,
-      };
-    if (einreichen) {
-      if (nutzer.art === 'MANDANT') {
-        return {
-          ok: d.kontrolle.gegenzeichnungMandant
-            ? 'Übermittelt. Eine zweite Person bei Ihnen bestätigt nun die Vollständigkeit.'
-            : 'An die Kanzlei übermittelt. Die Nachweise sind jetzt gesperrt.',
-        };
-      }
-      return { ok: 'Zur Gegenzeichnung eingereicht. Die Nachweise sind jetzt gesperrt.' };
-    }
-    return { ok: 'Entwurf gespeichert.' };
-  });
-}
+const RICHTUNG_UND_STEUER = /[\u0000-\u001f\u007f"\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+const MIME = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/;
 
 function dateinameBereinigt(name: string): string {
   const basis = name.split(/[\\/]/).pop() ?? '';
-  const sauber = basis
-    .replace(/[\u0000-\u001f\u007f"]/g, '')
-    .trim()
-    .slice(0, 180);
-  return sauber || 'Nachweis';
+  const sauber = basis.replace(RICHTUNG_UND_STEUER, '').trim().slice(0, 180);
+  return sauber && gueltigerNachweisDateiname(sauber) ? sauber : 'Nachweis';
 }
 
 function mimeBereinigt(typ: string): string {
-  return /^[\w.+-]+\/[\w.+-]+$/.test(typ) ? typ.toLowerCase() : 'application/octet-stream';
+  const t = typ.toLowerCase();
+  return t.length <= 127 && MIME.test(t) ? t : 'application/octet-stream';
 }
 
-export async function kernHochladen(nutzer: Handelnde, fd: FormData): Promise<Ergebnis> {
-  return fuehreAus(async () => {
-    if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
-    const dateien = fd
-      .getAll('dateien')
-      .filter(
-        (f): f is File =>
-          typeof f === 'object' && f !== null && 'arrayBuffer' in f && (f as File).size > 0,
-      );
-    if (dateien.length === 0) return { fehler: 'Bitte mindestens eine Datei auswählen.' };
-    const zuGross = dateien.filter((f) => f.size > MAX_DATEI_BYTES);
-    if (zuGross.length)
-      return { fehler: `Höchstens 20 MB je Datei: ${zuGross.map((f) => f.name).join(', ')}.` };
-    if (dateien.reduce((s, f) => s + f.size, 0) > MAX_DATEI_BYTES)
-      return { fehler: 'Höchstens 20 MB je Upload. Bitte größere Dateien einzeln hochladen.' };
-    const d = await ladeFuerAktion(text(fd, 'id'));
-    if (!d) return { fehler: 'Durchführung nicht gefunden.' };
-    const r = rechteFuer(nutzer, d, false).bearbeiten;
-    if (!r.erlaubt) return { fehler: r.grund ?? KEIN_RECHT };
+/**
+ * Demo-Ablage (Stellvertreterin der Dokumentenpipeline der kanzleikonsole):
+ * legt die Datei inhaltsadressiert ab und vergibt eine Dokument-ID (UUID).
+ * Der Service speichert nur den Verweis.
+ */
+export async function legeNachweisdateiAb(
+  inhalt: Buffer,
+  dateiname: string,
+  mime: string,
+): Promise<NachweisVerweis> {
+  const v = await demoAblage.annehmen({
+    art: 'DATEI',
+    dateiname: dateinameBereinigt(dateiname),
+    mime: mimeBereinigt(mime),
+    inhalt,
+  });
+  return { ...v, dokumentId: randomUUID() };
+}
 
-    // Ablage über den Port (Demo: lokal nach SHA-256, inhaltsadressiert, idempotent) vor der Transaktion.
-    const gespeichert: (NachweisVerweis & { name: string })[] = [];
-    for (const f of dateien) {
-      const v = await legeNachweisdateiAb(
-        Buffer.from(await f.arrayBuffer()),
-        dateinameBereinigt(f.name),
-        mimeBereinigt(f.type),
-      );
-      gespeichert.push({ ...v, name: v.dateiname });
+/**
+ * Demo: liest eine abgelegte Datei über ihren SHA-256 (inhaltsadressierte
+ * Ablage `<sha[0:2]>/<sha256>`) und prüft dabei den Inhalt (TS-09).
+ */
+export function leseNachweisdatei(n: Pick<NachweisVerweis, 'sha256'>): Promise<Buffer> {
+  if (!/^[0-9a-f]{64}$/.test(n.sha256)) return Promise.reject(new Error('Ungültiger SHA-256'));
+  return leseDatei(`${n.sha256.slice(0, 2)}/${n.sha256}`, n.sha256);
+}
+
+// ---------------------------------------------------------------------------
+// Handlungen der Server Actions (Kanzlei S8 und Portal P2). Bewusst nicht in
+// den 'use server'-Dateien: Diese Funktionen nehmen einen Akteur entgegen und
+// dürfen nie als Server Action vom Browser aufrufbar sein.
+// ---------------------------------------------------------------------------
+
+const NUR_AKTUELL = 'Änderungen nur im aktuellen Stand möglich';
+const NICHT_GEFUNDEN_KANZLEI = 'Durchführung nicht gefunden.';
+const NICHT_GEFUNDEN_PORTAL = 'Diese Aufgabe wurde nicht gefunden.';
+const ZU_KURZ = `Bitte eine Begründung mit mindestens ${DF_MIN_BEGRUENDUNG} Zeichen angeben.`;
+
+/** Akteur und Mandant der Handlung: Kanzlei mit Bezug auf den Mandanten des Formulars, Portal mit eigenem Mandanten. */
+export interface Handlung {
+  akteur: Akteur;
+  mandantId: string;
+  nichtGefunden: string;
+}
+
+export async function kanzleiHandlung(fd: FormData): Promise<Handlung> {
+  const mandantId = text(fd, 'mandant');
+  return {
+    akteur: await brauchtKanzleiFuer(mandantId),
+    mandantId,
+    nichtGefunden: NICHT_GEFUNDEN_KANZLEI,
+  };
+}
+
+export async function portalHandlung(): Promise<Handlung> {
+  const { akteur } = await brauchtPortal();
+  return { akteur, mandantId: akteur.mandantId, nichtGefunden: NICHT_GEFUNDEN_PORTAL };
+}
+
+/** Führt eine Handlung im Service aus; Service-Fehler werden zur Meldung. */
+export async function handeln(
+  h: Handlung,
+  fd: FormData,
+  fn: (
+    ctx: DienstKontext,
+    ziel: { mandantId: string; durchfuehrungId: string },
+  ) => Promise<Ergebnis>,
+): Promise<Ergebnis> {
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
+  const ziel = { mandantId: h.mandantId, durchfuehrungId: text(fd, 'id') };
+  try {
+    const erg = await imDemoDienst(h.akteur, (ctx) => fn(ctx, ziel));
+    aktualisiereMandant(h.mandantId);
+    return erg;
+  } catch (e) {
+    return alsErgebnis(e, h.nichtGefunden);
+  }
+}
+
+/** Liest Schrittzahl und Kennzahlen der Durchführung (über den Service, mit Rechteprüfung). */
+async function aufbau(h: Handlung, durchfuehrungId: string) {
+  const ziel = { mandantId: h.mandantId, durchfuehrungId };
+  return imDemoDienst(h.akteur, (ctx) =>
+    h.akteur.art === 'MANDANT' ? ladeKontrollaufgabe(ctx, ziel) : ladeDurchfuehrung(ctx, ziel),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Gemeinsame Hüllen (Kanzlei und Portal)
+// ---------------------------------------------------------------------------
+
+/** Schritte, Werte und Ergebnis speichern; mit absicht=einreichen zusätzlich einreichen. */
+export async function speichernAls(h: Handlung, fd: FormData): Promise<Ergebnis> {
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
+  let d: Awaited<ReturnType<typeof aufbau>>;
+  try {
+    d = await aufbau(h, text(fd, 'id'));
+  } catch (e) {
+    return alsErgebnis(e, h.nichtGefunden);
+  }
+  const einreichen = text(fd, 'absicht') === 'einreichen';
+  const schritte = d.schritte.map((_, i) => ({
+    erledigt: fd.get(`schritt_${i}_erledigt`) === 'on',
+    kommentar: text(fd, `schritt_${i}_kommentar`).trim().slice(0, 2000),
+  }));
+  const werte: { key: string; wert: number | null; bemerkung: string; erklaert: boolean }[] = [];
+  const unlesbar: string[] = [];
+  for (const k of d.kontrolle.kennzahlen) {
+    const bemerkung = text(fd, `bemerkung_${k.key}`).trim().slice(0, 1000);
+    const erklaert = fd.get(`erklaert_${k.key}`) === 'on';
+    if (k.differenzAus) {
+      werte.push({ key: k.key, wert: null, bemerkung, erklaert });
+      continue;
     }
+    const w = parseDezimal(text(fd, `wert_${k.key}`));
+    if (w === 'fehler') unlesbar.push(k.label);
+    else werte.push({ key: k.key, wert: w, bemerkung, erklaert });
+  }
+  if (unlesbar.length)
+    return { fehler: `Bitte Beträge im Format 1.234,56 eingeben: ${unlesbar.join(', ')}.` };
+  const e = text(fd, 'ergebnis');
+  const ergebnis = e === 'OHNE_BEFUND' || e === 'MIT_BEFUND' ? e : null;
+  const ergebnisKommentar = text(fd, 'ergebnisKommentar').trim().slice(0, 4000) || null;
 
-    const { neu, doppelt } = await mitAudit(nutzer, async (tx, zeitpunkt) => {
-      await statusSperre(tx, d.id, d.status === 'GEPLANT' ? ['GEPLANT'] : BEARBEITBAR);
-      const protokolle: Protokoll[] = [];
-      if (d.status === 'GEPLANT') protokolle.push(await beginneInTx(tx, d, nutzer, zeitpunkt));
-      const vorhanden = new Set(
-        (
-          await tx.nachweis.findMany({ where: { durchfuehrungId: d.id }, select: { sha256: true } })
-        ).map((n) => n.sha256),
-      );
-      const doppelt: string[] = [];
-      let neu = 0;
-      for (const g of gespeichert) {
-        if (vorhanden.has(g.sha256)) {
-          doppelt.push(g.name);
-          continue;
-        }
-        vorhanden.add(g.sha256);
-        const n = await tx.nachweis.create({
-          data: {
-            durchfuehrungId: d.id,
-            dateiname: g.name,
-            mime: g.mime,
-            groesse: g.groesse,
-            sha256: g.sha256,
-            dokumentId: g.dokumentId,
-            gesperrt: false,
-            hochgeladenVon: nutzer.id,
-            hochgeladenAm: zeitpunkt,
-          },
-        });
-        neu++;
-        protokolle.push(
-          protokoll(
-            d,
-            'tcms.durchfuehrung.nachweis_hochgeladen',
-            { durchfuehrungId: d.id, dateiname: g.name, sha256: g.sha256, groesse: g.groesse },
-            { typ: 'Nachweis', id: n.id },
-          ),
-        );
-      }
-      if (protokolle.length === 0) throw new Abbruch(`Bereits vorhanden: ${doppelt.join(', ')}.`);
-      return { wert: { neu, doppelt }, protokoll: protokolle };
-    });
-    aktualisiereMandant(d.mandantId);
-    const teil = neu === 1 ? '1 Datei hochgeladen' : `${neu} Dateien hochgeladen`;
+  const gespeichert = await handeln(h, fd, async (ctx, ziel) => {
+    await dienstSpeichere(ctx, { ...ziel, schritte, werte, ergebnis, ergebnisKommentar });
+    return { ok: 'Entwurf gespeichert.' };
+  });
+  if (!einreichen || gespeichert?.fehler) return gespeichert;
+
+  // Einreichen in eigener Transaktion: Der gespeicherte Entwurf bleibt bei Mängeln erhalten.
+  try {
+    await imDemoDienst(h.akteur, (ctx) =>
+      dienstReicheEin(ctx, { mandantId: h.mandantId, durchfuehrungId: d.id }),
+    );
+  } catch (err) {
+    if (err instanceof DienstFehler && err.code === 'UNGUELTIG' && err.felder?.['maengel']) {
+      return {
+        fehler: `Entwurf gespeichert, aber noch nicht eingereicht: ${err.felder['maengel'].join(' · ')}.`,
+      };
+    }
+    return alsErgebnis(err, h.nichtGefunden);
+  } finally {
+    aktualisiereMandant(h.mandantId);
+  }
+  if (h.akteur.art === 'MANDANT') {
     return {
-      ok: doppelt.length ? `${teil}; bereits vorhanden: ${doppelt.join(', ')}.` : `${teil}.`,
+      ok: d.kontrolle.gegenzeichnungMandant
+        ? 'Übermittelt. Eine zweite Person bei Ihnen bestätigt nun die Vollständigkeit.'
+        : 'An die Kanzlei übermittelt. Die Nachweise sind jetzt gesperrt.',
     };
+  }
+  return { ok: 'Zur Gegenzeichnung eingereicht. Die Nachweise sind jetzt gesperrt.' };
+}
+
+/** Dateien ablegen (Demo als kanzleikonsole) und als Verweise anhängen. */
+export async function hochladenAls(h: Handlung, fd: FormData): Promise<Ergebnis> {
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
+  const dateien = fd
+    .getAll('dateien')
+    .filter(
+      (f): f is File =>
+        typeof f === 'object' && f !== null && 'arrayBuffer' in f && (f as File).size > 0,
+    );
+  if (dateien.length === 0) return { fehler: 'Bitte mindestens eine Datei auswählen.' };
+  const zuGross = dateien.filter((f) => f.size > MAX_DATEI_BYTES);
+  if (zuGross.length)
+    return { fehler: `Höchstens 20 MB je Datei: ${zuGross.map((f) => f.name).join(', ')}.` };
+  if (dateien.reduce((s, f) => s + f.size, 0) > MAX_DATEI_BYTES)
+    return { fehler: 'Höchstens 20 MB je Upload. Bitte größere Dateien einzeln hochladen.' };
+  // Rechte vor der Ablage: ohne Recht wird nichts gespeichert.
+  let vorhanden: Map<string, string>;
+  try {
+    const d = await aufbau(h, text(fd, 'id'));
+    if (!d.rechte.bearbeiten.erlaubt)
+      return { fehler: d.rechte.bearbeiten.grund ?? 'Upload nicht möglich.' };
+    vorhanden = new Map(d.nachweise.map((n) => [n.sha256, n.dateiname]));
+  } catch (e) {
+    return alsErgebnis(e, h.nichtGefunden);
+  }
+  // Ablage wie in der kanzleikonsole (inhaltsadressiert, idempotent); gleicher Inhalt
+  // in derselben Durchführung wird übersprungen (wie bisher).
+  const neue: NachweisVerweis[] = [];
+  const doppelt: string[] = [];
+  for (const f of dateien) {
+    const v = await legeNachweisdateiAb(Buffer.from(await f.arrayBuffer()), f.name, f.type);
+    if (vorhanden.has(v.sha256)) doppelt.push(v.dateiname);
+    else {
+      vorhanden.set(v.sha256, v.dateiname);
+      neue.push(v);
+    }
+  }
+  if (neue.length === 0) return { fehler: `Bereits vorhanden: ${doppelt.join(', ')}.` };
+  const ziel = { mandantId: h.mandantId, durchfuehrungId: text(fd, 'id') };
+  try {
+    await imDemoDienst(
+      h.akteur,
+      async (ctx) => {
+        for (const verweis of neue) await dienstHaengeNachweisAn(ctx, { ...ziel, verweis });
+      },
+      VERWEIS_PORTS,
+    );
+    aktualisiereMandant(h.mandantId);
+  } catch (e) {
+    return alsErgebnis(e, h.nichtGefunden);
+  }
+  const teil = neue.length === 1 ? '1 Datei hochgeladen' : `${neue.length} Dateien hochgeladen`;
+  return { ok: doppelt.length ? `${teil}; bereits vorhanden: ${doppelt.join(', ')}.` : `${teil}.` };
+}
+
+export async function entfernenAls(h: Handlung, fd: FormData): Promise<Ergebnis> {
+  return handeln(h, fd, async (ctx, ziel) => {
+    await dienstEntferneNachweis(ctx, { ...ziel, nachweisId: text(fd, 'nachweisId') });
+    return { ok: 'Nachweis entfernt.' };
   });
 }
 
-export async function kernEntfernen(nutzer: Handelnde, fd: FormData): Promise<Ergebnis> {
-  return fuehreAus(async () => {
-    if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
-    const nachweis = await db.nachweis.findUnique({ where: { id: text(fd, 'nachweisId') } });
-    if (!nachweis) return { fehler: 'Nachweis nicht gefunden.' };
-    if (nachweis.gesperrt) return { fehler: 'Gesperrte Nachweise können nicht entfernt werden.' };
-    const d = await ladeFuerAktion(nachweis.durchfuehrungId);
-    if (!d) return { fehler: 'Durchführung nicht gefunden.' };
-    const r = rechteFuer(nutzer, d, false).bearbeiten;
-    if (!r.erlaubt || d.status === 'GEPLANT') return { fehler: r.grund ?? statusGrund(d.status) };
-    await mitAudit(nutzer, async (tx) => {
-      await statusSperre(tx, d.id, BEARBEITBAR);
-      const del = await tx.nachweis.deleteMany({ where: { id: nachweis.id, gesperrt: false } });
-      if (del.count !== 1) throw new Abbruch('Der Nachweis ist inzwischen gesperrt.');
-      return {
-        wert: null,
-        protokoll: protokoll(
-          d,
-          'tcms.durchfuehrung.nachweis_entfernt',
-          { durchfuehrungId: d.id, dateiname: nachweis.dateiname, sha256: nachweis.sha256 },
-          { typ: 'Nachweis', id: nachweis.id },
-        ),
-      };
-    });
-    aktualisiereMandant(d.mandantId);
-    return { ok: `${nachweis.dateiname} entfernt.` };
-  });
-}
-
-/** Zurückweisen (Kanzlei-Prüfer:in oder zweite Person beim Mandanten); entsperrt die Nachweise. */
-export async function kernZurueckweisen(nutzer: Handelnde, fd: FormData): Promise<Ergebnis> {
-  return fuehreAus(async () => {
-    if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
-    const begruendung = text(fd, 'begruendung').trim();
-    if (begruendung.length < 30)
-      return { fehler: 'Bitte eine Begründung mit mindestens 30 Zeichen angeben.' };
-    const d = await ladeFuerAktion(text(fd, 'id'));
-    if (!d) return { fehler: 'Durchführung nicht gefunden.' };
-    const r = rechteFuer(nutzer, d, false).zurueckweisen;
-    if (!r.erlaubt) return { fehler: r.grund ?? KEIN_RECHT };
-    await mitAudit(nutzer, async (tx) => {
-      await statusSperre(tx, d.id, ['ZUR_GEGENZEICHNUNG']);
-      await tx.durchfuehrung.update({
-        where: { id: d.id },
-        data: {
-          status: 'ZURUECKGEWIESEN',
-          zurueckgewiesenVon: nutzer.id,
-          zurueckweisungsgrund: begruendung.slice(0, 4000),
-          mandantBestaetigtVon: null,
-        },
-      });
-      const ent = await tx.nachweis.updateMany({
-        where: { durchfuehrungId: d.id },
-        data: { gesperrt: false },
-      });
-      return {
-        wert: null,
-        protokoll: protokoll(d, 'tcms.durchfuehrung.zurueckgewiesen', {
-          begruendung,
-          nachweiseEntsperrt: ent.count,
-        }),
-      };
-    });
-    aktualisiereMandant(d.mandantId);
+/** Zurückweisen (Kanzlei-Prüfer:in) bzw. Zurückgeben (zweite Person beim Mandanten). */
+export async function zurueckweisenAls(h: Handlung, fd: FormData): Promise<Ergebnis> {
+  const begruendung = text(fd, 'begruendung').trim().slice(0, 4000);
+  if (begruendung.length < DF_MIN_BEGRUENDUNG) return { fehler: ZU_KURZ };
+  return handeln(h, fd, async (ctx, ziel) => {
+    await dienstWeiseZurueck(ctx, { ...ziel, begruendung });
     return {
       ok: 'Zurückgewiesen. Die durchführende Person kann die Angaben überarbeiten und erneut einreichen.',
     };
   });
 }
 
-// ---------------------------------------------------------------------------
-// Nachweis-Download (Route Handler)
-// ---------------------------------------------------------------------------
-
-export async function ladeNachweisFuerDownload(id: string) {
-  return db.nachweis.findUnique({
-    where: { id },
-    include: {
-      durchfuehrung: {
-        include: {
-          kontrolleStand: true,
-          kontrolle: { include: { programm: { select: { mandantId: true } } } },
-        },
-      },
-    },
+/** Bestätigung durch eine zweite Person beim Mandanten. */
+export async function bestaetigenAls(h: Handlung, fd: FormData): Promise<Ergebnis> {
+  return handeln(h, fd, async (ctx, ziel) => {
+    await dienstBestaetige(ctx, ziel);
+    return { ok: 'Vollständigkeit bestätigt. Die Kanzlei prüft nun und schließt die Aufgabe ab.' };
   });
 }

@@ -21,7 +21,6 @@ import {
   RisikenKarte,
   VerlaufKarte,
 } from '@/components/durchfuehrung/karten';
-import { handelnde } from '@/server/demo';
 import {
   beantrageEntfallen,
   beginneDurchfuehrung,
@@ -40,7 +39,6 @@ import {
   ohneInhalte,
   personName,
   pruefungAus,
-  rechteFuer,
   statusZumStand,
   type DurchfuehrungDetail,
 } from '@/server/durchfuehrung-daten';
@@ -69,8 +67,14 @@ export default async function Kontrolldurchfuehrung({
   const { id, did } = await params;
   const seite = await ladeStaffSeite(id, await searchParams);
   const { ctx, basis, mitStand, nutzer } = seite;
-  const d = await ladeDurchfuehrungDetail(did, ctx.stand, ctx.historisch);
-  if (!d || d.mandantId !== id) notFound();
+  // Rechte und Mandantenzugehörigkeit prüft der Service (nicht sichtbar → 404).
+  const d = await ladeDurchfuehrungDetail(
+    nutzer,
+    id,
+    did,
+    ctx.historisch ? seite.standIso : undefined,
+  );
+  if (!d) notFound();
 
   const zurueck = (
     <Link href={mitStand(`${basis}/kontrollen`)} className="back-link" style={{ marginBottom: 0 }}>
@@ -96,10 +100,10 @@ export default async function Kontrolldurchfuehrung({
     );
   }
 
-  const r = rechteFuer(handelnde(nutzer), d, ctx.historisch);
+  const r = d.rechte;
   const pruefung = pruefungAus(d);
   const kv = ctx.kontrollen.find((k) => k.id === d.kontrolle.id) ?? null;
-  const felder = { id: d.id, stand: ctx.historisch ? seite.standIso : '' };
+  const felder = { id: d.id, mandant: d.mandantId, stand: ctx.historisch ? seite.standIso : '' };
   const istPruefer =
     d.status === 'ZUR_GEGENZEICHNUNG' && (r.gegenzeichnen.erlaubt || r.zurueckweisen.erlaubt);
   const istDurchfuehrend = d.beteiligte.includes(nutzer.id);

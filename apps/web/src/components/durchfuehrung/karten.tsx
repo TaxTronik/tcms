@@ -81,7 +81,7 @@ export function NachweiseKarte({
             </span>
             <div className="grow" style={{ minWidth: 0 }}>
               <a
-                href={`/api/nachweise/${n.id}`}
+                href={`/api/nachweise/${n.id}?mandant=${d.mandantId}`}
                 className="text-sm font-m"
                 style={{ textDecoration: 'none', wordBreak: 'break-all' }}
                 download
@@ -113,7 +113,7 @@ export function NachweiseKarte({
             <div className="row-s shrink0">
               <a
                 className="btn-secondary btn-tiny"
-                href={`/api/nachweise/${n.id}`}
+                href={`/api/nachweise/${n.id}?mandant=${d.mandantId}`}
                 download
                 title="Herunterladen"
               >
