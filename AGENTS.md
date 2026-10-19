@@ -190,7 +190,9 @@ für KI-Werkzeuge.
   gespeichert (`codeHash`, CHECK hex), 7 Tage gültig (echte Zeit), höchstens 5 Fehlversuche je
   Freigabe (`codeFehlversuche`, CHECK 0–5, gezählt unter Zeilensperre mit bedingtem Update, nie
   aus dem Audit), einmal verwendbar, Vergleich mit `timingSafeEqual`. Codes stehen in keiner
-  Antwort, keinem Log und keinem Audit-Detail – nur im Postausgang.
+  Antwort, keinem Log und keinem Audit-Detail – nur im Postausgang. Höchstens 5 ausgestellte Codes
+  je Freigabe und Kontakt in einer Stunde (gezählt an den Code-Nachrichten unter der Zeilensperre,
+  echte Zeit; darüber `409`, Hinweis H1 aus RT4).
 - Nachrichten adressieren Empfänger nur über die Personen-ID (`empfaengerId`, UUID) mit einem
   Zweck aus `NACHRICHT_ZWECKE`, nie über Namen; jede trägt `mandantId`, die aus dem Zweck folgende
   `empfaengerArt` und Vorlagendaten `daten` (geprüft gegen den Vertrag, ohne Namen und ohne Code).

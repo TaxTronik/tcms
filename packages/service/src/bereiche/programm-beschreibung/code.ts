@@ -10,6 +10,11 @@
 //   - Höchstens MAX_FEHLVERSUCHE Fehlversuche je Freigabe (nicht je Code: ein
 //     neuer Code setzt den Zähler nicht zurück); danach gesperrt, bis die
 //     Kanzlei die Freigabe neu adressiert.
+//   - Höchstens MAX_CODE_ANFORDERUNGEN_JE_STUNDE ausgestellte Codes je
+//     Freigabe und Kontakt in einer Stunde (Hinweis H1 aus RT4): Jede
+//     Anforderung erzeugt eine Nachricht und einen Audit-Eintrag; ohne Grenze
+//     ließe sich der Postausgang fluten. Gezählt werden die Code-Nachrichten
+//     (Postausgang, echte Zeit), nie das Audit.
 //
 // Ablage: `Freigabe.codeHash` ist nur der SHA-256 (hex) des aktiven Codes,
 // `Freigabe.codeFehlversuche` der Zähler (CHECK 0–5 in der Datenbank). Beide
@@ -23,6 +28,8 @@ import type { FreigabeCodeStatus } from '@tcms/contract';
 
 export const CODE_GUELTIG_TAGE = 7;
 export const MAX_FEHLVERSUCHE = 5;
+export const MAX_CODE_ANFORDERUNGEN_JE_STUNDE = 5;
+export const CODE_ANFORDERUNG_FENSTER_MS = 3_600_000;
 const TAG_MS = 86_400_000;
 const HASH = /^[0-9a-f]{64}$/;
 

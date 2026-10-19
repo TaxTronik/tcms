@@ -54,6 +54,7 @@ import {
 import { halteRollenFest, ladeKontaktRollen } from '../../rollen';
 import { baueBausteine, normalisiereAbschnitte, pruefeSnapshot } from './bausteine';
 import {
+  CODE_ANFORDERUNG_FENSTER_MS,
   codeAblaufAb,
   codeHash,
   codePasst,
@@ -61,6 +62,7 @@ import {
   erzeugeCode,
   istGesperrt,
   leseCodeZustand,
+  MAX_CODE_ANFORDERUNGEN_JE_STUNDE,
   MAX_FEHLVERSUCHE,
 } from './code';
 import {
@@ -92,6 +94,29 @@ const NUR_GV = 'Freigaben sind der gesetzlichen Vertretung vorbehalten.';
 const ANDERE_PERSON = 'Diese Freigabe ist an eine andere Person gerichtet.';
 const ERLEDIGT = 'Diese Freigabe ist bereits erledigt.';
 const GESPERRT = `Der Bestätigungscode ist nach ${MAX_FEHLVERSUCHE} Fehlversuchen gesperrt. Bitte wenden Sie sich an Ihre Kanzlei.`;
+const ZU_VIELE_CODES = `Sie haben in der letzten Stunde bereits ${MAX_CODE_ANFORDERUNGEN_JE_STUNDE} Codes angefordert. Bitte verwenden Sie den zuletzt erhaltenen Code oder versuchen Sie es später erneut.`;
+
+/**
+ * Code-Nachrichten dieser Freigabe an diesen Kontakt in der letzten Stunde
+ * (echte Zeit; Hinweis H1). Unter der Zeilensperre der Freigabe gezählt:
+ * Gleichzeitige Anforderungen laufen nacheinander und sehen einander.
+ */
+async function codesDerLetztenStunde(
+  tx: Tx,
+  mandantId: string,
+  freigabeId: string,
+  kontaktId: string,
+): Promise<number> {
+  return tx.nachricht.count({
+    where: {
+      mandantId,
+      empfaengerId: kontaktId.toLowerCase(),
+      zweck: 'FREIGABE_CODE',
+      createdAt: { gt: new Date(Date.now() - CODE_ANFORDERUNG_FENSTER_MS) },
+      daten: { path: ['freigabeId'], equals: freigabeId },
+    },
+  });
+}
 
 /** Sichtbarkeit im Portal: GV/TCB alles des Mandanten, sonst nur Eigenes. */
 function sichtbarImPortal(
@@ -323,6 +348,13 @@ export async function fordereFreigabeCodeAn(
   pruefeFreigabeRecht(ctx, mandantId, rollen, f);
   const z = leseCodeZustand(f);
   if (istGesperrt(z)) throw new DienstFehler('KONFLIKT', GESPERRT);
+  // H1: Mengenbegrenzung je Freigabe und Kontakt (zusätzlich zur Fehlversuchsgrenze).
+  if (
+    (await codesDerLetztenStunde(ctx.tx, mandantId, f.id, ctx.akteur.id)) >=
+    MAX_CODE_ANFORDERUNGEN_JE_STUNDE
+  ) {
+    throw new DienstFehler('KONFLIKT', ZU_VIELE_CODES);
+  }
   const { version, sha256 } = await vorgelegteVersion(ctx.tx, f);
   // Neuer Code ersetzt den alten; die Fehlversuche dieser Freigabe bleiben stehen.
   const code = erzeugeCode();

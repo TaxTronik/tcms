@@ -17,7 +17,11 @@ import {
   schliesseBeschreibungsreviewAb,
   speichereBeschreibungsabschnitt,
 } from './beschreibung';
-import { MAX_FEHLVERSUCHE } from './code';
+import {
+  CODE_ANFORDERUNG_FENSTER_MS,
+  MAX_CODE_ANFORDERUNGEN_JE_STUNDE,
+  MAX_FEHLVERSUCHE,
+} from './code';
 import {
   adressiereFreigabeNeu,
   bestaetigeKenntnisnahme,
@@ -339,6 +343,60 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
     expect(ungueltig.code).toBe('UNGUELTIG');
     const richtig = await im(gv, async (ctx) =>
       erteileFreigabe(ctx, { ...fa(id), code: await codeAusPostausgang(w.gv) }),
+    );
+    expect(richtig.freigegeben).toBe(true);
+  });
+
+  it('H1: höchstens 5 Code-Anforderungen je Freigabe und Kontakt in einer Stunde', async () => {
+    // Eigener Mandant mit zwei gesetzlichen Vertretungen (keine Wirkung auf andere Tests).
+    const m = await neuerMandant(w);
+    const programm = await richteEin(w, m.mandantId, m.gv);
+    const gv2 = randomUUID();
+    await inWelt(w, (tx) =>
+      tx.mandantKontaktRolle.create({
+        data: { mandantId: m.mandantId, kontaktId: gv2, rolle: 'GESETZLICHER_VERTRETER' },
+      }),
+    );
+    const id = await weitereFreigabe('RISIKOAKZEPTANZ', m.gv, programm);
+    const anderer = await weitereFreigabe('RISIKOAKZEPTANZ', m.gv, programm);
+    const gv = kontakt(w, m.gv, m.mandantId);
+    const bt = btFuer(w, m.mandantId);
+    const fm = (freigabeId: string) => fa(freigabeId, m.mandantId);
+    for (let i = 0; i < MAX_CODE_ANFORDERUNGEN_JE_STUNDE; i += 1) {
+      await im(gv, (ctx) => fordereFreigabeCodeAn(ctx, fm(id)));
+    }
+    const codeNachrichten = (freigabeId: string) =>
+      inWelt(w, (tx) =>
+        tx.nachricht.count({
+          where: { zweck: 'FREIGABE_CODE', daten: { path: ['freigabeId'], equals: freigabeId } },
+        }),
+      );
+    const auditVorher = (await auditZu(w, id)).length;
+    const zuViel = await fehlerVon(im(gv, (ctx) => fordereFreigabeCodeAn(ctx, fm(id))));
+    expect(zuViel.code).toBe('KONFLIKT');
+    expect(zuViel.message).toMatch(/letzten Stunde/);
+    // Keine weitere Nachricht und kein Audit.
+    expect(await codeNachrichten(id)).toBe(MAX_CODE_ANFORDERUNGEN_JE_STUNDE);
+    expect((await auditZu(w, id)).length).toBe(auditVorher);
+    // Andere Freigabe derselben Person: eigene Grenze.
+    await im(gv, (ctx) => fordereFreigabeCodeAn(ctx, fm(anderer)));
+    // Neu adressiert an eine andere GV: eigene Grenze für diesen Kontakt.
+    await im(bt, (ctx) => adressiereFreigabeNeu(ctx, { ...fm(id), empfaengerId: gv2 }));
+    await im(kontakt(w, gv2, m.mandantId), (ctx) => fordereFreigabeCodeAn(ctx, fm(id)));
+    await im(bt, (ctx) => adressiereFreigabeNeu(ctx, { ...fm(id), empfaengerId: m.gv }));
+    expect((await fehlerVon(im(gv, (ctx) => fordereFreigabeCodeAn(ctx, fm(id))))).code).toBe(
+      'KONFLIKT',
+    );
+    // Nach Ablauf der Stunde (Nachrichten älter als das Fenster) wieder möglich.
+    await inWelt(w, (tx) =>
+      tx.nachricht.updateMany({
+        where: { zweck: 'FREIGABE_CODE', daten: { path: ['freigabeId'], equals: id } },
+        data: { createdAt: new Date(Date.now() - CODE_ANFORDERUNG_FENSTER_MS - 60_000) },
+      }),
+    );
+    await im(gv, (ctx) => fordereFreigabeCodeAn(ctx, fm(id)));
+    const richtig = await im(gv, async (ctx) =>
+      erteileFreigabe(ctx, { ...fm(id), code: await codeAusPostausgang(m.gv) }),
     );
     expect(richtig.freigegeben).toBe(true);
   });

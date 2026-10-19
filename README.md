@@ -440,7 +440,7 @@ Rechte prüft `packages/service`, Eingaben und Antworten in
 | POST    | `…/freigaben/:freigabeId/neuadressierung`              | `kannBearbeiten` (TS-06, auditiert)                                         |
 | GET     | `…/kommunikation/freigaben?stand=`                     | `kannLesen`                                                                 |
 | GET     | `…/portal/freigaben`                                   | Mandantenkontakt mit aktiver Rolle                                          |
-| POST    | `…/portal/freigaben/:freigabeId/code` bzw. `freigeben` | adressierte gesetzliche Vertretung                                          |
+| POST    | `…/portal/freigaben/:freigabeId/code` bzw. `freigeben` | adressierte gesetzliche Vertretung; Code höchstens 5-mal je Stunde (`409`)  |
 | POST    | `…/portal/freigaben/:freigabeId/kenntnisnahme`         | adressierte Person                                                          |
 
 Die lebenden Bausteine der Beschreibung (`bausteine`, Portal `live`) sind streng (`BausteinSatzSchema`:
