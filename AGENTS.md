@@ -217,7 +217,11 @@ für KI-Werkzeuge.
 - Freigegeben wird nur ein eingefrorener Inhalt, dessen SHA-256 zum gespeicherten Hash passt. Ab
   dem Einfrieren (beim Mandanten, freigegeben, abgelöst) verhindert der Trigger
   `BeschreibungVersion_eingefroren` jede Änderung außer den Statusübergängen zu „freigegeben"
-  (mit Person und Zeitpunkt) bzw. „abgelöst" und jedes Löschen – für jede Rolle.
+  (mit Person und Zeitpunkt) bzw. „abgelöst" und jedes Löschen – für jede Rolle. Neue Versionen
+  entstehen nur als Entwurf ohne Review-, Freigabe- und Snapshot-Angaben (Trigger
+  `BeschreibungVersion_neu`), und aus Entwurf oder Kanzlei-Review führt kein Übergang direkt nach
+  „freigegeben" oder „abgelöst": Freigegeben wird nur über „beim Mandanten" (Hinweis H4 aus RT4;
+  Seed und Tests legen Versionen über diese Übergänge an).
 - Höchstens eine offene Risikoakzeptanz je Risiko, eine beantragte Übersteuerung je (Risiko,
   Sicht) und ein offener Nachtrag je Durchführung: unter Zeilensperre geprüft und zusätzlich als
   eindeutiger Teilindex (Verletzung → `KONFLIKT`).

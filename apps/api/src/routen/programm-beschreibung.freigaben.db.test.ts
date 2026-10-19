@@ -184,19 +184,29 @@ describe.skipIf(!AKTIV)('Endpunkte CMS-Beschreibung und Freigaben (App + Postgre
     };
     await mitTenant(w.T, async (tx) => {
       const p = await tx.tcmsProgramm.findFirstOrThrow({ where: { mandantId: w.A } });
-      await tx.beschreibungVersion.create({
+      // Neue Zeilen nur als Entwurf (H4); der frühere Stand entsteht über die Übergänge.
+      const v = await tx.beschreibungVersion.create({
         data: {
           programmId: p.id,
           nummer: '0.9',
-          status: 'ABGELOEST',
+          status: 'ENTWURF',
           abschnitte: alt.abschnitte,
-          freigegebenVon: w.GV,
-          freigegebenAm: new Date('2026-07-01T10:00:00.000Z'),
-          snapshot: alt,
-          snapshotSha256: snapshotHash(alt),
           createdAt: new Date('2026-06-30T10:00:00.000Z'),
         },
       });
+      await tx.beschreibungVersion.update({
+        where: { id: v.id },
+        data: { status: 'BEIM_MANDANTEN', snapshot: alt, snapshotSha256: snapshotHash(alt) },
+      });
+      await tx.beschreibungVersion.update({
+        where: { id: v.id },
+        data: {
+          status: 'FREIGEGEBEN',
+          freigegebenVon: w.GV,
+          freigegebenAm: new Date('2026-07-01T10:00:00.000Z'),
+        },
+      });
+      await tx.beschreibungVersion.update({ where: { id: v.id }, data: { status: 'ABGELOEST' } });
     });
     const danach = await ok(await senden(w, 'GET', `${m(w.A)}/beschreibung`, a.bt()));
     const v09 = (danach['versionen'] as typeof versionen).find((x) => x.nummer === '0.9')!;

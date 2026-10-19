@@ -1420,19 +1420,30 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
 
   describe('Eingefrorene CMS-Beschreibung (Trigger)', () => {
     const inA = <T>(fn: (tx: Tx) => Promise<T>) => mitTenant(A.tenant, fn, { client: app });
+    /** Neue Version (nur als Entwurf einfügbar, H4); „beim Mandanten" über den Übergang. */
     async function version(status: 'BEIM_MANDANTEN' | 'ENTWURF'): Promise<string> {
       const v = await inA((tx) =>
         tx.beschreibungVersion.create({
           data: {
             programmId: A.programmId,
             nummer: `9.${Math.floor(Math.random() * 1e6)}`,
-            status,
+            status: 'ENTWURF',
             abschnitte: [{ key: 'a', text: 'Inhalt' }],
-            snapshot: status === 'ENTWURF' ? undefined : { nummer: '9', eingefroren: true },
-            snapshotSha256: status === 'ENTWURF' ? null : 'a'.repeat(64),
           },
         }),
       );
+      if (status === 'BEIM_MANDANTEN') {
+        await inA((tx) =>
+          tx.beschreibungVersion.update({
+            where: { id: v.id },
+            data: {
+              status,
+              snapshot: { nummer: '9', eingefroren: true },
+              snapshotSha256: 'a'.repeat(64),
+            },
+          }),
+        );
+      }
       return v.id;
     }
     const aendere = (id: string, data: Record<string, unknown>) =>
@@ -1475,6 +1486,93 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
       }
       // Beim Mandanten → abgelöst (zurückgezogen) ist ebenfalls vorgesehen.
       await aendere(await version('BEIM_MANDANTEN'), { status: 'ABGELOEST' });
+    });
+
+    it('H4: neue Zeilen nur als Entwurf ohne Review-, Freigabe- und Snapshot-Angaben', async () => {
+      const basis = {
+        programmId: A.programmId,
+        abschnitte: [{ key: 'a', text: 'Inhalt' }],
+      };
+      for (const data of [
+        { status: 'FREIGEGEBEN', freigegebenVon: randomUUID(), freigegebenAm: new Date() },
+        { status: 'ABGELOEST' },
+        {
+          status: 'BEIM_MANDANTEN',
+          snapshot: { eingefroren: true },
+          snapshotSha256: 'a'.repeat(64),
+        },
+        { status: 'KANZLEI_REVIEW' },
+        { snapshot: { eingefroren: true } },
+        { snapshotSha256: 'a'.repeat(64) },
+        { freigegebenVon: randomUUID() },
+        { freigegebenAm: new Date() },
+        { freigabeAngefordertAm: new Date() },
+        { reviewVon: randomUUID(), reviewAm: new Date() },
+        { reviewAngefordertVon: randomUUID() },
+      ] as const) {
+        const nummer = `8.${Math.floor(Math.random() * 1e6)}`;
+        expect(
+          await fehlerVon(
+            inA((tx) =>
+              tx.beschreibungVersion.create({ data: { ...basis, nummer, ...data } as never }),
+            ),
+          ),
+          JSON.stringify(data),
+        ).toMatch(/tcms: neue CMS-Beschreibung nur als Entwurf/);
+      }
+    });
+
+    it('H4: aus Entwurf und Kanzlei-Review kein Sprung nach freigegeben oder abgelöst', async () => {
+      for (const ausgang of ['ENTWURF', 'KANZLEI_REVIEW'] as const) {
+        const id = await version('ENTWURF');
+        if (ausgang === 'KANZLEI_REVIEW') await aendere(id, { status: 'KANZLEI_REVIEW' });
+        for (const data of [
+          {
+            status: 'FREIGEGEBEN',
+            freigegebenVon: randomUUID(),
+            freigegebenAm: new Date(),
+            snapshot: { eingefroren: true },
+            snapshotSha256: 'a'.repeat(64),
+          },
+          { status: 'ABGELOEST' },
+          { freigegebenVon: randomUUID(), freigegebenAm: new Date() },
+        ]) {
+          expect(await fehlerVon(aendere(id, data)), `${ausgang} ${JSON.stringify(data)}`).toMatch(
+            /tcms: Freigabe einer CMS-Beschreibung nur aus/,
+          );
+        }
+        // Der vorgesehene Weg bleibt offen: beim Mandanten, dann freigegeben.
+        await aendere(id, {
+          status: 'BEIM_MANDANTEN',
+          snapshot: { eingefroren: true },
+          snapshotSha256: 'a'.repeat(64),
+        });
+        await aendere(id, {
+          status: 'FREIGEGEBEN',
+          freigegebenVon: randomUUID(),
+          freigegebenAm: new Date(),
+        });
+      }
+    });
+
+    it('H4: auch der Eigentümer fügt keine freigegebene Version ein (Trigger aktiv)', async () => {
+      const eigentuemer = pgClient(OWNER_URL);
+      await eigentuemer.connect();
+      try {
+        await eigentuemer.query('BEGIN');
+        await eigentuemer.query(`SELECT set_config('tcms.tenant_id', $1, true)`, [A.tenant]);
+        const meldung = await fehlerVon(
+          eigentuemer.query(
+            `INSERT INTO "BeschreibungVersion" (id, "programmId", nummer, status, abschnitte, snapshot, "snapshotSha256", "freigegebenVon", "freigegebenAm")
+             VALUES ($1, $2, '7.1', 'FREIGEGEBEN', '[]'::jsonb, '{"eingefroren":true}'::jsonb, $3, $4, now())`,
+            [`h4${randomUUID().replaceAll('-', '')}`, A.programmId, 'a'.repeat(64), randomUUID()],
+          ),
+        );
+        expect(meldung).toMatch(/nur als Entwurf/);
+      } finally {
+        await eigentuemer.query('ROLLBACK');
+        await eigentuemer.end();
+      }
     });
 
     it('Entwürfe bleiben änderbar und löschbar', async () => {

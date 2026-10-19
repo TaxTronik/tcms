@@ -771,7 +771,9 @@ model BeschreibungVersion {
   /// Eingefrorener Inhalt inkl. gerenderter lebender Bausteine. Ab dem
   /// Einfrieren (beim Mandanten, freigegeben, abgelöst) verhindert der Trigger
   /// `BeschreibungVersion_eingefroren` jede Änderung außer den erlaubten
-  /// Statusübergängen und jedes Löschen (AGENTS.md Regel 3).
+  /// Statusübergängen und jedes Löschen (AGENTS.md Regel 3). Neue Zeilen nur
+  /// als Entwurf (`BeschreibungVersion_neu`), freigegeben nur über „beim
+  /// Mandanten" (H4).
   snapshot              Json?
   snapshotSha256        String?
   createdAt             DateTime           @default(now())
