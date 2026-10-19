@@ -3,7 +3,7 @@
 // hier: Rechte prüft der Service, die Mandantenbindung die Routentabelle (ADR §3.3).
 import { KontextQuerySchema, MandantenListeSchema } from '@tcms/contract';
 import type { Tx } from '@tcms/db';
-import { ladeArbeitskorb, ladePortfolio, leseKontext } from '@tcms/service';
+import { ladeArbeitskorb, ladePortalUebersicht, ladePortfolio, leseKontext } from '@tcms/service';
 import type { Routen } from '../routen';
 import { dienstKontext } from './kontext';
 
@@ -14,6 +14,14 @@ export function registriereLesepfade(r: Routen<Tx>): void {
     query: KontextQuerySchema,
     handler: (rc) =>
       leseKontext(dienstKontext(rc), { mandantId: rc.params['mandantId']!, ...rc.query }),
+  });
+  // Portal-Startseite (P1): Mandantenkontakte des eigenen Mandanten (Rechte im Service).
+  r.route({
+    methode: 'GET',
+    pfad: '/v1/mandanten/:mandantId/portal/uebersicht',
+    portal: true,
+    handler: (rc) =>
+      ladePortalUebersicht(dienstKontext(rc), { mandantId: rc.params['mandantId']! }),
   });
   // Mandantenübergreifend (ADR §3.3): Liste der zugänglichen Mandanten im Body, nur KANZLEI.
   r.route({

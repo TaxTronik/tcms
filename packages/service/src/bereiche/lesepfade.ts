@@ -33,3 +33,4 @@ export { auditGrenze, heuteDatum, leseStand, tagAlsDatum, tagesende } from '../k
 export { kontextAlsAntwort, kontextRechte, leseKontext } from './lesepfade/kontext';
 export { ladePortfolio, portfolioZeile } from './lesepfade/portfolio';
 export { ladeArbeitskorb } from './lesepfade/arbeitskorb';
+export { ladePortalUebersicht } from './lesepfade/portal';

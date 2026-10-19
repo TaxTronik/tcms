@@ -1,11 +1,16 @@
 import 'server-only';
-import { addTage, isoDatum, MONATE, monatSchluessel } from '@tcms/domain';
-import type { DurchfuehrungView, PersonKurz, TcmsKontext } from './kontext';
+import type { PortalUebersichtAntwort } from '@tcms/contract';
+import type { AnzeigeStatus } from '@tcms/domain';
+import { imDienst, ladePortalUebersicht } from '@tcms/service';
+import { DEMO_PORTS, demoPersonen, zustaendigkeit, type MandantAkteur } from './demo';
+import type { PersonKurz } from './kontext';
+import { personKurz } from './kontext';
 
 // =============================================================================
-// Portal P1: mandantenbezogene Sicht ohne Kanzlei-Interna (keine Nettoklassen,
-// keine §-153-Details, keine Feststellungen). Lesen dürfen gesetzliche
-// Vertreter und Tax-Compliance-Beauftragte; Mitarbeitende sehen nur Eigenes.
+// Portal P1 der Demo: Übersicht aus @tcms/service (`ladePortalUebersicht`,
+// mandantenbezogen ohne Kanzlei-Interna; Rechte und Filter im Service). Die
+// Demo ergänzt Namen und das Kanzleiteam aus ihrem Verzeichnis (im Zielbild
+// die kanzleikonsole) und wandelt ISO-Strings in Datumswerte.
 // =============================================================================
 
 export const PHASE_EINFACH: Record<number, string> = {
@@ -19,7 +24,17 @@ export const PHASE_EINFACH: Record<number, string> = {
 };
 
 export interface PortalAufgabe {
-  d: DurchfuehrungView;
+  d: {
+    id: string;
+    code: string;
+    titel: string;
+    periodeLabel: string;
+    faelligAm: Date;
+    anzeige: AnzeigeStatus;
+    status: string;
+    nachweise: number;
+    mindestNachweise: number;
+  };
   art: 'DURCHFUEHREN' | 'BESTAETIGEN';
   eigene: boolean;
   zustaendig: string;
@@ -27,98 +42,86 @@ export interface PortalAufgabe {
   ziel: string;
 }
 
-const OFFEN = new Set(['FAELLIG', 'UEBERFAELLIG', 'IN_DURCHFUEHRUNG', 'ZURUECKGEWIESEN']);
+export type MonatsSegment = NonNullable<PortalUebersichtAntwort['programm']>['monate'][number];
 
-/** Offene Mandantenaufgaben: Durchführungen der Partei Mandant und Bestätigungen durch eine zweite Person. */
-export function portalAufgaben(ctx: TcmsKontext, nutzer: { id: string }): PortalAufgabe[] {
-  const kontrolle = new Map(ctx.kontrollen.map((k) => [k.id, k]));
-  const horizont = addTage(ctx.heute, 30);
-  const liste: PortalAufgabe[] = [];
-  for (const d of ctx.durchfuehrungen) {
-    const k = kontrolle.get(d.kontrolleId);
-    if (!k || k.partei !== 'MANDANT') continue;
-    const bald =
-      d.anzeige === 'GEPLANT' &&
-      d.faelligAm.getTime() <= horizont.getTime() &&
-      d.periodeBis.getTime() < horizont.getTime();
-    if (OFFEN.has(d.anzeige) || bald) {
-      const eigene = nutzer.id === k.durchfuehrendId || nutzer.id === k.vertretungId;
-      liste.push({
-        d,
-        art: 'DURCHFUEHREN',
-        eigene,
-        zustaendig: ctx.personen.get(k.durchfuehrendId ?? '')?.name ?? '—',
-        nachweis: k.nachweis,
-        ziel: k.ziel,
-      });
-    } else if (d.anzeige === 'ZUR_GEGENZEICHNUNG' && k.gegenzeichnungMandant) {
-      const eigene = nutzer.id === k.vertretungId && nutzer.id !== d.durchgefuehrtVon;
-      liste.push({
-        d,
-        art: 'BESTAETIGEN',
-        eigene,
-        zustaendig: ctx.personen.get(k.vertretungId ?? '')?.name ?? '—',
-        nachweis: k.nachweis,
-        ziel: k.ziel,
-      });
-    }
-  }
-  const prio = (a: PortalAufgabe) =>
-    a.d.anzeige === 'UEBERFAELLIG'
-      ? 0
-      : a.d.anzeige === 'ZURUECKGEWIESEN'
-        ? 1
-        : a.art === 'BESTAETIGEN'
-          ? 2
-          : 3;
-  return liste.sort(
-    (a, b) => prio(a) - prio(b) || a.d.faelligAm.getTime() - b.d.faelligAm.getTime(),
-  );
+export interface PortalStart {
+  heute: Date;
+  mandant: { id: string; name: string };
+  rechte: PortalUebersichtAntwort['rechte'];
+  programm: {
+    aktivePhase: number;
+    wirksamAb: Date | null;
+    wirksamBis: Date | null;
+    zeitraum: { monat: number; monate: number } | null;
+    monate: MonatsSegment[];
+  } | null;
+  aufgaben: PortalAufgabe[];
+  meldungen: {
+    id: string;
+    nummer: string;
+    typ: string;
+    titel: string;
+    status: string;
+    gemeldetAm: Date;
+    gemeldetVon: string | null;
+  }[];
+  team: { person: PersonKurz; rolle: string }[];
 }
 
-export interface MonatsSegment {
-  label: string;
-  zustand: 'done' | 'now' | 'offen' | '';
-  offen: number;
-}
+const name = (id: string | null) => (id ? (demoPersonen.person(id)?.name ?? '—') : '—');
+const datumOder = (iso: string | null) => (iso ? new Date(iso) : null);
 
-/** Monate des Wirksamkeitszeitraums mit offenen Mandantenaufgaben je Periode. */
-export function zeitraumMonate(ctx: TcmsKontext): MonatsSegment[] {
-  const p = ctx.programm;
-  if (!p?.wirksamAb || !p.wirksamBis) return [];
-  const kontrolle = new Map(ctx.kontrollen.map((k) => [k.id, k]));
-  const offenJe = new Map<string, number>();
-  for (const d of ctx.durchfuehrungen) {
-    if (kontrolle.get(d.kontrolleId)?.partei !== 'MANDANT' || !OFFEN.has(d.anzeige)) continue;
-    const m = monatSchluessel(d.periodeBis);
-    offenJe.set(m, (offenJe.get(m) ?? 0) + 1);
-  }
-  const jetzt = monatSchluessel(ctx.heute);
-  const seg: MonatsSegment[] = [];
-  for (
-    let d = new Date(Date.UTC(p.wirksamAb.getUTCFullYear(), p.wirksamAb.getUTCMonth(), 1));
-    d.getTime() <= p.wirksamBis.getTime();
-    d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))
-  ) {
-    const m = monatSchluessel(d);
-    const offen = offenJe.get(m) ?? 0;
-    seg.push({
-      label: (MONATE[d.getUTCMonth()] ?? '').slice(0, 3),
-      zustand: m === jetzt ? 'now' : m < jetzt ? (offen ? 'offen' : 'done') : '',
-      offen,
-    });
-  }
-  return seg;
-}
-
-/** Kanzleiteam des Mandanten (Berufsträger:in und Bearbeitung). */
-export function kanzleiTeam(ctx: TcmsKontext): { person: PersonKurz; rolle: string }[] {
+/** Kanzleiteam des Mandanten (Berufsträger:in und Bearbeitung) aus dem Demo-Verzeichnis. */
+export function kanzleiTeam(mandantId: string): { person: PersonKurz; rolle: string }[] {
+  const z = zustaendigkeit(mandantId);
+  const bt = demoPersonen.person(z.berufstraegerId);
+  const hb = demoPersonen.person(z.bearbeitungId);
   const t: { person: PersonKurz; rolle: string }[] = [];
-  const bt = ctx.personen.get(ctx.mandant.berufstraegerId);
-  const hb = ctx.personen.get(ctx.mandant.bearbeitungId);
-  if (bt) t.push({ person: bt, rolle: bt.funktion?.split(',')[0] ?? 'Berufsträger:in' });
-  if (hb && hb.id !== bt?.id) t.push({ person: hb, rolle: hb.funktion ?? 'Bearbeitung' });
+  if (bt)
+    t.push({ person: personKurz(bt), rolle: bt.funktion?.split(',')[0] ?? 'Berufsträger:in' });
+  if (hb && hb.id !== bt?.id)
+    t.push({ person: personKurz(hb), rolle: hb.funktion ?? 'Bearbeitung' });
   return t;
 }
 
-export const heuteIso = (ctx: TcmsKontext) => isoDatum(ctx.heute);
+/** Portal-Startseite für den angemeldeten Mandantenkontakt (eigener Mandant). */
+export async function ladePortalStart(akteur: MandantAkteur): Promise<PortalStart> {
+  const u = await imDienst(akteur, DEMO_PORTS, (ctx) =>
+    ladePortalUebersicht(ctx, { mandantId: akteur.mandantId }),
+  );
+  return {
+    heute: new Date(`${u.heute}T00:00:00Z`),
+    mandant: u.mandant,
+    rechte: u.rechte,
+    programm: u.programm
+      ? {
+          ...u.programm,
+          wirksamAb: datumOder(u.programm.wirksamAb),
+          wirksamBis: datumOder(u.programm.wirksamBis),
+        }
+      : null,
+    aufgaben: u.aufgaben.map((a) => ({
+      d: {
+        id: a.durchfuehrungId,
+        code: a.code,
+        titel: a.titel,
+        periodeLabel: a.periodeLabel,
+        faelligAm: new Date(a.faelligAm),
+        anzeige: a.anzeige,
+        status: a.status,
+        nachweise: a.nachweise,
+        mindestNachweise: a.mindestNachweise,
+      },
+      art: a.art,
+      eigene: a.eigene,
+      zustaendig: name(a.zustaendigId),
+      nachweis: a.nachweis,
+      ziel: a.ziel,
+    })),
+    meldungen: u.meldungen.map((m) => ({ ...m, gemeldetAm: new Date(m.gemeldetAm) })),
+    team: kanzleiTeam(u.mandant.id),
+  };
+}
+
+/** Anzeigename einer Person aus dem Demo-Verzeichnis. */
+export const personAnzeige = name;

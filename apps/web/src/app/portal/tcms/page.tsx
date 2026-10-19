@@ -1,16 +1,13 @@
 import Link from 'next/link';
-import { ereignistyp, fmtDatum, fmtDatumKurz, isoDatum, PHASEN, tageZwischen } from '@tcms/domain';
+import { ereignistyp, fmtDatum, fmtDatumKurz, PHASEN, tageZwischen } from '@tcms/domain';
 import { Icon } from '@/components/icon';
 import { AufgabeKarte } from '@/components/portal/aufgabe';
 import { DokThumb } from '@/components/portal/freigabe';
 import { Leerzustand } from '@/components/ui/leer';
 import { MiniSteps } from '@/components/ui/visual';
 import { brauchtCode, ladeFreigaben } from '@/server/freigaben-daten';
-import { ladeKontext } from '@/server/kontext';
-import { istGesetzlicherVertreter, kannPortalLesen } from '@tcms/service';
-import { kanzleiTeam, PHASE_EINFACH, portalAufgaben, zeitraumMonate } from '@/server/portal-daten';
+import { ladePortalStart, personAnzeige, PHASE_EINFACH } from '@/server/portal-daten';
 import { brauchtPortal } from '@/server/sitzung';
-import { heute } from '@/server/zeit';
 
 export const metadata = { title: 'Tax-Compliance' };
 
@@ -29,9 +26,11 @@ const TON: Record<string, string> = {
 };
 
 export default async function PortalUebersicht() {
-  const { akteur: nutzer, rollen } = await brauchtPortal();
-  const ctx = await ladeKontext(nutzer.mandantId, isoDatum(heute()), false);
-  if (!ctx?.programm) {
+  const { akteur: nutzer } = await brauchtPortal();
+  // Rechte, Filter (GV/TCB alles, Mitarbeitende nur Eigenes) und Daten aus dem Service.
+  const start = await ladePortalStart(nutzer);
+  const p = start.programm;
+  if (!p) {
     return (
       <div className="page">
         <h1 className="page-title">Tax-Compliance</h1>
@@ -45,11 +44,8 @@ export default async function PortalUebersicht() {
     );
   }
 
-  // Portal-Übersicht: GV und TCB (aktive Rolle); Mitarbeitende sehen nur Eigenes.
-  const lesen = kannPortalLesen(nutzer, nutzer.mandantId, rollen);
-  const istGv = istGesetzlicherVertreter(nutzer, nutzer.mandantId, rollen);
-  const darfMelden = lesen;
-  const aufgaben = portalAufgaben(ctx, nutzer);
+  const { portalLesen: lesen, gesetzlicherVertreter: istGv, melden: darfMelden } = start.rechte;
+  const aufgaben = start.aufgaben;
   const meine = aufgaben.filter((a) => a.eigene);
   const weitere = lesen ? aufgaben.filter((a) => !a.eigene) : [];
   const ueberfaellig = aufgaben.filter((a) => a.d.anzeige === 'UEBERFAELLIG');
@@ -60,19 +56,11 @@ export default async function PortalUebersicht() {
   const offeneF = eintraege
     .filter((f) => f.status === 'OFFEN' && (lesen || f.empfaengerId === nutzer.id))
     .sort((a, b) => Number(kannF(b)) - Number(kannF(a)));
-  const monate = zeitraumMonate(ctx);
-  const zr = ctx.zeitraum;
-  const p = ctx.programm;
-  const mandantIds = new Set(ctx.mandantPersonen.map((x) => x.id));
-  const meldungen = ctx.ereignisse
-    .filter(
-      (e) =>
-        (e.quelle === 'PORTAL' || (e.gemeldetVon && mandantIds.has(e.gemeldetVon))) &&
-        (lesen || e.gemeldetVon === nutzer.id),
-    )
-    .slice(0, 4);
-  const team = kanzleiTeam(ctx);
-  const restTage = p.wirksamBis ? tageZwischen(ctx.heute, p.wirksamBis) : null;
+  const monate = p.monate;
+  const zr = p.zeitraum;
+  const meldungen = start.meldungen.slice(0, 4);
+  const team = start.team;
+  const restTage = p.wirksamBis ? tageZwischen(start.heute, p.wirksamBis) : null;
 
   return (
     <div className="page">
@@ -84,7 +72,7 @@ export default async function PortalUebersicht() {
 
       {/* Bühne: Phase bzw. gemeinsamer Kontrollzeitraum */}
       <div className="card p-4 mb-4">
-        {zr && p.wirksamAb && p.wirksamBis && ctx.aktivePhase === 6 ? (
+        {zr && p.wirksamAb && p.wirksamBis && p.aktivePhase === 6 ? (
           <>
             <div className="row-between mb-3" style={{ flexWrap: 'wrap', gap: 8 }}>
               <div className="row-lg">
@@ -155,16 +143,16 @@ export default async function PortalUebersicht() {
             <div className="col" style={{ gap: 4 }}>
               <div className="row-lg">
                 <span className="text-lg font-b text-primary">
-                  Stand: {PHASEN[ctx.aktivePhase - 1]}
+                  Stand: {PHASEN[p.aktivePhase - 1]}
                 </span>
-                <span className="badge-brand">Schritt {ctx.aktivePhase} von 7</span>
+                <span className="badge-brand">Schritt {p.aktivePhase} von 7</span>
               </div>
-              <span className="text-sm text-secondary">{PHASE_EINFACH[ctx.aktivePhase]}</span>
+              <span className="text-sm text-secondary">{PHASE_EINFACH[p.aktivePhase]}</span>
             </div>
-            <MiniSteps aktiv={ctx.aktivePhase} titel={[...PHASEN]} />
+            <MiniSteps aktiv={p.aktivePhase} titel={[...PHASEN]} />
           </div>
         )}
-        {ctx.aktivePhase === 6 ? (
+        {p.aktivePhase === 6 ? (
           <div className="text-xs text-muted mt-2">{PHASE_EINFACH[6]}</div>
         ) : null}
       </div>
@@ -367,10 +355,8 @@ export default async function PortalUebersicht() {
                       <div className="text-sm font-m">{e.titel}</div>
                       <div className="text-11 text-muted mt-1">
                         {e.typ} · gemeldet {fmtDatum(e.gemeldetAm)}
-                        {e.gemeldetVon
-                          ? ` von ${ctx.personen.get(e.gemeldetVon)?.name ?? '—'}`
-                          : ''}{' '}
-                        · Vorgang {e.nummer}
+                        {e.gemeldetVon ? ` von ${personAnzeige(e.gemeldetVon)}` : ''} · Vorgang{' '}
+                        {e.nummer}
                       </div>
                     </div>
                     <span className={`${badge} shrink0`}>{label}</span>

@@ -11,6 +11,7 @@ import {
   bodySha256,
   KontextAntwortSchema,
   MAX_MANDANTEN_JE_ANFRAGE,
+  PortalUebersichtAntwortSchema,
   PortfolioAntwortSchema,
   type AkteurClaims,
 } from '@tcms/contract';
@@ -91,6 +92,35 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
         const r = await bestaetigtSenden(app(), { ziel: `${pfad}${q}`, claims: anna() });
         expect(r.status, q).toBe(400);
       }
+    });
+  });
+
+  describe('GET /v1/mandanten/:mandantId/portal/uebersicht', () => {
+    const pfad = `/v1/mandanten/${DEMO_IDS.talwind}/portal/uebersicht`;
+
+    it('Mandantenkontakt mit Rolle: 200, vertragsgemäß', async () => {
+      const r = await bestaetigtSenden(app(), { ziel: pfad, roheClaims: jana(pfad) });
+      expect(r.status).toBe(200);
+      const u = PortalUebersichtAntwortSchema.parse((await json(r))['daten']);
+      expect(u.mandant.id).toBe(DEMO_IDS.talwind);
+      expect(u.rechte.portalLesen).toBe(true);
+    });
+
+    it('fremder Mandant im Pfad: 404', async () => {
+      const fremd = `/v1/mandanten/${DEMO_IDS.seestern}/portal/uebersicht`;
+      const r = await bestaetigtSenden(app(), { ziel: fremd, roheClaims: jana(fremd) });
+      expect(r.status).toBe(404);
+    });
+
+    it('Kanzleiperson: 403 (nur Mandantenkontakte)', async () => {
+      const r = await bestaetigtSenden(app(), { ziel: pfad, claims: anna() });
+      expect(r.status).toBe(403);
+    });
+
+    it('Query: 400', async () => {
+      const mitQuery = `${pfad}?stand=2026-01-01`;
+      const q = await bestaetigtSenden(app(), { ziel: mitQuery, roheClaims: jana(mitQuery) });
+      expect(q.status).toBe(400);
     });
   });
 

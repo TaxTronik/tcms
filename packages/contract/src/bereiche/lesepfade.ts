@@ -754,3 +754,90 @@ export const ArbeitskorbAntwortSchema = z
   .strict();
 
 export type ArbeitskorbAntwort = z.infer<typeof ArbeitskorbAntwortSchema>;
+
+// ---------------------------------------------------------------------------
+// Portal-Startseite (P1, `portal: true`)
+// ---------------------------------------------------------------------------
+
+/** Eingabe der Portal-Übersicht: nur der eigene Mandant (Pfad, gebunden an `cli.id`). */
+export const PortalUebersichtEingabeSchema = z.object({ mandantId: z.uuid() }).strict();
+export type PortalUebersichtEingabe = z.infer<typeof PortalUebersichtEingabeSchema>;
+
+/**
+ * Antwort von `GET /v1/mandanten/:mandantId/portal/uebersicht`: mandantenbezogene
+ * Sicht ohne Kanzlei-Interna (keine Nettoklassen, keine Feststellungen, keine
+ * §-153-Details). Gesetzliche Vertretung und Tax-Compliance-Beauftragte sehen
+ * alle Mandantenaufgaben, Mitarbeitende nur ihre eigenen.
+ */
+export const PortalUebersichtAntwortSchema = z
+  .object({
+    heute: StandSchema,
+    mandant: mandantKurz,
+    rechte: z
+      .object({
+        /** Übersicht über alle Mandantenaufgaben (GV, TCB). */
+        portalLesen: z.boolean(),
+        gesetzlicherVertreter: z.boolean(),
+        /** Ereignisse melden (GV, TCB). */
+        melden: z.boolean(),
+      })
+      .strict(),
+    programm: z
+      .object({
+        aktivePhase: z.number().int(),
+        wirksamAb: zeitpunkt.nullable(),
+        wirksamBis: zeitpunkt.nullable(),
+        zeitraum: z
+          .object({ monat: z.number().int(), monate: z.number().int() })
+          .strict()
+          .nullable(),
+        monate: z.array(
+          z
+            .object({
+              label: text(20),
+              zustand: z.enum(['done', 'now', 'offen', '']),
+              offen: z.number().int(),
+            })
+            .strict(),
+        ),
+      })
+      .strict()
+      .nullable(),
+    aufgaben: z.array(
+      z
+        .object({
+          art: z.enum(['DURCHFUEHREN', 'BESTAETIGEN']),
+          /** Der Person selbst zugewiesen (durchführend, Vertretung bzw. bestätigend). */
+          eigene: z.boolean(),
+          durchfuehrungId: objektId,
+          code: text(50),
+          titel: text(500),
+          periodeLabel: text(100),
+          faelligAm: zeitpunkt,
+          anzeige: anzeigeStatus,
+          status: text(50),
+          nachweise: z.number().int(),
+          mindestNachweise: z.number().int(),
+          zustaendigId: personId.nullable(),
+          nachweis: text(10_000),
+          ziel: text(10_000),
+        })
+        .strict(),
+    ),
+    meldungen: z.array(
+      z
+        .object({
+          id: objektId,
+          nummer: text(50),
+          typ: text(100),
+          titel: text(500),
+          status: z.enum(['NEU', 'IN_TRIAGE', 'ERLEDIGT', 'VERWORFEN']),
+          gemeldetAm: zeitpunkt,
+          gemeldetVon: personId.nullable(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export type PortalUebersichtAntwort = z.infer<typeof PortalUebersichtAntwortSchema>;
