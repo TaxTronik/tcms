@@ -112,6 +112,13 @@ const standId = ObjektIdSchema;
 const risiko = { mandantId, risikoId: ObjektIdSchema };
 const kontrolle = { mandantId, kontrolleId: ObjektIdSchema };
 
+/** Pfadparameter der Endpunkte (Endpunktregister, `endpunkte.ts`). */
+export const RisikoPfadSchema = z.object(risiko).strict();
+export const KontrollePfadSchema = z.object(kontrolle).strict();
+export const UebersteuerungPfadSchema = z
+  .object({ mandantId, uebersteuerungId: ObjektIdSchema })
+  .strict();
+
 // --- Risiken -----------------------------------------------------------------
 
 /** Neubewertung: S, W, R und GT; Klassen berechnet der Dienst (Regel 2). */

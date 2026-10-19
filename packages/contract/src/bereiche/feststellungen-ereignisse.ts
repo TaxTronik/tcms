@@ -195,6 +195,8 @@ export const MassnahmeErledigenSchema = MassnahmeErledigenBodySchema.extend({
   ...mandant,
   massnahmeId: ObjektIdSchema,
 }).strict();
+/** Pfadparameter von `massnahmen/{id}/erledigen` (Endpunktregister). */
+export const MassnahmeAktionSchema = z.object({ ...mandant, massnahmeId: ObjektIdSchema }).strict();
 
 // ---- Nachkontrolle ----
 export const NachkontrolleBodySchema = z
