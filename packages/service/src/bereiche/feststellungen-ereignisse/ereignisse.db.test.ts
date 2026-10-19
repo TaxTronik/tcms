@@ -31,6 +31,7 @@ import {
   verwerfeFolge,
 } from './ereignisse';
 import { ladeEreignis, ladeEreignisAnlage, ladeEreignisse } from './ereignisse-lesen';
+import { ladePortalUebersicht } from '../lesepfade/portal';
 import { ladePortalMeldungen, meldeEreignis } from './portal';
 import {
   akteure,
@@ -975,18 +976,52 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
     }
   });
 
-  it('Portal-Meldungen lesen: alle aktiven Rollen des eigenen Mandanten, sonst NICHT_GEFUNDEN', async () => {
+  // ADR 0001 §5 (RT4-T-04): Aufrufen dürfen alle aktiven Rollen des eigenen
+  // Mandanten; Meldungen anderer sehen nur GV und TCB (Portal-Lesen), wie in der
+  // Portal-Übersicht. Früher sah hier jede Rolle alle Meldungen – auch
+  // Mitarbeitende die vertraulichen Meldungen der Geschäftsführung.
+  it('Portal-Meldungen lesen: GV/TCB alle, andere Rollen nur eigene, ohne Rolle NICHT_GEFUNDEN', async () => {
     const r = await im(A.gv, (ctx) => meldeEreignis(ctx, meldung() as never));
-    for (const a of [A.ma, A.tcb, A.gv, A.leser]) {
+    for (const [a, sieht] of [
+      [A.tcb, true],
+      [A.gv, true],
+      [A.ma, false],
+      [A.leser, false],
+    ] as const) {
       const l = await im(a, (ctx) => ladePortalMeldungen(ctx, { mandantId: w.mandant }));
       expect(PortalMeldungenSchema.parse(l)).toEqual(l);
-      expect(l.meldungen.some((m) => m.id === r.id)).toBe(true);
+      expect(l.meldungen.some((m) => m.id === r.id)).toBe(sieht);
     }
     for (const a of [A.ohneRolle, A.gvFremd, A.ohneBezug, A.leerTenant]) {
       expect(
         (await fehlerVon(im(a, (ctx) => ladePortalMeldungen(ctx, { mandantId: w.mandant })))).code,
       ).toBe('NICHT_GEFUNDEN');
     }
+  });
+
+  it('Portal-Meldungen lesen: Mitarbeitende sehen ihre eigene Meldung (etwa aus früherer Rolle), keine fremde', async () => {
+    // Meldung der Mitarbeiterin aus einer früheren Rolle (direkt angelegt, Quelle PORTAL).
+    const eigene = await inTenant(w, (tx) =>
+      legeEreignisAn(tx, {
+        programmId: w.programm,
+        typ: 'T-02',
+        titel: 'Eigene Meldung der Mitarbeiterin',
+        beschreibung: 'Gemeldet, als sie noch Tax-Compliance-Beauftragte war.',
+        quelle: 'PORTAL',
+        gemeldetVon: w.p.ma,
+        ereignisDatum: new Date('2026-09-01T00:00:00Z'),
+        zeitpunkt: new Date('2026-10-02T09:00:00Z'),
+      }),
+    );
+    const fremd = await im(A.gv, (ctx) => meldeEreignis(ctx, meldung() as never));
+    const l = await im(A.ma, (ctx) => ladePortalMeldungen(ctx, { mandantId: w.mandant }));
+    expect(l.meldungen.map((m) => m.id)).toContain(eigene.id);
+    expect(l.meldungen.map((m) => m.id)).not.toContain(fremd.id);
+    expect(l.meldungen.every((m) => m.gemeldetVon === w.p.ma)).toBe(true);
+    // Die Portal-Übersicht wendet dieselbe Regel an (siehtPortalMeldung).
+    const u = await im(A.ma, (ctx) => ladePortalUebersicht(ctx, { mandantId: w.mandant }));
+    expect(u.meldungen.map((m) => m.id)).toContain(eigene.id);
+    expect(u.meldungen.map((m) => m.id)).not.toContain(fremd.id);
   });
 
   it('Portal-Meldungen lesen: Melderecht = Ergebnis von „Ereignis melden"; Programm vorhanden', async () => {

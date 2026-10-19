@@ -18,7 +18,12 @@ import {
 import { addTage, isoDatum, MONATE, monatSchluessel, type AnzeigeStatus } from '@tcms/domain';
 import { ladeKontext, type TcmsKontext } from '../../kern/tcms-kontext';
 import type { DienstKontext } from '../../kontext';
-import { gleicheId, istGesetzlicherVertreter, kannPortalLesen } from '../../rechte';
+import {
+  gleicheId,
+  istGesetzlicherVertreter,
+  kannPortalLesen,
+  siehtPortalMeldung,
+} from '../../rechte';
 import { ladeKontaktRollen } from '../../rollen';
 import { alsJson, antwortNach, pruefeEingabe } from './hilfen';
 
@@ -149,7 +154,7 @@ export async function ladePortalUebersicht(
     .filter(
       (x) =>
         (x.quelle === 'PORTAL' || (!!x.gemeldetVon && kontakte.has(x.gemeldetVon.toLowerCase()))) &&
-        (lesen || gleicheId(x.gemeldetVon, a.id)),
+        siehtPortalMeldung(a, k.mandant.id, rollen, x.gemeldetVon),
     )
     .slice(0, MAX_MELDUNGEN)
     .map((x) => ({

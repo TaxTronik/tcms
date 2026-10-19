@@ -13,6 +13,7 @@ import {
   kannVerwalten,
   kannVerwerfenBestaetigen,
   kannWuerdigen,
+  siehtPortalMeldung,
   zweitePerson,
   type KontaktRolle,
   type KontrollZustaendigkeit,
@@ -302,6 +303,20 @@ describe('Rechtematrix (ADR 0001 §5) für Mandant M1', () => {
   it('Mandanten-ID wird ohne Rücksicht auf Groß-/Kleinschreibung verglichen', () => {
     expect(kannBearbeiten(ADMIN_BT, M1.toUpperCase())).toBe(true);
     expect(kannLesen(GV, M1.toUpperCase(), ROLLEN)).toBe(true);
+  });
+});
+
+// --------------------------------------------------------------- RT4-T-04 --
+
+describe('Portal-Meldungen sehen (eine Regel für P1 und P3)', () => {
+  it('GV und TCB sehen jede Meldung, alle anderen nur selbst gemeldete', () => {
+    const vonGv = GV.id;
+    for (const a of [GV, TCB]) expect(siehtPortalMeldung(a, M1, ROLLEN, vonGv)).toBe(true);
+    for (const a of [MA, OHNE_ROLLE, DEAKTIVIERT, FREMDER_KONTAKT, ADMIN_BT, HB]) {
+      expect(siehtPortalMeldung(a, M1, ROLLEN, vonGv), a.id).toBe(false);
+    }
+    expect(siehtPortalMeldung(MA, M1, ROLLEN, MA.id.toUpperCase())).toBe(true);
+    expect(siehtPortalMeldung(MA, M1, ROLLEN, null)).toBe(false);
   });
 });
 

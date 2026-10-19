@@ -112,6 +112,22 @@ export function kannPortalLesen(
   return r.has('GESETZLICHER_VERTRETER') || r.has('TAX_COMPLIANCE_BEAUFTRAGTER');
 }
 
+/**
+ * Eine Portal-Meldung (im Portal gemeldetes Ereignis) sehen: gesetzliche
+ * Vertretung und Tax-Compliance-Beauftragte alle Meldungen des Mandanten
+ * (`kannPortalLesen`), alle anderen nur selbst gemeldete. Eine Regel für die
+ * Portal-Übersicht (P1) und die Meldungsliste (P3), RT4-T-04 – vertrauliche
+ * Meldungen der Geschäftsführung erreichen Mitarbeitende so auf keinem Weg.
+ */
+export function siehtPortalMeldung(
+  a: Akteur,
+  mandantId: string,
+  rollen: readonly KontaktRolle[],
+  gemeldetVon: string | null,
+): boolean {
+  return kannPortalLesen(a, mandantId, rollen) || gleicheId(gemeldetVon, a.id);
+}
+
 export function istGesetzlicherVertreter(
   a: Akteur,
   mandantId: string,

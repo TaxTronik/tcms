@@ -19,7 +19,7 @@ import {
 import { EREIGNISTYPEN, ereignistyp, fmtDatumZeit, PORTAL_SONSTIGES } from '@tcms/domain';
 import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
-import { kannLesen, kannPortalLesen, type KontaktRolle } from '../../rechte';
+import { kannLesen, kannPortalLesen, siehtPortalMeldung, type KontaktRolle } from '../../rechte';
 import { ladeKontaktRollen } from '../../rollen';
 import { legeNachrichtAn } from '../programm-beschreibung/nachrichten';
 import { legeEreignisAn } from './ereignisse';
@@ -154,9 +154,11 @@ export async function meldeEreignis(
 }
 
 /**
- * Die letzten Portal-Meldungen des eigenen Mandanten (P3). Lesen dürfen alle
- * Kontakte mit aktiver Rolle beim eigenen Mandanten und Kanzleipersonen mit
- * Bezug (`kannLesen`); sonst NICHT_GEFUNDEN.
+ * Die letzten Portal-Meldungen des eigenen Mandanten (P3). Aufrufen dürfen
+ * alle Kontakte mit aktiver Rolle beim eigenen Mandanten und Kanzleipersonen
+ * mit Bezug (`kannLesen`); sonst NICHT_GEFUNDEN. Welche Meldungen sie sehen,
+ * regelt `siehtPortalMeldung` wie in der Portal-Übersicht (ADR 0001 §5,
+ * RT4-T-04): GV und TCB alle, alle anderen nur selbst gemeldete.
  */
 export async function ladePortalMeldungen(
   ctx: DienstKontext,
@@ -171,8 +173,15 @@ export async function ladePortalMeldungen(
   const melden = darfEreignisMelden(ctx.akteur, mandantId, rollen);
   const programm = await programmVon(ctx.tx, mandantId);
   if (!programm) return { melden, programmVorhanden: false, meldungen: [], namen: [] };
+  const alle = kannPortalLesen(ctx.akteur, mandantId, rollen);
   const roh = await ctx.tx.ereignis.findMany({
-    where: { programmId: programm.id, quelle: 'PORTAL' },
+    where: {
+      programmId: programm.id,
+      quelle: 'PORTAL',
+      // Ohne Portal-Lesen nur die eigenen (dieselbe Regel wie unten, schon in der Abfrage,
+      // damit die Grenze von 20 nur Sichtbares zählt).
+      ...(alle ? {} : { gemeldetVon: { equals: ctx.akteur.id, mode: 'insensitive' as const } }),
+    },
     orderBy: { gemeldetAm: 'desc' },
     take: 20,
     select: {
@@ -185,7 +194,9 @@ export async function ladePortalMeldungen(
       gemeldetVon: true,
     },
   });
-  const meldungen = roh.map((m) => ({ ...m, gemeldetAm: isoZeit(m.gemeldetAm) }));
+  const meldungen = roh
+    .filter((m) => siehtPortalMeldung(ctx.akteur, mandantId, rollen, m.gemeldetVon))
+    .map((m) => ({ ...m, gemeldetAm: isoZeit(m.gemeldetAm) }));
   return {
     melden,
     programmVorhanden: true,

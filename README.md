@@ -399,7 +399,7 @@ lesbare (RT-01).
 | POST    | `…/{id}/folgen/anlegen`, `…/folgen/{folgeId}/verwerfen`, `…/abschliessen` | `kannBearbeiten`                                                                                |
 | POST    | `…/folgen/{folgeId}/erledigen`                                            | `kannBearbeiten` oder zuständig                                                                 |
 | POST    | `…/{id}/verwerfen/beantragen` · `bestaetigen` · `ablehnen`                | `kannBearbeiten`, Bestätigung zweite Person                                                     |
-| GET     | `portal/ereignisse` (Portal)                                              | aktive Rolle beim eigenen Mandanten                                                             |
+| GET     | `portal/ereignisse` (Portal)                                              | aktive Rolle beim eigenen Mandanten; GV/TCB alle Meldungen, sonst nur eigene (RT4-T-04)         |
 | POST    | `portal/ereignisse` (Portal, 201, Anlagen nur als Verweise)               | GV oder TCB des eigenen Mandanten                                                               |
 | GET     | `laender`                                                                 | Kanzlei mit Bezug                                                                               |
 | POST    | `laender` (201), `laender/staende` (201)                                  | `kannBearbeiten`                                                                                |
