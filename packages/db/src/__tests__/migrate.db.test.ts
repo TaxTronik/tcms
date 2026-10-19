@@ -18,6 +18,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from 'node:crypto';
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdtempSync,
@@ -340,6 +341,78 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
       expect(gesehen.treffer).toEqual([]);
     },
   );
+
+  it('psql sieht nur die Werte seiner Rolle: keine Superuser-URL, keine fremden Passwörter (RT2-T-01)', async () => {
+    // Ein psql-Stellvertreter vor dem echten psql protokolliert je Aufruf die
+    // Rolle und die NAMEN der geerbten Umgebungsvariablen (keine Werte).
+    const z = await neueDb();
+    const ordner = mkdtempSync(join(tmpdir(), 'tcms-psql-env-'));
+    const protokoll = join(ordner, 'umgebung.log');
+    const echt = (await starte('sh', ['-c', 'command -v psql'], {})).stdout.trim();
+    expect(echt).not.toBe('');
+    writeFileSync(
+      join(ordner, 'psql'),
+      `#!/bin/sh\n{ printf 'ROLLE=%s\\n' "$PGUSER"; env | cut -d= -f1 | sort | tr '\\n' ' '; printf '\\n'; } >> '${protokoll}'\nexec '${echt}' "$@"\n`,
+    );
+    chmodSync(join(ordner, 'psql'), 0o755);
+    try {
+      const r = await migriere(z, undefined, SKRIPT, {
+        PATH: `${ordner}:${process.env.PATH ?? ''}`,
+        TCMS_TEST_FREMD: 'x',
+      });
+      expect(r.code, ausgabe(r)).toBe(0);
+      const zeilen = readFileSync(protokoll, 'utf8').trim().split('\n');
+      const aufrufe: { rolle: string; namen: string[] }[] = [];
+      for (let i = 0; i < zeilen.length; i += 2) {
+        aufrufe.push({
+          rolle: zeilen[i]!.slice('ROLLE='.length),
+          namen: zeilen[i + 1]!.trim().split(' '),
+        });
+      }
+      const su = aufrufe.filter((a) => a.rolle !== 'tcms_owner');
+      const ow = aufrufe.filter((a) => a.rolle === 'tcms_owner');
+      expect(su.length).toBe(1);
+      expect(ow.length).toBeGreaterThanOrEqual(2);
+      for (const a of [...su, ...ow]) {
+        expect(a.namen).not.toContain('TCMS_DB_SUPERUSER_URL');
+        expect(a.namen).not.toContain('TCMS_DB_OWNER_URL');
+        expect(a.namen).not.toContain('TCMS_TEST_FREMD');
+      }
+      // Bootstrap braucht die beiden Rollenpasswörter (\getenv), sonst niemand.
+      expect(su[0]!.namen).toEqual(
+        expect.arrayContaining(['TCMS_DB_OWNER_PASSWORD', 'TCMS_DB_APP_PASSWORD']),
+      );
+      for (const a of ow) {
+        expect(a.namen).not.toContain('TCMS_DB_OWNER_PASSWORD');
+        expect(a.namen).not.toContain('TCMS_DB_APP_PASSWORD');
+      }
+    } finally {
+      rmSync(ordner, { recursive: true, force: true });
+    }
+  });
+
+  it('weist jeden Backslash in einer Migration ab, auch mitten in der Zeile (RT2-T-01)', async () => {
+    for (const inhalt of [
+      'SELECT 1 AS x \\getenv geheim TCMS_DB_SUPERUSER_URL\n',
+      "SELECT 'a\\b' AS literal;\n",
+      'CREATE TABLE t (x int); -- \\! id\n',
+    ]) {
+      const z = await neueDb();
+      const kopie = mkdtempSync(join(tmpdir(), 'tcms-mig-bs-'));
+      try {
+        cpSync(join(DB_PAKET, 'betrieb'), join(kopie, 'betrieb'), { recursive: true });
+        cpSync(join(DB_PAKET, 'prisma'), join(kopie, 'prisma'), { recursive: true });
+        const ziel = join(kopie, 'prisma', 'migrations', '29990101000000_backslash');
+        cpSync(join(MIGRATIONEN, migrationen()[0]!.name), ziel, { recursive: true });
+        writeFileSync(join(ziel, 'migration.sql'), inhalt);
+        const r = await migriere(z, undefined, join(kopie, 'betrieb', 'migrate.sh'));
+        expect(r.code, ausgabe(r)).toBe(65);
+        expect(r.stderr + r.stdout).toContain('enthält einen Backslash');
+      } finally {
+        rmSync(kopie, { recursive: true, force: true });
+      }
+    }
+  });
 
   it('schreibt keine Passwörter in Server-Log oder pg_stat_statements', async () => {
     const z = await neueDb();

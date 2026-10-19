@@ -123,14 +123,35 @@ zerlege_url() {
   ziel[sslmode]=$sslmode
 }
 
-# psql_als <assoziatives-array> <psql-argumente…>; liest bei `-f -` von stdin.
+# psql_als <assoziatives-array> [--env NAME]… <psql-argumente…>; liest bei
+# `-f -` von stdin. psql erbt eine geleerte Umgebung: nur PATH, Locale, die
+# PG*-Werte der Rolle und ausdrücklich genannte Variablen (Bootstrap: die
+# beiden Rollenpasswörter für `\getenv`). Selbst ein Metabefehl, der an der
+# Migrationsprüfung vorbeikäme, sähe so weder die Superuser-URL noch fremde
+# Passwörter (Red Team RT2-T-01, Verteidigung in der Tiefe). Werte gehen nie
+# über argv (kein `env -i NAME=WERT`), nur über die Umgebung der Subshell.
 psql_als() {
   local -n v=$1
   shift
+  local -A extra=()
+  while [[ ${1:-} == --env ]]; do
+    extra[$2]=${!2}
+    shift 2
+  done
   (
+    local name
+    for name in $(compgen -e); do
+      case $name in
+        PATH | LANG | LC_ALL) ;;
+        *) unset "$name" ;;
+      esac
+    done
     export PGHOST="${v[host]}" PGPORT="${v[port]}" PGUSER="${v[user]}" PGDATABASE="${v[db]}"
-    export PGPASSWORD="${v[pass]}" PGAPPNAME=tcms-migrate PGCONNECT_TIMEOUT=10
+    export PGPASSWORD="${v[pass]}" PGPASSFILE=/dev/null PGAPPNAME=tcms-migrate PGCONNECT_TIMEOUT=10
     if [[ -n ${v[sslmode]} ]]; then export PGSSLMODE="${v[sslmode]}"; fi
+    for name in "${!extra[@]}"; do
+      export "$name=${extra[$name]}"
+    done
     exec psql -X -q -v ON_ERROR_STOP=1 "$@"
   )
 }
@@ -141,16 +162,18 @@ pruefe_passwort() {
   [[ ! $wert =~ [[:cntrl:]] ]] || abbruch "$name: Steuerzeichen nicht erlaubt" 64
 }
 
-# Migrationsdateien: nur die erwarteten Namen, keine psql-Metabefehle (psql
-# würde sie ausführen, z. B. \!) und keine eigene Transaktionssteuerung (jede
-# Migration läuft in genau einer Transaktion mit ihrem Ledger-Eintrag).
+# Migrationsdateien: nur die erwarteten Namen, kein Backslash (psql führt
+# Metabefehle wie \! oder \getenv nicht nur am Zeilenanfang aus, sondern auch
+# mitten in einer Zeile nach gepuffertem SQL – Red Team RT2-T-01; ein Backslash
+# in einem Literal lässt sich mit chr(92) schreiben) und keine eigene
+# Transaktionssteuerung (jede Migration läuft in genau einer Transaktion mit
+# ihrem Ledger-Eintrag).
 pruefe_migration() {
   local name=$1 datei=$2
   [[ $name =~ ^[0-9]{14}_[a-z0-9_]+$ ]] || abbruch "Migration mit unzulässigem Namen: $name" 65
   [[ -f $datei && ! -L $datei ]] || abbruch "Migration $name: migration.sql fehlt" 65
-  # shellcheck disable=SC1003 # gesucht ist ein Backslash am Zeilenanfang
-  if grep -Eq '^[[:space:]]*\\' "$datei"; then
-    abbruch "Migration $name enthält psql-Metabefehle" 65
+  if grep -qF '\' "$datei"; then
+    abbruch "Migration $name enthält einen Backslash (psql-Metabefehle sind ausgeschlossen)" 65
   fi
   if grep -Eiq '^[[:space:]]*(BEGIN([[:space:]]+(WORK|TRANSACTION))?|START[[:space:]]+TRANSACTION|COMMIT|ROLLBACK|ABORT)[[:space:]]*;' "$datei"; then
     abbruch "Migration $name steuert Transaktionen selbst" 65
@@ -188,7 +211,8 @@ OW[pass]=$TCMS_DB_OWNER_PASSWORD
 
 # --- 1. Bootstrap ---------------------------------------------------------------
 melde "Bootstrap der Rollen in Datenbank ${SU[db]}"
-psql_als SU -f "$BOOTSTRAP" || abbruch "Bootstrap fehlgeschlagen (psql $?)" 2
+psql_als SU --env TCMS_DB_OWNER_PASSWORD --env TCMS_DB_APP_PASSWORD -f "$BOOTSTRAP" ||
+  abbruch "Bootstrap fehlgeschlagen (psql $?)" 2
 
 # --- 2. Migrationen -------------------------------------------------------------
 namen=()

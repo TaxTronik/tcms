@@ -238,7 +238,12 @@ Stufe 2). Ein `Dockerfile` mit zwei Zielen, Basisimages per Digest gepinnt
   Spalten von Prisma und SHA-256 der `migration.sql`; abweichende Prüfsumme,
   unvollständige oder dem Image unbekannte Migration → Abbruch; jede Migration
   mit ihrem Ledger-Eintrag in einer Transaktion, Migrationsdateien ohne
-  psql-Metabefehle und ohne eigene Transaktionssteuerung. (3) Prüfung
+  jeden Backslash (psql führt Metabefehle wie `\!` auch mitten in einer Zeile
+  aus; Backslash in Literalen über `chr(92)`, RT2-T-01) und ohne eigene
+  Transaktionssteuerung. Jeder psql-Aufruf erbt eine geleerte Umgebung: nur
+  PATH, Locale und die PG*-Werte seiner Rolle, der Bootstrap zusätzlich die
+  beiden Rollenpasswörter; die Migrationssitzung sieht weder die
+  Superuser-URL noch fremde Passwörter. (3) Prüfung
   (`betrieb/pruefung.sql`): `tcms_app` kein Superuser, NOBYPASSRLS, keine
   Mitgliedschaft, besitzt nichts, kein TRUNCATE/REFERENCES/TRIGGER, Audit nur
   anhängen; ENABLE+FORCE RLS mit Policy auf allen Tabellen außer Ledger und

@@ -11,8 +11,9 @@ für KI-Werkzeuge.
   Grundelemente, Prüflast, Formatierung. Änderungen hier brauchen Tests
   (`pnpm --filter @tcms/domain test`).
 - `packages/db` – Prisma-Schema, Migrationen (Init mit RLS je Tabelle, danach
-  Nachträge von Hand im Prisma-Format; ohne psql-Metabefehle und ohne eigene
-  Transaktionssteuerung, der Läufer `betrieb/migrate.sh` weist sie ab),
+  Nachträge von Hand im Prisma-Format; ohne jeden Backslash – auch nicht in
+  Literalen, dort `chr(92)` – und ohne eigene Transaktionssteuerung, der Läufer
+  `betrieb/migrate.sh` weist sie ab),
   Rollen-Bootstrap (Attribute und Rechte nur in `prisma/init/rollen.psql`, eingebunden
   von `01_bootstrap.sql` und vom Produktions-Bootstrap `betrieb/bootstrap.sql`),
   Migrationsläufer des Images `tcms-migrate` (`betrieb/`, psql, ADR 0001 §8),
