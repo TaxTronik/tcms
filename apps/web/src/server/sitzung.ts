@@ -2,6 +2,7 @@ import 'server-only';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { cache } from 'react';
+import type { Akteur } from '@tcms/contract';
 import { ladeKontaktRollen, type KontaktRolle } from '@tcms/service';
 import {
   akteurFuer,
@@ -52,6 +53,17 @@ export const aktuellePerson = cache(async (): Promise<DemoPerson | null> => {
   const jar = await cookies();
   return demoPerson(pruefeCookie(jar.get(COOKIE)?.value));
 });
+
+/**
+ * Akteur der angemeldeten Person für einen Mandanten, wie ihn die kanzleikonsole
+ * bestätigen würde (ADR 0001 §3.2): Kanzleiperson mit `cli` für genau diesen
+ * Mandanten (nur bekannte Demo-Mandanten), Mandantenkontakt unverändert mit
+ * seinem eigenen Mandanten. Ohne Sitzung null. Rechte prüft der Service.
+ */
+export async function demoAkteur(mandantId: string | null): Promise<Akteur | null> {
+  const p = await aktuellePerson();
+  return p ? akteurFuer(p, mandantId) : null;
+}
 
 /** Kanzleiperson ohne Mandantenbezug (Portfolio, Arbeitskorb, Administration). */
 export async function brauchtKanzlei(): Promise<KanzleiAkteur> {

@@ -19,7 +19,11 @@ für KI-Werkzeuge.
   (`rls.db.test.ts`) prüft das für jede Tabelle des Katalogs.
 - `packages/service` – Kern der Fachoperationen (ADR 0001 §2): `DienstKontext`
   (Transaktion, Akteur, Uhr, Personenverzeichnis, Nachweis-Ablage), `imDienst`,
-  `mitAudit`, Rechte über den `Akteur` (`rechte.ts`, ADR 0001 §5). Änderungen
+  `mitAudit`, Rechte über den `Akteur` (`rechte.ts`, ADR 0001 §5). Gemeinsamer
+  Kern aller Bereiche in `src/kern/` (Export über `bereiche/lesepfade.ts`):
+  `ladeKontext(ctx, { mandantId, stand? })` lädt den Tax-CMS-Kontext eines
+  Mandanten zu einem Stichtag (prüft `kannLesen`, maskiert vertrauliche
+  Feststellungen), Nummernkreise je Tenant, reine Stichtag-Helfer. Änderungen
   hier brauchen Tests (`pnpm --filter @tcms/service test`).
 - `packages/contract` – gemeinsamer Vertrag mit der kanzleikonsole (ADR 0001
   §3, §7): Claims-Schema und `Akteur`, Signieren und Prüfen der
@@ -34,8 +38,10 @@ für KI-Werkzeuge.
   `packages/service`. Tests ohne Netz über `app.request(...)`, dazu Socket-
   und DB-Tests.
 - `apps/web` – Next.js 16 (App Router, Server Components, Server Actions).
-  - `src/server/kontext.ts` lädt den vollständigen Tax-CMS-Kontext eines
-    Mandanten zu einem Stichtag. Screens im Mandantenkontext lesen daraus.
+  - `src/server/kontext.ts` – dünne Hülle um `ladeKontext` aus
+    `@tcms/service` (im Dienstkontext der angemeldeten Person, `demoAkteur`)
+    plus Personenangaben und Zuständigkeit aus dem Demo-Verzeichnis. Screens im
+    Mandantenkontext lesen daraus.
   - `src/server/seite.ts` (`ladeStaffSeite`) liefert Kontext, Rechte und
     Stichtag für Staff-Seiten.
   - `src/server/actions/*.ts` – Server Actions je Bereich.
