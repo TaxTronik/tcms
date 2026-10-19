@@ -1,0 +1,60 @@
+# =============================================================================
+# Build-Kontext der Produktions-Images (Dockerfile, ADR 0001 §8). Positivliste
+# im Ergebnis: nur Workspace-Manifeste, Lockfile, Quelltexte der Pakete des
+# Dienstes, das Prisma-Schema, Migrationen und der Migrationsläufer. Keine
+# .env, keine Tests, keine Demo (apps/web), keine Seeds, keine Doku, kein Git.
+# Auch Build-Stages sehen nur diesen Kontext (Layer-Cache, `docker history`).
+# Die Regeln prüft scripts/pruefe-dockerfile.mjs.
+# =============================================================================
+
+# Alles ausschließen, dann gezielt zulassen.
+*
+**/node_modules
+
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.base.json
+
+# Dienst (Quellen, Build- und Laufzeitskripte, Healthcheck)
+!apps/api/package.json
+!apps/api/tsconfig.json
+!apps/api/healthcheck.mjs
+!apps/api/scripts/build.mjs
+!apps/api/scripts/laufzeit.mjs
+!apps/api/src
+
+# Demo: nur das Manifest (pnpm braucht alle Workspace-Projekte des Lockfiles)
+!apps/web/package.json
+
+# Pakete des Dienstes
+!packages/contract/package.json
+!packages/contract/src
+!packages/domain/package.json
+!packages/domain/src
+!packages/service/package.json
+!packages/service/src
+!packages/db/package.json
+!packages/db/prisma.config.ts
+!packages/db/prisma/schema.prisma
+!packages/db/prisma/migrations
+!packages/db/prisma/init/rollen.psql
+!packages/db/betrieb/migrate.sh
+!packages/db/betrieb/bootstrap.sql
+!packages/db/betrieb/pruefung.sql
+!packages/db/src
+
+# Innerhalb der zugelassenen Verzeichnisse wieder ausschließen: Tests und
+# Testhilfen gehören in kein Image.
+**/__tests__
+**/*.test.ts
+**/*.db.test.ts
+**/*.perf.test.ts
+**/.env
+**/.env.*
+**/*.testhilfe.ts
+**/*.testapp.ts
+**/testfall.ts
+**/testwelt.ts
+**/testhilfen.ts
+**/testprogramm.ts
