@@ -33,6 +33,7 @@ export { ladeFreigabenHistorie } from './programm-beschreibung/kommunikation';
 export {
   bestaetigeNachrichtZustellung,
   ladeOffeneNachrichten,
+  legeNachrichtAn,
   leseNachrichtAdresse,
   nachrichtAdresse,
 } from './programm-beschreibung/nachrichten';
