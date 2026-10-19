@@ -164,8 +164,11 @@ für KI-Werkzeuge.
   (`SELECT … FOR UPDATE`) in derselben Transaktion, Änderungen als bedingtes
   Update (TS-05).
 - Nachweise sind Verweise der kanzleikonsole (Dokument-ID als UUID, SHA-256):
-  eine Dokument-ID gehört zu genau einem Mandanten und einem Inhalt (auch nach
-  dem Entfernen). Entfernen markiert den Verweis (`entferntAm`/`entferntVon`);
+  eine Dokument-ID gehört je Mandant zu genau einem Inhalt (auch nach
+  dem Entfernen). Ob ein Dokument zum Mandanten gehört, prüft die
+  kanzleikonsole; Verweise anderer Mandanten zählen beim Anhängen nicht, eine
+  dort verwendete Dokument-ID gilt wie eine unbekannte (kein Orakel, Hinweis
+  H3 aus RT4). Entfernen markiert den Verweis (`entferntAm`/`entferntVon`);
   jeder Lesezugriff filtert `entferntAm IS NULL`, der vollständige Verweis
   steht zusätzlich im Audit. Einzige Ausnahme ist der Abgleichspfad
   „Nachweise je Dokument" (`GET …/nachweise?dokumentId=`, nur Kanzlei mit

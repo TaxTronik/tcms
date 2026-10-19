@@ -393,45 +393,67 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       expect((await zeile(did)).nachweise).toHaveLength(0);
     });
 
-    it('derselbe Verweis nicht in einem fremden Mandanten (auch in anderer Schreibweise)', async () => {
+    // Hinweis H3 aus RT4: Früher wies der Dienst eine Dokument-ID ab, die ein
+    // anderer Mandant verwendet, und nahm eine unbekannte an – die Antwort verriet
+    // so, ob eine Dokument-ID bei einem anderen Mandanten vorkommt. Die Bindung
+    // Dokument → Mandant prüft die kanzleikonsole, die die Dokumente verwahrt;
+    // das Tax-CMS bindet eine Dokument-ID je Mandant an genau einen Inhalt.
+    it('Dokument-ID eines anderen Mandanten wie eine unbekannte (H3); je Mandant ein Inhalt', async () => {
       const dA = await f.durchfuehrung('k1');
       const dB = await f.durchfuehrung('kB');
       const v = verweis();
       await f.dienst(a.bearbeiter, (ctx) => haengeNachweisAn(ctx, { ...ziel(dA), verweis: v }));
       const inB = f.kanzlei(f.p.bearbeiter, { hb: true, mandantId: f.mandantB });
+      // Bei B: dieselbe Antwort wie für eine unbekannte ID – auch mit anderem Inhalt.
+      const anders = { ...v, sha256: 'c'.repeat(64) };
+      const [dB2, dB3] = [await f.durchfuehrung('kB'), await f.durchfuehrung('kB')];
+      const r1 = await f.dienst(inB, (ctx) =>
+        haengeNachweisAn(ctx, { ...ziel(dB, f.mandantB), verweis: anders }),
+      );
+      const r2 = await f.dienst(inB, (ctx) =>
+        haengeNachweisAn(ctx, {
+          ...ziel(dB2, f.mandantB),
+          verweis: { ...anders, dokumentId: randomUUID() },
+        }),
+      );
+      expect(Object.keys(r1).sort()).toEqual(Object.keys(r2).sort());
+      expect(r1.nachweis.sha256).toBe('c'.repeat(64));
+      // Gleiche Dokument-ID mit anderem Inhalt im selben Mandanten: abgewiesen
+      // (auch in anderer Schreibweise).
+      const dA2 = await f.durchfuehrung('k1');
       for (const dokumentId of [v.dokumentId as string, (v.dokumentId as string).toUpperCase()]) {
-        const e = await fehlerVon(
-          f.dienst(inB, (ctx) =>
-            haengeNachweisAn(ctx, { ...ziel(dB, f.mandantB), verweis: { ...v, dokumentId } }),
+        const e2 = await fehlerVon(
+          f.dienst(a.bearbeiter, (ctx) =>
+            haengeNachweisAn(ctx, {
+              ...ziel(dA2),
+              verweis: { ...v, dokumentId, sha256: 'b'.repeat(64) },
+            }),
           ),
         );
-        expect(e.code).toBe('UNGUELTIG');
-        expect(e.felder).toEqual({
+        expect(e2.code).toBe('UNGUELTIG');
+        expect(e2.felder).toEqual({
           'verweis.dokumentId': ['Verweis kann hier nicht verwendet werden'],
         });
       }
-      // Gleiche Dokument-ID mit anderem Inhalt im selben Mandanten: ebenso abgewiesen.
-      const dA2 = await f.durchfuehrung('k1');
-      const e2 = await fehlerVon(
-        f.dienst(a.bearbeiter, (ctx) =>
-          haengeNachweisAn(ctx, { ...ziel(dA2), verweis: { ...v, sha256: 'b'.repeat(64) } }),
-        ),
+      // Bei B ist die ID jetzt an den Inhalt von B gebunden.
+      const e3 = await fehlerVon(
+        f.dienst(inB, (ctx) => haengeNachweisAn(ctx, { ...ziel(dB3, f.mandantB), verweis: v })),
       );
-      expect(e2.code).toBe('UNGUELTIG');
+      expect(e3.code).toBe('UNGUELTIG');
       // Gleiche Dokument-ID, gleicher Inhalt, anderer Durchführung desselben Mandanten: erlaubt.
       await f.dienst(a.bearbeiter, (ctx) => haengeNachweisAn(ctx, { ...ziel(dA2), verweis: v }));
-      expect((await zeile(dB)).nachweise).toHaveLength(0);
     });
 
-    it('TS-05: gleichzeitig dieselbe Dokument-ID in zwei Mandanten → genau eine', async () => {
-      const inB = f.kanzlei(f.p.bearbeiter, { hb: true, mandantId: f.mandantB });
+    it('TS-05: gleichzeitig dieselbe Dokument-ID mit zwei Inhalten im selben Mandanten → genau einer', async () => {
       for (let runde = 0; runde < 3; runde++) {
-        const dA = await f.durchfuehrung('k1');
-        const dB = await f.durchfuehrung('kB');
+        const d1 = await f.durchfuehrung('k1');
+        const d2 = await f.durchfuehrung('k1');
         const v = verweis();
         const r = await Promise.allSettled([
-          f.dienst(a.bearbeiter, (ctx) => haengeNachweisAn(ctx, { ...ziel(dA), verweis: v })),
-          f.dienst(inB, (ctx) => haengeNachweisAn(ctx, { ...ziel(dB, f.mandantB), verweis: v })),
+          f.dienst(a.bearbeiter, (ctx) => haengeNachweisAn(ctx, { ...ziel(d1), verweis: v })),
+          f.dienst(a.bearbeiter, (ctx) =>
+            haengeNachweisAn(ctx, { ...ziel(d2), verweis: { ...v, sha256: 'd'.repeat(64) } }),
+          ),
         ]);
         expect(
           r.filter((x) => x.status === 'fulfilled'),

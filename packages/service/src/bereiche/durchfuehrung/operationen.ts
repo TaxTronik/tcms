@@ -304,10 +304,14 @@ export async function reicheDurchfuehrungEin(
 /**
  * Nachweis-Verweis der kanzleikonsole anhängen (ADR 0001 §6; Dateien nimmt
  * der Dienst nicht an). Der Verweis läuft durch den Ablage-Port (Dienst:
- * `pruefeVerweis`). Eine Dokument-ID gehört zu genau einem Mandanten und
- * einem Inhalt: Wird sie unter einem anderen Mandanten oder mit anderem
- * SHA-256/Größe wiederverwendet → UNGUELTIG. Gleicher Inhalt in derselben
- * Durchführung → KONFLIKT. Vor Beginn: impliziter Beginn.
+ * `pruefeVerweis`). Eine Dokument-ID gehört im Mandanten zu genau einem
+ * Inhalt: Wird sie dort mit anderem SHA-256/Größe wiederverwendet →
+ * UNGUELTIG. Verweise anderer Mandanten zählen nicht (Hinweis H3 aus RT4):
+ * Eine Dokument-ID eines anderen Mandanten wird wie eine unbekannte
+ * behandelt – sonst verriete die Antwort, ob sie dort verwendet wird. Ob ein
+ * Dokument zum Mandanten gehört, prüft die kanzleikonsole, die es verwahrt
+ * (für unbekannte IDs kann das Tax-CMS es ohnehin nicht). Gleicher Inhalt in
+ * derselben Durchführung → KONFLIKT. Vor Beginn: impliziter Beginn.
  */
 export async function haengeNachweisAn(
   ctx: DienstKontext,
@@ -319,25 +323,18 @@ export async function haengeNachweisAn(
   return ausfuehren(ctx, async (tx, zeitpunkt) => {
     const lage = await ladeLage(ctx, e, { sperren: true });
     verlange(lage.rechte.bearbeiten);
-    // Gleichzeitige Verwendung derselben Dokument-ID serialisieren (je Tenant).
-    await tenantSperre(tx, `nachweis.dokument.${dokumentId}`);
-    // Auch entfernte Verweise zählen: Die Bindung an Mandant und Inhalt bleibt.
+    // Gleichzeitige Verwendung derselben Dokument-ID im Mandanten serialisieren.
+    await tenantSperre(tx, `nachweis.dokument.${lage.mandantId.toLowerCase()}.${dokumentId}`);
+    // Nur Verweise dieses Mandanten (H3: kein Orakel über andere Mandanten); auch
+    // entfernte zählen, die Bindung an den Inhalt bleibt.
     const gleiche = await tx.nachweis.findMany({
-      where: { dokumentId },
-      select: {
-        sha256: true,
-        groesse: true,
-        durchfuehrung: {
-          select: { kontrolle: { select: { programm: { select: { mandantId: true } } } } },
-        },
+      where: {
+        dokumentId,
+        durchfuehrung: { kontrolle: { programm: { mandantId: lage.mandantId.toLowerCase() } } },
       },
+      select: { sha256: true, groesse: true },
     });
-    const fremd = gleiche.some(
-      (n) =>
-        !gleicheId(n.durchfuehrung.kontrolle.programm.mandantId, lage.mandantId) ||
-        n.sha256 !== verweis.sha256 ||
-        n.groesse !== verweis.groesse,
-    );
+    const fremd = gleiche.some((n) => n.sha256 !== verweis.sha256 || n.groesse !== verweis.groesse);
     if (fremd) {
       throw new DienstFehler('UNGUELTIG', 'Nachweis-Verweis ungültig.', {
         'verweis.dokumentId': ['Verweis kann hier nicht verwendet werden'],

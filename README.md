@@ -332,7 +332,9 @@ nicht erlaubter oder gleichzeitig geänderter Status `409`, Mängel beim Einreic
 | POST    | `portal/aufgaben/:id/zurueckgeben`, `…/bestaetigen`                                          | zweite Person beim Mandanten, nicht beteiligt                           |
 
 Nachweise sind Verweise der kanzleikonsole (`{ verweis: { dokumentId (UUID), dateiname, mime,
-groesse, sha256 } }`); eine Dokument-ID gehört zu genau einem Mandanten und einem Inhalt.
+groesse, sha256 } }`); eine Dokument-ID gehört je Mandant zu genau einem Inhalt. Ob das Dokument zum
+Mandanten gehört, prüft die kanzleikonsole; eine Dokument-ID eines anderen Mandanten gilt wie eine
+unbekannte (kein Existenz-Orakel, Hinweis H3 aus RT4).
 Einzeilige Texte (`einzeilig`: Mandantenname, Rechtsform, Kontaktfunktion, alle Titel und Namen
 einschließlich der Vorlagendaten von Nachrichten und der Namen eingefrorener Beschreibungen,
 Teilbereich und Bezeichnungen des Geschäftsprofils – RT4-T-03) und Dateinamen
