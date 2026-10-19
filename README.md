@@ -133,6 +133,8 @@ packages/db       Prisma-Schema, Init-Migration mit RLS, Rollen-Bootstrap, mitTe
                   Audit-Hashkette je Tenant, Seed
 packages/service  Kern der Fachoperationen: Dienstkontext (Transaktion, Akteur, Uhr, Ports),
                   Rechte über den Akteur, mitAudit, Nachweis-Ablage des Dienstes
+apps/api          HTTP-Dienst für die kanzleikonsole (Hono): Dienst-Token, Akteursbestätigung,
+                  jti, Mandantenbindung, Routen über mitTenant (siehe „Dienst (headless)“)
 apps/web          Next.js 16 (App Router, Server Components, Server Actions)
 ```
 
@@ -160,13 +162,15 @@ pnpm api                               # Dienst auf HOST:PORT, Standard 0.0.0.0:
 | ------------------------ | ------------------------------------------------------------------------------------------ |
 | `TCMS_SERVICE_TOKENS`    | Dienst-Tokens, kommagetrennt, je ≥ 32 Zeichen (z. B. `openssl rand -base64 48`)            |
 | `TCMS_ACTOR_PUBLIC_KEYS` | `kid=<base64 SPKI-DER>`, kommagetrennt, nur Ed25519 (Ausgabe von `pnpm akteur:schluessel`) |
-| `DATABASE_URL`           | Laufzeitrolle `tcms_app`; Start verweigert bei Superuser oder BYPASSRLS                    |
+| `DATABASE_URL`           | Laufzeitrolle `tcms_app`; Start verweigert bei Superuser, BYPASSRLS oder Tabelleneigentum  |
 | `HOST`, `PORT`           | Bindung, Standard `0.0.0.0` und `3200`; nur im internen Netz erreichbar machen             |
 
 Der Dienst prüft die Konfiguration beim Start und startet nicht bei fehlenden Werten, Platzhaltern
-(`apps/api/.env.example`), doppelten Einträgen oder anderen Schlüsseltypen; mit
-`NODE_ENV=production` auch nicht mit bekannten Standardpasswörtern. `TCMS_DEMO_TODAY` wirkt im Dienst
-nicht.
+(`.env.example`), doppelten Einträgen oder anderen Schlüsseltypen; mit `NODE_ENV=production` auch
+nicht mit bekannten Standardpasswörtern. Danach prüft er mit `pruefeLaufzeitverbindung()` aus
+`@tcms/db`, dass `DATABASE_URL` weder Superuser noch `BYPASSRLS` noch Tabelleneigentümer ist. Den
+Mandantenkontext setzt nur `mitTenant` aus `@tcms/db`; der Dienst nutzt `pg` direkt nur für
+`akteur_jti` und den Ping von `/v1/health` (ohne Tenant). `TCMS_DEMO_TODAY` wirkt im Dienst nicht.
 
 **Rotation mit Überlappung**
 
@@ -217,12 +221,23 @@ await fetch(`<interne-url>${pfad}`, {
 Antworten: `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder? } }`. Jeder
 Fehler bei Token, Bestätigung oder `jti` ergibt dieselbe Antwort `401 NICHT_AUTHENTIFIZIERT` (mit
 `Connection: close`); der Grund steht nur im Log (JSON-Zeilen auf stdout, mit Request-ID, ohne
-Header-Werte und Bodys). Fremde Mandanten und nicht kanonische Pfade ergeben `404`. `GET /v1/health` braucht nur das Dienst-Token,
-`GET /v1/ich` liefert den abgeleiteten Akteur (Vertragstest).
+Header-Werte und Bodys). Fremde Mandanten und nicht kanonische Pfade ergeben `404`.
+`GET /v1/health` braucht nur das Dienst-Token, `GET /v1/ich` liefert den abgeleiteten Akteur
+(Vertragstest).
 
-Tests: `pnpm --filter @tcms/api test`. Mit `TCMS_API_TEST_DATABASE_URL` (Superuser einer
-Test-Datenbank) laufen zusätzlich die PostgreSQL-Tests; sie legen dort `akteur_jti` und die
-NOLOGIN-Rolle `tcms_auth_test_app` an.
+Tests: `pnpm --filter @tcms/api test`. Die PostgreSQL-Tests laufen gegen eine Datenbank, die wie in
+Produktion aufgebaut ist (Bootstrap und Migration wie oben unter „Datenbank“), ausschließlich als
+Laufzeitrolle `tcms_app`:
+
+```bash
+DB_TESTS=1 \
+  DATABASE_URL=postgresql://tcms_app:tcms_app@localhost:5433/<db> \
+  DATABASE_OWNER_URL=postgresql://tcms_owner:tcms_owner@localhost:5433/<db> \
+  pnpm --filter @tcms/api test
+```
+
+`DATABASE_OWNER_URL` und `DATABASE_SUPERUSER_URL` (beide optional) prüfen zusätzlich, dass der Dienst
+mit diesen Rollen nicht startet.
 
 ## Grenzen dieses Stands
 

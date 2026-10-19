@@ -49,9 +49,15 @@ import {
 } from './routen';
 import { pruefeZiel, roheAnfrage } from './ziel';
 
-/** Datenzugriff mit Tenant-Kontext (ADR §4); `@tcms/db` liefert `mitTenant`. */
+/**
+ * Datenzugriff (ADR §4). `mitTenant` ist die einzige Implementierung des
+ * Mandantenkontexts aus `@tcms/db`; der Dienst setzt nie selbst
+ * `tcms.tenant_id`. `ping` prüft nur die Erreichbarkeit (Health) und braucht
+ * keinen Tenant.
+ */
 export interface Datenzugriff<Tx = unknown> {
   mitTenant<T>(tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T>;
+  ping(): Promise<void>;
 }
 
 export interface AppKonfiguration {
@@ -73,13 +79,6 @@ export interface AppDeps<Tx = unknown> {
   routen?: (r: Routen<Tx>) => void;
   log?: Logger;
 }
-
-/**
- * Tenant des DB-Pings im Health-Check: die Nil-UUID. Unter RLS sieht dieser
- * Tenant keine Zeile; der Ping prüft nur, dass `mitTenant` eine Transaktion
- * öffnen und den Kontext setzen kann.
- */
-export const PING_TENANT = '00000000-0000-0000-0000-000000000000';
 
 export type AuthGrund = PruefGrund | 'DIENST_TOKEN' | 'AKTEUR_FEHLT' | 'JTI_WIEDERHOLT';
 
@@ -359,10 +358,7 @@ async function pingeDatenbank<Tx>(
     timer = setTimeout(() => resolve('fehler'), zeitlimitMs);
   });
   try {
-    const ergebnis = await Promise.race([
-      daten.mitTenant(PING_TENANT, async () => 'ok' as const),
-      zeitlimit,
-    ]);
+    const ergebnis = await Promise.race([daten.ping().then(() => 'ok' as const), zeitlimit]);
     if (ergebnis !== 'ok') log.schreibe('warn', 'health_db_zeitlimit', { zeitlimitMs });
     return ergebnis;
   } catch (e) {

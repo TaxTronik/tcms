@@ -21,6 +21,18 @@ für KI-Werkzeuge.
   (Transaktion, Akteur, Uhr, Personenverzeichnis, Nachweis-Ablage), `imDienst`,
   `mitAudit`, Rechte über den `Akteur` (`rechte.ts`, ADR 0001 §5). Änderungen
   hier brauchen Tests (`pnpm --filter @tcms/service test`).
+- `packages/contract` – gemeinsamer Vertrag mit der kanzleikonsole (ADR 0001
+  §3, §7): Claims-Schema und `Akteur`, Signieren und Prüfen der
+  Akteursbestätigung (`signiereAkteur`, `pruefeAkteur`, nur `node:crypto`),
+  strenges JSON (`parseJsonStrikt`), Fehlercodes und Antwortumschlag. Beide
+  Seiten nutzen denselben Code; Änderungen hier brauchen Positiv- und
+  Negativtests (`pnpm --filter @tcms/contract test`).
+- `apps/api` – interner HTTP-Dienst (Hono auf Node 24) für die kanzleikonsole:
+  `erzeugeApp(deps)` mit Authentifizierungskette, Routentabelle
+  (`routen.ts`, Mandantenbindung), jti-Speicher (`jti.ts`), Konfiguration
+  (`konfiguration.ts`), Start (`server.ts`). Keine Fachregeln: Routen rufen
+  `packages/service`. Tests ohne Netz über `app.request(...)`, dazu Socket-
+  und DB-Tests.
 - `apps/web` – Next.js 16 (App Router, Server Components, Server Actions).
   - `src/server/kontext.ts` lädt den vollständigen Tax-CMS-Kontext eines
     Mandanten zu einem Stichtag. Screens im Mandantenkontext lesen daraus.
@@ -70,6 +82,10 @@ für KI-Werkzeuge.
 
 - Jeder Datenbankzugriff zur Laufzeit läuft in `mitTenant` (bzw. `imDienst`);
   der Tenant kommt aus dem Akteur, nie aus der Eingabe. Kein Code umgeht RLS.
+- Genau eine Implementierung des Mandantenkontexts: `mitTenant` aus
+  `@tcms/db`. Kein anderer Code setzt `tcms.tenant_id` oder öffnet eigene
+  Tenant-Transaktionen. Ausnahmen ohne Tenant sind nur `akteur_jti` (ohne
+  RLS, `tcms_app` nur SELECT/INSERT/DELETE) und der Ping von `/v1/health`.
 - Rechte nur über die Funktionen aus `@tcms/service` mit dem `Akteur`;
   Kanzleipersonen handeln nur mit bestätigtem Mandantenbezug (`cli`),
   Mandantenkontakte nur mit aktiver `MandantKontaktRolle`.
@@ -77,6 +93,27 @@ für KI-Werkzeuge.
   auf ihre Existenz.
 - `TCMS_DEMO_TODAY` wirkt nur über die Demo-Uhr in `apps/web`; Audit-
   Zeitstempel und Sicherheitsfristen (Codes) sind immer echte Zeit.
+
+## Dienst und Authentifizierung (verbindlich, ADR 0001 §3)
+
+- Reihenfolge je Anfrage in `apps/api/src/app.ts`: Request-ID → Methode und
+  Pfad bekannt (nur das rohe, kanonische Target; sonst 404/405) →
+  `Content-Length` vorab (413) → Dienst-Token (konstante Zeit) → Body mit
+  gestreamter Grenze (413) → Akteursbestätigung gegen Methode, rohes Target
+  und Body-Hash → `jti` einmalig → Mandantenbindung (404) → erst dann Query
+  und JSON → Route in genau einer `mitTenant`-Transaktion. Diese Reihenfolge
+  nicht ändern, ohne ADR und Negativtests anzupassen.
+- Ohne gültiges Dienst-Token wird kein Body-Byte gelesen. Jeder
+  Authentifizierungsfehler ergibt dieselbe Antwort
+  `401 NICHT_AUTHENTIFIZIERT` (mit `Connection: close`); der Grund steht nur
+  im Log.
+- Fachrouten nur über `Routen.route(...)`; jede verlangt Token und
+  Bestätigung. Pfade unter `/v1/mandanten/:mandantId/…` sind an `cli.id`
+  gebunden, `MANDANT`-Personen nur auf Routen mit `portal: true`.
+- Logs: JSON-Zeilen ohne Header-Werte, Bodys, Namen und rohe Pfade, nur IDs
+  und Codes. Keine Secrets in Logs, Fehlermeldungen, Tests oder Commits.
+- Jede Sicherheitsannahme hat einen Negativtest, der ohne die Schutzmaßnahme
+  scheitert.
 
 ## UI-Sprache (verbindlich)
 
@@ -106,5 +143,6 @@ vorhandenen Tokens aufsetzen.
 pnpm typecheck
 pnpm test
 DB_TESTS=1 DATABASE_URL=… DATABASE_OWNER_URL=… pnpm --filter @tcms/db test
+DB_TESTS=1 DATABASE_URL=… DATABASE_OWNER_URL=… pnpm --filter @tcms/api test
 pnpm build
 ```

@@ -38,6 +38,7 @@ export interface Aufbau {
   tenants: string[];
   jti: JtiSpeicher;
   jtiAufrufe: string[];
+  pings: number[];
 }
 
 export function aufbau(
@@ -47,6 +48,7 @@ export function aufbau(
   const logRoh: string[] = [];
   const tenants: string[] = [];
   const jtiAufrufe: string[] = [];
+  const pings: number[] = [];
   const speicher = over.jti ?? new SpeicherJti();
   const jti: JtiSpeicher = {
     einmalig: (j, exp) => {
@@ -58,6 +60,9 @@ export function aufbau(
     mitTenant: async (tenantId, fn) => {
       tenants.push(tenantId);
       return fn({ tenantId });
+    },
+    ping: async () => {
+      pings.push(1);
     },
   };
   const app = erzeugeApp({
@@ -78,7 +83,7 @@ export function aufbau(
     jti,
     daten,
   });
-  return { app, log, logRoh, tenants, jti, jtiAufrufe };
+  return { app, log, logRoh, tenants, jti, jtiAufrufe, pings };
 }
 
 export function claims(over: Partial<AkteurClaims> = {}): AkteurClaims {

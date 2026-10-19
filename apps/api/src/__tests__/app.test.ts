@@ -1,7 +1,6 @@
 import { AKTEUR_HEADER, DienstFehler, MAX_BODY_BYTES, bodySha256 } from '@tcms/contract';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { PING_TENANT } from '../app';
 import { SpeicherJti } from '../jti';
 import type { Routen } from '../routen';
 import {
@@ -782,7 +781,9 @@ describe('Health', () => {
     expect(r.status).toBe(200);
     erwarteGrundHeader(r);
     expect(await json(r)).toEqual({ ok: true, daten: { version: '0.1.0', datenbank: 'ok' } });
-    expect(t.tenants).toEqual([PING_TENANT]);
+    // Kein Tenant-Kontext: Health ruft nur den Ping, nie mitTenant.
+    expect(t.pings).toEqual([1]);
+    expect(t.tenants).toEqual([]);
     expect(t.jtiAufrufe).toEqual([]);
   });
 
@@ -790,6 +791,9 @@ describe('Health', () => {
     const kaputt = routenAufbau({
       daten: {
         mitTenant: async () => {
+          throw new Error('nicht erwartet');
+        },
+        ping: async () => {
           throw new Error('ECONNREFUSED');
         },
       },
@@ -804,7 +808,10 @@ describe('Health', () => {
         version: '0.1.0',
         healthZeitlimitMs: 50,
       },
-      daten: { mitTenant: () => new Promise(() => undefined) },
+      daten: {
+        mitTenant: () => new Promise(() => undefined),
+        ping: () => new Promise(() => undefined),
+      },
     });
     const beginn = Date.now();
     const h = await senden(haengt.app, { ziel: '/v1/health', headers: auth });

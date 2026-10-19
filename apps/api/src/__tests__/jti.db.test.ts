@@ -1,62 +1,59 @@
-// DB-Tests gegen PostgreSQL. Laufen nur mit TCMS_API_TEST_DATABASE_URL
-// (Superuser einer Test-Datenbank, z. B. tcms_auth). Die Tabelle wird mit genau
-// dem DDL aus packages/db angelegt. Gearbeitet wird als NOLOGIN-Rolle
-// `tcms_auth_test_app` mit genau den Rechten der Laufzeitrolle (INSERT, SELECT,
-// DELETE – kein UPDATE). Die Tests löschen nur Zeilen, die sie selbst anlegen.
+// DB-Tests gegen eine Datenbank, die wie in Produktion aufgebaut ist:
+// packages/db/prisma/init/01_bootstrap.sql (Rollen) und die Init-Migration als
+// tcms_owner. Laufen nur mit DB_TESTS=1; DATABASE_URL ist die Laufzeitrolle
+// tcms_app wie im Dienst. Alles läuft mit genau deren Rechten (auf akteur_jti:
+// SELECT, INSERT, DELETE). Die Tests löschen nur Zeilen, die sie selbst anlegen.
 
 import { randomBytes } from 'node:crypto';
+import {
+  aktuellerTenant,
+  erzeugeClient,
+  mitTenant,
+  pruefeLaufzeitverbindung,
+  type PrismaClient,
+  type Tx,
+} from '@tcms/db';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { pgDatenzugriff, pruefeLaufzeitrolle } from '../daten-pg';
+import type { Datenzugriff } from '../app';
 import { PgJti } from '../jti';
-import { MANDANT, aufbau, bestaetigung, senden } from './hilfen';
+import type { Routen } from '../routen';
+import { TENANT, aufbau, bestaetigtSenden, bestaetigung, json, senden } from './hilfen';
 
-const URL_TEST = process.env.TCMS_API_TEST_DATABASE_URL;
-const ROLLE = 'tcms_auth_test_app';
+const AKTIV = process.env.DB_TESTS === '1';
+const APP_URL = process.env.DATABASE_URL;
 const LAUF = randomBytes(6).toString('base64url');
 const jti = (n: string | number) => `test-${LAUF}-${n}-${randomBytes(8).toString('base64url')}`;
 
-describe.skipIf(!URL_TEST)('PostgreSQL', () => {
-  let admin: pg.Pool;
+describe.skipIf(!AKTIV)('PostgreSQL als Laufzeitrolle tcms_app', () => {
   let app: pg.Pool;
   let app2: pg.Pool;
+  let prisma: PrismaClient;
 
-  beforeAll(async () => {
-    admin = new pg.Pool({ connectionString: URL_TEST, max: 2 });
-    await admin.query(
-      'CREATE TABLE IF NOT EXISTS akteur_jti (jti text PRIMARY KEY, exp timestamptz NOT NULL)',
-    );
-    await admin.query(`DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${ROLLE}') THEN
-        CREATE ROLE ${ROLLE} NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-      END IF; END $$`);
-    await admin.query(`REVOKE ALL ON akteur_jti FROM ${ROLLE}`);
-    await admin.query(`GRANT INSERT, SELECT, DELETE ON akteur_jti TO ${ROLLE}`);
-    await admin.query(`GRANT USAGE ON SCHEMA public TO ${ROLLE}`);
-    await admin.query(
-      'CREATE TABLE IF NOT EXISTS api_test_rueckrollen (id text PRIMARY KEY, tenant text)',
-    );
-    await admin.query(`GRANT INSERT, SELECT ON api_test_rueckrollen TO ${ROLLE}`);
-    // Zwei Pools = zwei Dienstinstanzen; jede Verbindung läuft als Laufzeitrolle.
-    const opts = { connectionString: URL_TEST, max: 10, options: `-c role=${ROLLE}` };
-    app = new pg.Pool(opts);
-    app2 = new pg.Pool(opts);
+  beforeAll(() => {
+    if (!APP_URL) throw new Error('DB_TESTS=1 verlangt DATABASE_URL (tcms_app)');
+    // Zwei Pools = zwei Dienstinstanzen.
+    app = new pg.Pool({ connectionString: APP_URL, max: 10 });
+    app2 = new pg.Pool({ connectionString: APP_URL, max: 10 });
+    prisma = erzeugeClient(APP_URL);
   });
 
   afterAll(async () => {
-    await admin?.query("DELETE FROM akteur_jti WHERE jti LIKE 'test-' || $1 || '-%'", [LAUF]);
-    await admin?.query("DELETE FROM api_test_rueckrollen WHERE id LIKE $1 || '%'", [LAUF]);
-    await Promise.all([admin?.end(), app?.end(), app2?.end()]);
+    await app?.query("DELETE FROM akteur_jti WHERE jti LIKE 'test-' || $1 || '-%'", [LAUF]);
+    await Promise.all([app?.end(), app2?.end(), prisma?.$disconnect()]);
   });
 
-  it('läuft als Rolle ohne Superuser und ohne BYPASSRLS (Startprüfung besteht)', async () => {
+  it('besteht die Startprüfung als tcms_app', async () => {
     const r = await app.query('SELECT current_user');
-    expect(r.rows[0].current_user).toBe(ROLLE);
-    await expect(pruefeLaufzeitrolle(app)).resolves.toBeUndefined();
+    expect(r.rows[0].current_user).toBe('tcms_app');
+    await expect(pruefeLaufzeitverbindung()).resolves.toBeUndefined();
   });
 
-  it('Startprüfung verweigert den Superuser', async () => {
-    await expect(pruefeLaufzeitrolle(admin)).rejects.toThrow(/Superuser/);
+  it('tcms_app darf akteur_jti weder ändern noch leeren', async () => {
+    await expect(app.query("UPDATE akteur_jti SET exp = now() WHERE jti = 'x'")).rejects.toThrow(
+      /permission denied/,
+    );
+    await expect(app.query('TRUNCATE akteur_jti')).rejects.toThrow(/permission denied/);
   });
 
   it('trägt eine jti genau einmal ein', async () => {
@@ -94,20 +91,20 @@ describe.skipIf(!URL_TEST)('PostgreSQL', () => {
 
   it('weist eine abgelaufene, noch nicht gelöschte jti weiter ab (fail closed)', async () => {
     const id = jti('abgelaufen');
-    await admin.query("INSERT INTO akteur_jti VALUES ($1, now() - interval '1 minute')", [id]);
+    await app.query("INSERT INTO akteur_jti VALUES ($1, now() - interval '1 minute')", [id]);
     expect(await new PgJti(app).einmalig(id, new Date(Date.now() + 60_000))).toBe(false);
   });
 
-  it('räumt nur abgelaufene Einträge auf, in Stapeln, mit den Rechten der Laufzeitrolle', async () => {
+  it('räumt nur abgelaufene Einträge auf, in Stapeln', async () => {
     const alt = Array.from({ length: 5 }, (_, i) => jti(`alt-${i}`));
     const frisch = jti('frisch');
     for (const id of alt) {
-      await admin.query("INSERT INTO akteur_jti VALUES ($1, now() - interval '1 second')", [id]);
+      await app.query("INSERT INTO akteur_jti VALUES ($1, now() - interval '1 second')", [id]);
     }
-    await admin.query("INSERT INTO akteur_jti VALUES ($1, now() + interval '1 minute')", [frisch]);
+    await app.query("INSERT INTO akteur_jti VALUES ($1, now() + interval '1 minute')", [frisch]);
     const geloescht = await new PgJti(app, { stapel: 2, karenzS: 0 }).aufraeumen();
     expect(geloescht).toBeGreaterThanOrEqual(5);
-    const rest = await admin.query('SELECT jti FROM akteur_jti WHERE jti = ANY($1)', [
+    const rest = await app.query('SELECT jti FROM akteur_jti WHERE jti = ANY($1)', [
       [...alt, frisch],
     ]);
     expect(rest.rows.map((r) => r.jti)).toEqual([frisch]);
@@ -116,81 +113,75 @@ describe.skipIf(!URL_TEST)('PostgreSQL', () => {
   it('löscht abgelaufene Einträge erst nach der Karenz (Uhrabweichung Dienst/Datenbank)', async () => {
     const innerhalb = jti('karenz-innen');
     const ausserhalb = jti('karenz-aussen');
-    await admin.query("INSERT INTO akteur_jti VALUES ($1, now() - interval '4 minutes')", [
+    await app.query("INSERT INTO akteur_jti VALUES ($1, now() - interval '4 minutes')", [
       innerhalb,
     ]);
-    await admin.query("INSERT INTO akteur_jti VALUES ($1, now() - interval '6 minutes')", [
+    await app.query("INSERT INTO akteur_jti VALUES ($1, now() - interval '6 minutes')", [
       ausserhalb,
     ]);
     await new PgJti(app).aufraeumen();
-    const rest = await admin.query('SELECT jti FROM akteur_jti WHERE jti = ANY($1)', [
+    const rest = await app.query('SELECT jti FROM akteur_jti WHERE jti = ANY($1)', [
       [innerhalb, ausserhalb],
     ]);
     expect(rest.rows.map((r) => r.jti)).toEqual([innerhalb]);
   });
 
-  it('die Laufzeitrolle kann akteur_jti nicht ändern (kein UPDATE nötig, keines erlaubt)', async () => {
-    await expect(app.query("UPDATE akteur_jti SET exp = now() WHERE jti = 'x'")).rejects.toThrow(
-      /permission denied/,
-    );
-  });
-
-  describe('pgDatenzugriff', () => {
-    const TENANT_A = '11111111-1111-4111-8111-111111111111';
-
-    it('setzt tcms.tenant_id nur innerhalb der Transaktion', async () => {
-      const einzel = new pg.Pool({
-        connectionString: URL_TEST,
-        max: 1,
-        options: `-c role=${ROLLE}`,
+  describe('Mandantenkontext über die App mit mitTenant aus @tcms/db', () => {
+    const gesehen: { pid?: number } = {};
+    const routen = (r: Routen<unknown>) => {
+      r.route({
+        methode: 'GET',
+        pfad: '/v1/kontext',
+        handler: async ({ tx }) => ({ tenant: await aktuellerTenant(tx as Tx) }),
       });
-      try {
-        const d = pgDatenzugriff(einzel);
-        const innen = await d.mitTenant(TENANT_A, async (tx) => {
-          const r = await tx.query("SELECT current_setting('tcms.tenant_id', true) AS t");
-          return r.rows[0].t as string;
-        });
-        expect(innen).toBe(TENANT_A);
-        const danach = await einzel.query("SELECT current_setting('tcms.tenant_id', true) AS t");
-        expect(danach.rows[0].t ?? '').toBe('');
-      } finally {
-        await einzel.end();
-      }
+      r.route({
+        methode: 'GET',
+        pfad: '/v1/scheitern',
+        handler: async ({ tx }) => {
+          const [zeile] = await (tx as Tx).$queryRaw<{ pid: number }[]>`
+            SELECT pg_backend_pid() AS pid`;
+          gesehen.pid = zeile!.pid;
+          throw new Error('Route scheitert nach Arbeit in der Transaktion');
+        },
+      });
+    };
+    const daten = (): Datenzugriff => ({
+      mitTenant: (tenantId, fn) =>
+        mitTenant(tenantId, fn as (tx: Tx) => Promise<never>, { client: prisma }),
+      ping: async () => {
+        await app.query('SELECT 1');
+      },
     });
 
-    it('hinterlässt nach einem Fehler weder Tenant-Kontext noch offene Transaktion', async () => {
-      // Eine Verbindung: Die nächste Anfrage bekommt genau diese Verbindung zurück.
-      const einzel = new pg.Pool({
-        connectionString: URL_TEST,
-        max: 1,
-        options: `-c role=${ROLLE}`,
-      });
-      try {
-        await expect(
-          pgDatenzugriff(einzel).mitTenant(TENANT_A, async () => {
-            throw new Error('Route scheitert');
-          }),
-        ).rejects.toThrow();
-        const r = await einzel.query(
-          "SELECT current_setting('tcms.tenant_id', true) AS t, now() = statement_timestamp() AS ohne_tx",
-        );
-        expect(r.rows[0].t ?? '').toBe('');
-        expect(r.rows[0].ohne_tx).toBe(true);
-      } finally {
-        await einzel.end();
-      }
+    it('setzt den Tenant aus der Bestätigung', async () => {
+      const t = aufbau({ routen, daten: daten() });
+      const r = await bestaetigtSenden(t.app, { ziel: '/v1/kontext' });
+      expect(r.status).toBe(200);
+      expect(await json(r)).toEqual({ ok: true, daten: { tenant: TENANT } });
     });
 
-    it('rollt bei einem Fehler der Route vollständig zurück', async () => {
-      const id = `${LAUF}-rueck`;
-      await expect(
-        pgDatenzugriff(app).mitTenant(TENANT_A, async (tx) => {
-          await tx.query('INSERT INTO api_test_rueckrollen VALUES ($1, $2)', [id, MANDANT]);
-          throw new Error('Route scheitert');
-        }),
-      ).rejects.toThrow('Route scheitert');
-      const r = await admin.query('SELECT 1 FROM api_test_rueckrollen WHERE id = $1', [id]);
-      expect(r.rowCount).toBe(0);
+    it('hinterlässt nach einem Fehler der Route weder Tenant-Kontext noch offene Transaktion', async () => {
+      const t = aufbau({ routen, daten: daten() });
+      const r = await bestaetigtSenden(t.app, { ziel: '/v1/scheitern' });
+      expect(r.status).toBe(500);
+      // Nacheinander genutzt gibt der Pool dieselbe Verbindung zurück; die PID belegt es.
+      const [danach] = await prisma.$queryRaw<
+        { pid: number; t: string | null; ohne_tx: boolean }[]
+      >`
+        SELECT pg_backend_pid() AS pid,
+               current_setting('tcms.tenant_id', true) AS t,
+               now() = statement_timestamp() AS ohne_tx`;
+      expect(gesehen.pid).toBeDefined();
+      expect(danach!.pid).toBe(gesehen.pid);
+      expect(danach!.t ?? '').toBe('');
+      expect(danach!.ohne_tx).toBe(true);
+    });
+
+    it('meldet die Datenbank im Health-Check ohne Tenant', async () => {
+      const t = aufbau({ routen, daten: daten() });
+      const { headers } = bestaetigung({ ziel: '/v1/health' });
+      const r = await senden(t.app, { ziel: '/v1/health', headers });
+      expect(await json(r)).toEqual({ ok: true, daten: { version: '0.1.0', datenbank: 'ok' } });
     });
   });
 });

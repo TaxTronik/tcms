@@ -57,15 +57,19 @@ describe('ladeKonfiguration', () => {
     }
   });
 
-  it('weist sämtliche Platzhalter aus apps/api/.env.example ab', () => {
-    const beispiel = envAusDatei(new URL('../../.env.example', import.meta.url).pathname);
+  it('weist die Platzhalter der .env.example im Repo-Root ab', () => {
+    const beispiel = envAusDatei(new URL('../../../../.env.example', import.meta.url).pathname);
     expect(Object.keys(beispiel)).toEqual(
       expect.arrayContaining(['TCMS_SERVICE_TOKENS', 'TCMS_ACTOR_PUBLIC_KEYS', 'DATABASE_URL']),
     );
-    expect(probleme(beispiel).length).toBeGreaterThanOrEqual(3);
-    for (const name of ['TCMS_SERVICE_TOKENS', 'TCMS_ACTOR_PUBLIC_KEYS', 'DATABASE_URL']) {
+    // Die Datei als Ganzes startet den Dienst nie.
+    expect(probleme(beispiel).length).toBeGreaterThanOrEqual(2);
+    for (const name of ['TCMS_SERVICE_TOKENS', 'TCMS_ACTOR_PUBLIC_KEYS']) {
       expect(probleme({ ...GUELTIG, [name]: beispiel[name] }).join(), name).toContain(name);
     }
+    // Die Entwicklungsverbindung (tcms_app:tcms_app) gilt in Produktion nicht.
+    const db = { ...GUELTIG, DATABASE_URL: beispiel.DATABASE_URL!, NODE_ENV: 'production' };
+    expect(probleme(db).join()).toMatch(/DATABASE_URL: .*Standardpasswort/);
   });
 
   it('weist Platzhalter ab, die die Längenregel erfüllen (TS-02)', () => {

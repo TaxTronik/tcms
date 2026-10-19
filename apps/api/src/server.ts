@@ -1,13 +1,18 @@
 // =============================================================================
-// Start des Dienstes: Konfiguration prüfen (fail closed), Laufzeitrolle prüfen,
-// jti-Aufräumen starten, Node-Server auf HOST:PORT (Standard 0.0.0.0:3200).
+// Start des Dienstes: Konfiguration prüfen (fail closed), Laufzeitverbindung
+// prüfen (`pruefeLaufzeitverbindung` aus @tcms/db), jti-Aufräumen starten,
+// Node-Server auf HOST:PORT (Standard 0.0.0.0:3200).
+//
+// Mandantenkontext: ausschließlich `mitTenant` aus @tcms/db (eine einzige
+// Implementierung). Der `pg`-Pool derselben Laufzeitverbindung dient nur dem
+// nicht mandantengebundenen `akteur_jti` und dem Ping des Health-Checks.
 // =============================================================================
 
 import { readFileSync } from 'node:fs';
 import { createAdaptorServer } from '@hono/node-server';
+import { mitTenant, pruefeLaufzeitverbindung, type Tx } from '@tcms/db';
 import pg from 'pg';
 import { erzeugeApp } from './app';
-import { pgDatenzugriff, pruefeLaufzeitrolle } from './daten-pg';
 import { PgJti, starteJtiAufraeumen } from './jti';
 import { KonfigurationsFehler, ladeKonfiguration } from './konfiguration';
 import { jsonLogger } from './log';
@@ -20,6 +25,10 @@ async function starte() {
     readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
   ) as { version: string };
 
+  // Fail closed: Superuser, BYPASSRLS oder Tabelleneigentum der Laufzeitrolle
+  // (DATABASE_URL, dieselbe Variable wie oben geprüft) verhindern den Start.
+  await pruefeLaufzeitverbindung();
+
   const pool = new pg.Pool({
     connectionString: konfiguration.datenbankUrl,
     max: 10,
@@ -27,11 +36,10 @@ async function starte() {
     idleTimeoutMillis: 30_000,
   });
   pool.on('error', (e) => log.schreibe('error', 'db_pool_fehler', { fehler: e.name }));
-  await pruefeLaufzeitrolle(pool);
 
   const jti = new PgJti(pool);
   const stoppeAufraeumen = starteJtiAufraeumen(jti, { log });
-  const app = erzeugeApp({
+  const app = erzeugeApp<Tx>({
     konfiguration: {
       dienstTokens: konfiguration.dienstTokens,
       akteurSchluessel: konfiguration.akteurSchluessel,
@@ -40,7 +48,12 @@ async function starte() {
     // Echte Uhr; TCMS_DEMO_TODAY wirkt nie im Dienst (ADR §7).
     uhr: { jetzt: () => new Date() },
     jti,
-    daten: pgDatenzugriff(pool),
+    daten: {
+      mitTenant: (tenantId, fn) => mitTenant(tenantId, fn),
+      ping: async () => {
+        await pool.query('SELECT 1');
+      },
+    },
     log,
   });
 

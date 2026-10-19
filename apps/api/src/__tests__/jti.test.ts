@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { pgDatenzugriff, pruefeLaufzeitrolle } from '../daten-pg';
 import { PgJti, SpeicherJti, starteJtiAufraeumen } from '../jti';
 import type { LogWert } from '../log';
 
@@ -100,76 +99,5 @@ describe('starteJtiAufraeumen', () => {
       ['jti_aufgeraeumt', { anzahl: 3 }],
       ['jti_aufraeumen_fehlgeschlagen', { fehler: 'TypeError' }],
     ]);
-  });
-});
-
-describe('pruefeLaufzeitrolle', () => {
-  const pool = (rows: unknown[]) => ({ query: async () => ({ rows }) }) as never;
-
-  it('verweigert Superuser, BYPASSRLS und unbekannte Rollen', async () => {
-    await expect(
-      pruefeLaufzeitrolle(pool([{ rolsuper: true, rolbypassrls: false }])),
-    ).rejects.toThrow();
-    await expect(
-      pruefeLaufzeitrolle(pool([{ rolsuper: false, rolbypassrls: true }])),
-    ).rejects.toThrow();
-    await expect(pruefeLaufzeitrolle(pool([]))).rejects.toThrow();
-    await expect(
-      pruefeLaufzeitrolle(pool([{ rolsuper: false, rolbypassrls: false }])),
-    ).resolves.toBeUndefined();
-  });
-});
-
-describe('pgDatenzugriff ohne Datenbank', () => {
-  function fakePool(scheitertBei?: string) {
-    const sql: string[] = [];
-    const freigaben: unknown[] = [];
-    let verbunden = 0;
-    const client = {
-      query: async (text: string) => {
-        sql.push(text);
-        if (scheitertBei && text.startsWith(scheitertBei))
-          throw new Error(`${scheitertBei} kaputt`);
-        return { rows: [] };
-      },
-      release: (fehler?: unknown) => freigaben.push(fehler),
-    };
-    const p = { connect: async () => (verbunden++, client) };
-    return { p: p as never, sql, freigaben, verbunden: () => verbunden };
-  }
-
-  it('prüft die Tenant-ID, bevor eine Verbindung geöffnet wird', async () => {
-    const f = fakePool();
-    for (const t of ['', 'x', "'; RESET ROLE; --", '11111111-1111-4111-8111-11111111111']) {
-      await expect(pgDatenzugriff(f.p).mitTenant(t, async () => 1)).rejects.toThrow(/UUID/);
-    }
-    expect(f.verbunden()).toBe(0);
-  });
-
-  it('setzt den Kontext transaktionslokal und committet', async () => {
-    const f = fakePool();
-    const t = '11111111-1111-4111-8111-111111111111';
-    expect(await pgDatenzugriff(f.p).mitTenant(t, async () => 42)).toBe(42);
-    expect(f.sql).toEqual(['BEGIN', "SELECT set_config('tcms.tenant_id', $1, true)", 'COMMIT']);
-    expect(f.freigaben).toEqual([undefined]);
-  });
-
-  it('rollt bei Fehlern zurück und verwirft die Verbindung, wenn auch das scheitert', async () => {
-    const t = '11111111-1111-4111-8111-111111111111';
-    const ok = fakePool();
-    await expect(
-      pgDatenzugriff(ok.p).mitTenant(t, async () => {
-        throw new Error('Route');
-      }),
-    ).rejects.toThrow('Route');
-    expect(ok.sql.at(-1)).toBe('ROLLBACK');
-    expect(ok.freigaben).toEqual([undefined]);
-    const kaputt = fakePool('ROLLBACK');
-    await expect(
-      pgDatenzugriff(kaputt.p).mitTenant(t, async () => {
-        throw new Error('Route');
-      }),
-    ).rejects.toThrow('Route');
-    expect(kaputt.freigaben[0]).toBeInstanceOf(Error);
   });
 });

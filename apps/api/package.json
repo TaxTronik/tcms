@@ -4,13 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx src/server.ts",
+    "start": "tsx --env-file-if-exists=../../.env src/server.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@hono/node-server": "2.1.4",
     "@tcms/contract": "workspace:*",
+    "@tcms/db": "workspace:*",
     "hono": "4.13.13",
     "pg": "8.20.0",
     "tsx": "4.21.0",

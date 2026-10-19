@@ -2,7 +2,7 @@
 // Konfiguration des Dienstes, beim Start mit zod geprüft (fail closed).
 //
 // Fehlermeldungen nennen Variable und Grund, nie den Wert (Tokens, Passwörter).
-// Platzhalter aus `apps/api/.env.example` und der Demo-`.env.example` werden
+// Platzhalter aus der `.env.example` im Repo-Root werden
 // abgewiesen, auch wenn sie die Längenregel erfüllen (TS-02).
 // =============================================================================
 
@@ -29,11 +29,10 @@ export class KonfigurationsFehler extends Error {
   }
 }
 
-/** Wörtliche Platzhalter aus den `.env.example`-Dateien. */
+/** Wörtliche Platzhalter aus `.env.example` (auch früherer Stände). */
 export const BEKANNTE_PLATZHALTER: ReadonlySet<string> = new Set([
   'bitte-durch-einen-zufaelligen-dienst-token-ersetzen',
   'bitte-durch-einen-langen-zufallswert-ersetzen',
-  'postgresql://tcms_app:bitte-ersetzen@127.0.0.1:5433/tcms',
 ]);
 /** Typische Platzhalterwörter; in zufälligen Tokens praktisch ausgeschlossen. */
 const PLATZHALTER_MUSTER =

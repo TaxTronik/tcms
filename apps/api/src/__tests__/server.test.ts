@@ -10,7 +10,10 @@ import { describe, expect, it } from 'vitest';
 
 const TSX = fileURLToPath(new URL('../../../../node_modules/tsx/dist/cli.mjs', import.meta.url));
 const API = fileURLToPath(new URL('../..', import.meta.url));
-const URL_TEST = process.env.TCMS_API_TEST_DATABASE_URL;
+const AKTIV = process.env.DB_TESTS === '1';
+const APP_URL = process.env.DATABASE_URL;
+const OWNER_URL = process.env.DATABASE_OWNER_URL;
+const SUPER_URL = process.env.DATABASE_SUPERUSER_URL;
 const TOKEN = randomBytes(32).toString('base64url');
 const SPKI = generateKeyPairSync('ed25519')
   .publicKey.export({ format: 'der', type: 'spki' })
@@ -68,27 +71,38 @@ describe('server.ts', () => {
     }
   }, 30_000);
 
-  describe.skipIf(!URL_TEST)('mit PostgreSQL', () => {
+  describe.skipIf(!AKTIV)('mit PostgreSQL (Bootstrap und Migration wie in Produktion)', () => {
     const basis = () => ({ TCMS_SERVICE_TOKENS: TOKEN, TCMS_ACTOR_PUBLIC_KEYS: `kk-a=${SPKI}` });
+    const passwort = (url: string) => decodeURIComponent(new URL(url).password);
 
-    it('verweigert den Start als Superuser (ADR §4)', async () => {
-      const lauf = starte({
-        ...basis(),
-        DATABASE_URL: URL_TEST!,
-        PORT: String(await freierPort()),
-      });
-      expect(await lauf.code).toBe(1);
-      expect(lauf.ausgabe()).toMatch(/Superuser oder BYPASSRLS/);
-      expect(lauf.ausgabe()).not.toContain(TOKEN);
-    }, 30_000);
+    // Eigentümer (besitzt Tabellen) und Superuser (umgeht RLS) dürfen nie die
+    // Laufzeitverbindung sein: pruefeLaufzeitverbindung aus @tcms/db.
+    for (const [rolle, url] of [
+      ['Eigentümerrolle tcms_owner', OWNER_URL],
+      ['Superuser', SUPER_URL],
+    ] as const) {
+      it.skipIf(!url)(
+        `verweigert den Start als ${rolle} (ADR §4)`,
+        async () => {
+          const lauf = starte({ ...basis(), DATABASE_URL: url!, PORT: String(await freierPort()) });
+          expect(await lauf.code).toBe(1);
+          expect(lauf.ausgabe()).toMatch(/Laufzeitverbindung abgewiesen/);
+          expect(lauf.ausgabe()).not.toContain(TOKEN);
+          // Entwicklungspasswörter gleichen dem Rollennamen, der genannt werden darf.
+          const p = passwort(url!);
+          if (p.length >= 4 && p !== new URL(url!).username) {
+            expect(lauf.ausgabe()).not.toContain(p);
+          }
+        },
+        30_000,
+      );
+    }
 
-    it('startet als Laufzeitrolle, beantwortet /v1/health und endet sauber', async () => {
+    it('startet als Laufzeitrolle tcms_app, beantwortet /v1/health und endet sauber', async () => {
       const port = await freierPort();
-      const url = new URL(URL_TEST!);
-      url.searchParams.set('options', '-c role=tcms_auth_test_app');
       const lauf = starte({
         ...basis(),
-        DATABASE_URL: url.toString(),
+        DATABASE_URL: APP_URL!,
         HOST: '127.0.0.1',
         PORT: String(port),
       });
