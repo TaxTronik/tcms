@@ -3,8 +3,8 @@ import { fmtDatumZeit } from '@tcms/domain';
 import { AdminKopf, NurAdmin } from '@/components/admin/teile';
 import { Icon } from '@/components/icon';
 import { Leerzustand } from '@/components/ui/leer';
-import { kannVerwalten } from '@tcms/service';
-import { lies } from '@/server/demo';
+import { kannVerwalten, leseNachrichtAdresse } from '@tcms/service';
+import { demoPersonen, lies } from '@/server/demo';
 import { brauchtKanzlei } from '@/server/sitzung';
 
 export const metadata = { title: 'Postausgang (Entwicklung)' };
@@ -22,6 +22,14 @@ function mitCodes(text: string): ReactNode[] {
       <span key={i}>{teil}</span>
     ),
   );
+}
+
+/** Empfänger: Der Dienst adressiert über IDs (TS-06); die Demo löst sie zum Anzeigen auf. */
+function empfaenger(an: string): string {
+  const a = leseNachrichtAdresse(an);
+  if (!a) return an;
+  const p = demoPersonen.person(a.empfaengerId);
+  return p ? `${p.name} <${p.email}>` : a.empfaengerId;
 }
 
 export default async function Postausgang() {
@@ -74,7 +82,7 @@ export default async function Postausgang() {
                       {fmtDatumZeit(n.createdAt)}
                     </td>
                     <td style={{ ...TD, whiteSpace: 'nowrap' }} className="text-sm">
-                      {n.an}
+                      {empfaenger(n.an)}
                     </td>
                     <td style={{ ...TD, minWidth: 200 }} className="text-sm font-m">
                       {n.betreff}

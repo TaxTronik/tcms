@@ -1,6 +1,8 @@
 import 'server-only';
 import { randomInt, timingSafeEqual } from 'node:crypto';
+import { NACHRICHT_ZWECKE } from '@tcms/contract';
 import { fmtDatum } from '@tcms/domain';
+import { nachrichtAdresse } from '@tcms/service';
 import { sha256 } from '@tcms/domain/audit';
 import type { Snapshot } from '@/components/beschreibung/typen';
 import { db, demoPersonen } from './demo';
@@ -187,11 +189,25 @@ export async function ladeFreigaben(mandantId: string): Promise<FreigabenUebersi
   return { eintraege, fruehere };
 }
 
-/** Letzte Nachrichten des Entwicklungs-Postausgangs an eine Person. */
-export async function ladePostausgang(nutzer: { name: string; email: string }, anzahl = 3) {
-  // Exakt die Adresse der Person (bzw. der reine Name aus Altbeständen) – kein Präfixvergleich.
+/**
+ * Letzte Nachrichten des Entwicklungs-Postausgangs an eine Person (nur Demo mit
+ * Demo-Login). Adressiert über die ID (TS-06); ältere Demo-Zeilen tragen noch
+ * Name bzw. Adresse.
+ */
+export async function ladePostausgang(
+  nutzer: { id: string; name: string; email: string },
+  anzahl = 3,
+) {
   return db.nachricht.findMany({
-    where: { an: { in: [adresse(nutzer), nutzer.name] } },
+    where: {
+      an: {
+        in: [
+          ...NACHRICHT_ZWECKE.map((z) => nachrichtAdresse(z, nutzer.id)),
+          `${nutzer.name} <${nutzer.email}>`,
+          nutzer.name,
+        ],
+      },
+    },
     orderBy: { createdAt: 'desc' },
     take: anzahl,
   });
