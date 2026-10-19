@@ -73,6 +73,44 @@ schreibgeschützt ansehen.
 | `pnpm db:deploy`            | Migrationen einspielen                          |
 | `pnpm db:seed`              | Datenbank leeren und Demodaten laden            |
 
+## Datenbank
+
+Mandantentrennung nach ADR 0001 §4: Jede Tabelle trägt `tenant_id`, PostgreSQL-RLS ist auf allen
+Tabellen aktiv und erzwungen (`FORCE`), die Policy vergleicht `tenant_id` mit dem
+Transaktionskontext `tcms.tenant_id`. Fremdschlüssel laufen über `(tenant_id, id)`, ein Verweis
+auf ein Objekt eines anderen Tenants scheitert also schon in der Datenbank.
+
+| Rolle        | Zweck                                         | Rechte                                                                                           |
+| ------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `tcms_owner` | Eigentümer der Tabellen, Migrationen und Seed | kein Superuser, kein `BYPASSRLS` (auch der Seed arbeitet im Tenant-Kontext)                      |
+| `tcms_app`   | Laufzeit (Dienst und Demo)                    | `NOBYPASSRLS`, nur DML; Audit nur `SELECT`/`INSERT`; `akteur_jti` nur `SELECT`/`INSERT`/`DELETE` |
+
+- `packages/db/prisma/init/01_bootstrap.sql` legt beide Rollen idempotent an (als Superuser, vor der
+  ersten Migration; Compose bindet das Verzeichnis als Init-Skript ein). Feste Passwörter = Rollenname,
+  nur für Entwicklung und Tests.
+- Verbindungen: `DATABASE_URL` (Laufzeit, `tcms_app`), `DATABASE_OWNER_URL` (Migration und Seed).
+  `mitTenant` weist eine Laufzeitverbindung ab, deren Rolle Superuser ist, `BYPASSRLS` hat oder
+  Tabellen besitzt.
+- Zugriff nur über `mitTenant(tenantId, fn)` aus `@tcms/db`: prüft die UUID, öffnet eine Transaktion
+  und setzt `tcms.tenant_id` transaktionslokal. Ohne Kontext sieht `tcms_app` keine Zeile.
+- Audit: Hashkette je Tenant (Kettenversion 2), Advisory-Lock je Tenant, `(tenant_id, prevHash)`
+  eindeutig. `schreibeAudit(tx, …)` nimmt den Tenant aus dem Kontext.
+- Die Migrationshistorie beginnt mit `20261019000000_init` neu (kein Bestandsschutz).
+
+DB-Tests (RLS je Tabelle aus dem Katalog, Rechte, Tenantgrenzen, Audit-Kette bei parallelen
+Schreibern) laufen gegen eine migrierte Datenbank:
+
+```bash
+psql -U postgres -d <db> -f packages/db/prisma/init/01_bootstrap.sql
+DATABASE_OWNER_URL=postgresql://tcms_owner:tcms_owner@localhost:5433/<db> pnpm db:deploy
+DB_TESTS=1 \
+  DATABASE_URL=postgresql://tcms_app:tcms_app@localhost:5433/<db> \
+  DATABASE_OWNER_URL=postgresql://tcms_owner:tcms_owner@localhost:5433/<db> \
+  pnpm --filter @tcms/db test
+```
+
+`DATABASE_SUPERUSER_URL` (optional) prüft zusätzlich die Abweisung einer Superuser-Verbindung.
+
 ## Aufbau
 
 ```
