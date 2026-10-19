@@ -22,6 +22,7 @@ import { pruefeAuditKette, schreibeAudit } from '../audit';
 import {
   erzeugeClient,
   mitTenant,
+  pruefeLaufzeitverbindung,
   pruefeTenantId,
   sperrSchluessel,
   TenantFehler,
@@ -835,6 +836,10 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
       } finally {
         await owner.$disconnect();
       }
+    });
+
+    it('Startprüfung: DATABASE_URL als tcms_app wird angenommen', async () => {
+      await expect(pruefeLaufzeitverbindung()).resolves.toBeUndefined();
     });
 
     it.skipIf(!SUPER_URL)('weist eine Superuser-Verbindung ab', async () => {

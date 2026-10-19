@@ -18,6 +18,7 @@ export {
   erzeugeClient,
   mitTenant,
   pruefeLaufzeitRolle,
+  pruefeLaufzeitverbindung,
   pruefeTenantId,
   sperrSchluessel,
   TENANT_EINSTELLUNG,

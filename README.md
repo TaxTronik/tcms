@@ -102,7 +102,7 @@ auf ein Objekt eines anderen Tenants scheitert also schon in der Datenbank.
   nur für Entwicklung und Tests.
 - Verbindungen: `DATABASE_URL` (Laufzeit, `tcms_app`), `DATABASE_OWNER_URL` (Migration und Seed).
   `mitTenant` weist eine Laufzeitverbindung ab, deren Rolle Superuser ist, `BYPASSRLS` hat oder
-  Tabellen besitzt.
+  Tabellen besitzt; `pruefeLaufzeitverbindung()` prüft das beim Start des Dienstes.
 - Zugriff nur über `mitTenant(tenantId, fn)` aus `@tcms/db`: prüft die UUID, öffnet eine Transaktion
   und setzt `tcms.tenant_id` transaktionslokal. Ohne Kontext sieht `tcms_app` keine Zeile.
 - Audit: Hashkette je Tenant (Kettenversion 2), Advisory-Lock je Tenant, `(tenant_id, prevHash)`

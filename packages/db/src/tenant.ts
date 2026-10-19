@@ -111,6 +111,15 @@ async function stelleLaufzeitRolleSicher(client: PrismaClient): Promise<void> {
   geprueft.add(client);
 }
 
+/**
+ * Prüft die Laufzeitverbindung (`DATABASE_URL`) beim Start des Dienstes, damit
+ * er gar nicht erst Anfragen annimmt, wenn die Rolle RLS umgehen könnte
+ * (fail closed). `mitTenant` prüft unabhängig davon vor der ersten Nutzung.
+ */
+export async function pruefeLaufzeitverbindung(): Promise<void> {
+  await stelleLaufzeitRolleSicher(laufzeitClient());
+}
+
 export interface TenantOptionen {
   /** Höchstdauer der Transaktion in ms (Standard 30 000). */
   timeoutMs?: number;
