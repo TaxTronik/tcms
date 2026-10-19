@@ -157,6 +157,8 @@ export async function verantwortlicheAendern(_prev: Ergebnis, fd: FormData): Pro
         mandantId,
         kontrolleId: feld(fd, 'id'),
         standId: feld(fd, 'standId'),
+        // Gesehene Seite der Kontrolle; der Service prüft sie (Schema, Zeilensperre).
+        partei: feld(fd, 'partei') as 'KANZLEI' | 'MANDANT',
         durchfuehrendId: feld(fd, 'durchfuehrendId'),
         vertretungId: feld(fd, 'vertretungId'),
         gegenzeichnerId: gegenzeichnungMandant ? null : feld(fd, 'gegenzeichnerId') || null,

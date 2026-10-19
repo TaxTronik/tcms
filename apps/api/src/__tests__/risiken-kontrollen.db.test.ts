@@ -320,6 +320,7 @@ describe.skipIf(!AKTIV)('API risiken-kontrollen gegen PostgreSQL', () => {
     const g = erwarte(KontrolleGeaendertSchema, ok.antwort);
     const vbody = {
       standId: g.standId,
+      partei: 'KANZLEI',
       durchfuehrendId: a.personen.vertretung,
       vertretungId: a.personen.hb,
       gegenzeichnerId: a.personen.bt,
@@ -331,6 +332,16 @@ describe.skipIf(!AKTIV)('API risiken-kontrollen gegen PostgreSQL', () => {
       ...vbody,
       durchfuehrendId: a.personen.gv,
     });
+    // Seite fehlt bzw. unbekannt: 400; gesehene Seite passt nicht zum Stand: 409 ohne Änderung.
+    const { partei: _p, ...ohnePartei } = vbody;
+    await ungueltig(`/kontrollen/${k.id}/verantwortliche`, ohnePartei);
+    await ungueltig(`/kontrollen/${k.id}/verantwortliche`, { ...vbody, partei: 'BEIDE' });
+    const seite = await rufe('POST', p(a, `/kontrollen/${k.id}/verantwortliche`), wer(a, 'hb'), {
+      ...vbody,
+      partei: 'MANDANT',
+    });
+    expect(seite.status).toBe(409);
+    expect((seite.antwort as { fehler: { code: string } }).fehler.code).toBe('KONFLIKT');
     const v = await rufe('POST', p(a, `/kontrollen/${k.id}/verantwortliche`), wer(a, 'hb'), vbody);
     expect(erwarte(KontrolleGeaendertSchema, v.antwort).version).toBe(g.version + 1);
   });

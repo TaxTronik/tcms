@@ -452,6 +452,7 @@ describe.skipIf(!AKTIV)('Kontrollen: Fachoperationen', () => {
         mandantId: a.mandantId,
         kontrolleId: k.id,
         standId: st.id,
+        partei: 'KANZLEI' as 'KANZLEI' | 'MANDANT',
         durchfuehrendId: a.personen.vertretung,
         vertretungId: a.personen.hb,
         gegenzeichnerId: a.personen.bt as string | null,
@@ -505,6 +506,7 @@ describe.skipIf(!AKTIV)('Kontrollen: Fachoperationen', () => {
         mandantId: a.mandantId,
         kontrolleId: k.id,
         standId: st.id,
+        partei: 'MANDANT' as 'KANZLEI' | 'MANDANT',
         durchfuehrendId: a.personen.ma,
         vertretungId: a.personen.tcb,
         gegenzeichnerId: null as string | null,
@@ -539,12 +541,80 @@ describe.skipIf(!AKTIV)('Kontrollen: Fachoperationen', () => {
           mandantId,
           kontrolleId: k.id,
           standId: st.id,
+          partei: 'KANZLEI',
           durchfuehrendId: a.personen.vertretung,
           vertretungId: a.personen.hb,
           gegenzeichnerId: a.personen.bt,
           gegenzeichnungMandant: false,
         }),
       );
+    });
+
+    it('TS-05: gesehene Seite (partei) unter der Sperre geprüft – passt sie nicht, KONFLIKT', async () => {
+      // Kanzlei-Kontrolle, Aufrufer hält sie für eine Mandanten-Kontrolle: Die
+      // Personen (Kanzleipersonen) bestünden die Prüfung der Kanzleiseite, die
+      // Änderung beruhte aber auf einer anderen Seite → KONFLIKT, nichts geändert.
+      const kk = kanzleiKontrollen().find((x) => !x.schluessel) ?? kanzleiKontrollen()[0]!;
+      const stK = await stand(kk.id);
+      const kanzleiSeite = {
+        mandantId: a.mandantId,
+        kontrolleId: kk.id,
+        standId: stK.id,
+        partei: 'MANDANT' as const,
+        // Neue Kanzleipersonen (nur UUID-Form prüfbar): ohne die Prüfung der
+        // Seite ginge die Änderung durch.
+        durchfuehrendId: randomUUID(),
+        vertretungId: randomUUID(),
+        gegenzeichnerId: a.personen.bt,
+        gegenzeichnungMandant: false,
+      };
+      const f1 = await fehlerVon(rufe(akt.bt, (ctx) => verantwortlicheAendern(ctx, kanzleiSeite)));
+      expect(f1.code).toBe('KONFLIKT');
+      expect(f1.felder).toBeUndefined();
+      // Mandanten-Kontrolle mit Seite „Kanzlei" (Kontakte mit aktiver Rolle).
+      const km = liste.find((x) => x.partei === 'MANDANT')!;
+      const stM = await stand(km.id);
+      const mandantSeite = {
+        mandantId: a.mandantId,
+        kontrolleId: km.id,
+        standId: stM.id,
+        partei: 'KANZLEI' as const,
+        durchfuehrendId: a.personen.tcb,
+        vertretungId: a.personen.ma,
+        gegenzeichnerId: a.personen.bt,
+        gegenzeichnungMandant: false,
+      };
+      const f2 = await fehlerVon(rufe(akt.bt, (ctx) => verantwortlicheAendern(ctx, mandantSeite)));
+      expect(f2.code).toBe('KONFLIKT');
+      // Nichts geschrieben: Stand und Audit unverändert.
+      expect((await stand(kk.id)).id).toBe(stK.id);
+      expect((await stand(km.id)).id).toBe(stM.id);
+      // Fremde ID bleibt NICHT_GEFUNDEN – die Seite verrät nichts über fremde Kontrollen.
+      const fremd = await fehlerVon(
+        rufe(akt.bt, (ctx) =>
+          verantwortlicheAendern(ctx, { ...kanzleiSeite, kontrolleId: 'cfremdekontrolle00000000' }),
+        ),
+      );
+      expect(fremd.code).toBe('NICHT_GEFUNDEN');
+      // Schema: Gegenzeichnung beim Mandanten nur mit Seite „Mandant"; partei Pflicht.
+      const schema = await fehlerVon(
+        rufe(akt.bt, (ctx) =>
+          verantwortlicheAendern(ctx, {
+            ...kanzleiSeite,
+            partei: 'KANZLEI',
+            gegenzeichnerId: null,
+            gegenzeichnungMandant: true,
+          }),
+        ),
+      );
+      expect(schema.code).toBe('UNGUELTIG');
+      expect(Object.keys(schema.felder ?? {})).toContain('gegenzeichnungMandant');
+      const { partei: _p, ...ohnePartei } = kanzleiSeite;
+      const ohne = await fehlerVon(
+        rufe(akt.bt, (ctx) => verantwortlicheAendern(ctx, ohnePartei as never)),
+      );
+      expect(ohne.code).toBe('UNGUELTIG');
+      expect(Object.keys(ohne.felder ?? {})).toContain('partei');
     });
   });
 });

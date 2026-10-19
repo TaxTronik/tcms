@@ -215,16 +215,26 @@ export const AbweichungAufhebenSchema = z.object({ ...kontrolle, ...aufheben }).
  * UUID-Form prüfbar); Mandantenseite: Kontakte mit aktiver Rolle beim Mandanten.
  * Bei `gegenzeichnungMandant` bestätigt die Vertretung beim Mandanten; dann
  * bleibt `gegenzeichnerId` ungenutzt und muss `null` sein.
+ *
+ * `partei` ist die Seite der Kontrolle, die der Aufrufer gesehen hat (aus der
+ * Lese-Antwort) und für die er Personen anbietet. Der Dienst prüft sie unter
+ * der Zeilensperre gegen den Kontrollstand; weicht sie ab → KONFLIKT (TS-05).
+ * Eine Gegenzeichnung beim Mandanten gibt es nur bei `partei: 'MANDANT'`.
  */
 const verantwortliche = {
   standId,
+  partei: z.enum(['KANZLEI', 'MANDANT']),
   durchfuehrendId: PersonIdSchema,
   vertretungId: PersonIdSchema,
   gegenzeichnerId: PersonIdSchema.nullable(),
   gegenzeichnungMandant: z.boolean(),
 };
 function gegenzeichnungEindeutig(
-  e: { gegenzeichnungMandant: boolean; gegenzeichnerId: string | null },
+  e: {
+    partei: 'KANZLEI' | 'MANDANT';
+    gegenzeichnungMandant: boolean;
+    gegenzeichnerId: string | null;
+  },
   ctx: z.RefinementCtx,
 ) {
   if (e.gegenzeichnungMandant && e.gegenzeichnerId !== null) {
@@ -232,6 +242,13 @@ function gegenzeichnungEindeutig(
       code: 'custom',
       path: ['gegenzeichnerId'],
       message: 'Bei Gegenzeichnung beim Mandanten keine gegenzeichnende Person angeben',
+    });
+  }
+  if (e.gegenzeichnungMandant && e.partei !== 'MANDANT') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['gegenzeichnungMandant'],
+      message: 'Eine Gegenzeichnung beim Mandanten gibt es nur bei Kontrollen des Mandanten',
     });
   }
 }

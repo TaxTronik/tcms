@@ -473,7 +473,8 @@ async function pruefeMandantPersonen(
 
 /**
  * Ändert durchführende Person, Vertretung und Gegenzeichnung einer Kontrolle
- * (neuer Stand). Die Personen müssen zur Partei der Kontrolle passen:
+ * (neuer Stand). Die Seite (`partei`) aus der Eingabe muss zum gesperrten
+ * Kontrollstand passen (sonst KONFLIKT). Die Personen müssen zur Partei der Kontrolle passen:
  * Mandantenseite = aktive Rolle bei diesem Mandanten, Kanzleiseite = kein
  * Mandantenkontakt. Vier-Augen: Gegenzeichnung nie durch die durchführende
  * Person; Schlüsselkontrollen brauchen eine Gegenzeichnung.
@@ -500,6 +501,14 @@ export async function verantwortlicheAendern(
         e.standId,
         zeitpunkt,
       );
+      // TS-05: Die Personen sind für die Seite gewählt, die der Aufrufer gesehen
+      // hat. Unter der Sperre geprüft: passt sie nicht zum Kontrollstand, gilt
+      // keine Personenprüfung der anderen Seite – KONFLIKT, neu laden.
+      if (alt.partei !== e.partei) {
+        throw konflikt(
+          'Die Seite der Kontrolle (Kanzlei/Mandant) passt nicht zum gesehenen Stand. Bitte neu laden.',
+        );
+      }
       if (e.gegenzeichnungMandant && alt.partei !== 'MANDANT') {
         throw ungueltig(
           'Eine Gegenzeichnung beim Mandanten gibt es nur bei Kontrollen des Mandanten.',

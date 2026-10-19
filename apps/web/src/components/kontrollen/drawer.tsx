@@ -610,6 +610,7 @@ export function KontrolleDrawer({
                 {Object.entries(felder).map(([n, v]) => (
                   <input key={n} type="hidden" name={n} value={v} />
                 ))}
+                <input type="hidden" name="partei" value={k.partei} />
                 <fieldset
                   disabled={!!sperre}
                   style={{ border: 0, padding: 0, margin: 0 }}
