@@ -30,6 +30,19 @@ savePrefix: ''
 audit:
   level: high
 
+# Sicherheitskorrekturen transitiver Abhängigkeiten, wie in der kanzleikonsole.
+# Beide liegen nur unter der Prisma-CLI (devDependency von @tcms/db, im Image
+# tcms-api nicht enthalten), würden aber `pnpm audit --prod` in CI scheitern
+# lassen. Exakte Versionen, beide älter als minimumReleaseAge.
+overrides:
+  # GHSA-ggr8-5vv4-36mx (Stack-Erschöpfung bei rekursiven Objekten);
+  # @prisma/config 7.9.1 pinnt noch den 7.x-Zweig. `prisma generate` lädt die
+  # Konfiguration damit weiter (geprüft).
+  deepmerge-ts: '8.0.0'
+  # GHSA-3f6p-5ww8-9rcr (Auth-Plugin-Downgrade) und DoS über komprimierte
+  # Protokolldaten; transitiv über die Prisma-CLI.
+  mysql2: '3.23.1'
+
 # Install-Skripte, die laufen dürfen (alle anderen sind gesperrt):
 #   @prisma/engines  lädt die Schema-Engine für `prisma migrate` (Entwicklung);
 #                    das Image tcms-api enthält das Paket nicht.
