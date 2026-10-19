@@ -27,3 +27,4 @@ export {
   naechsteWiedervorlageNr,
 } from '../kern/nummern';
 export { auditGrenze, heuteDatum, leseStand, tagAlsDatum, tagesende } from '../kern/zeit';
+export { kontextAlsAntwort, kontextRechte, leseKontext } from './lesepfade/kontext';

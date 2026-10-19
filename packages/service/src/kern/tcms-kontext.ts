@@ -1138,6 +1138,8 @@ export const VERTRAULICH_MASKE = {
   sachverhalt: '',
   quelleText: 'vertraulich',
   risikoCodes: [] as string[],
+  /** Wer beteiligt ist, gehört selbst zum vertraulichen Inhalt. */
+  beteiligte: [] as string[],
 } as const;
 
 /**
@@ -1153,7 +1155,7 @@ async function vollende(ctx: DienstKontext, k: TcmsKontext): Promise<TcmsKontext
   };
   const feststellungen = k.feststellungen.map((f) => {
     if (f.vertraulich && !kannVertraulichLesen(ctx.akteur, k.mandant.id, f.beteiligte)) {
-      return { ...f, ...VERTRAULICH_MASKE, risikoCodes: [] };
+      return { ...f, ...VERTRAULICH_MASKE, risikoCodes: [], beteiligte: [] };
     }
     merke(...f.beteiligte);
     return f;
