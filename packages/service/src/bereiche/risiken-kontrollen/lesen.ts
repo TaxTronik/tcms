@@ -53,6 +53,7 @@ import {
   type TcmsKontext,
 } from '../../kern/tcms-kontext';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
+import { zustellungenDerFreigaben } from '../../kern/zustellung';
 import { iso, kanonisch, namenFuer, pruefeEingabe, pruefeStaffLesen, tag } from './gemeinsam';
 import { aenderungenGegen, antragAnzeige, type KontrolleStandRoh } from './planung';
 
@@ -171,7 +172,10 @@ async function neuBewertenHinweise(
   return out;
 }
 
-/** Risikoakzeptanzen (Freigabe-Art RISIKOAKZEPTANZ) bis zum Stichtag, jüngste zuerst. */
+/**
+ * Risikoakzeptanzen (Freigabe-Art RISIKOAKZEPTANZ) bis zum Stichtag, jüngste
+ * zuerst; im aktuellen Stand mit dem Zustellstatus der Anforderung (Stufe 4).
+ */
 async function akzeptanzen(
   ctx: DienstKontext,
   k: TcmsKontext,
@@ -183,6 +187,8 @@ async function akzeptanzen(
     where: { programmId: k.programm.id, art: 'RISIKOAKZEPTANZ', angefordertAm: { lte: ende } },
     orderBy: { angefordertAm: 'desc' },
   });
+  // Zustellstatus der Anforderung: nur im aktuellen Stand.
+  const zustellungen = await zustellungenDerFreigaben(ctx.tx, k.mandant.id, liste, k);
   for (const f of liste) {
     // Zum Stichtag noch nicht entschiedene Akzeptanzen gelten als offen.
     const status = f.erledigtAm && f.erledigtAm.getTime() > ende.getTime() ? 'OFFEN' : f.status;
@@ -198,6 +204,7 @@ async function akzeptanzen(
         empfaengerId: f.empfaengerId,
         anmerkung: status === 'OFFEN' ? null : f.anmerkung,
         erledigtAm: status === 'OFFEN' ? null : iso(f.erledigtAm),
+        zustellung: zustellungen.get(f.id) ?? null,
       },
     ]);
   }

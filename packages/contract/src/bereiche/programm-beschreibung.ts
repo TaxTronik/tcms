@@ -22,7 +22,7 @@
 import { z } from 'zod';
 import { StandSchema } from './lesepfade';
 import { ProfilAntwortenSchema } from './risiken-kontrollen';
-import { NachrichtUnzustellbarGrundSchema } from './zustellung';
+import { FreigabeZustellungSchema, NachrichtUnzustellbarGrundSchema } from './zustellung';
 
 const uuid = z.uuid();
 /** ID eines Tax-CMS-Objekts (cuid). */
@@ -735,6 +735,8 @@ export const BeschreibungFreigabeViewSchema = z
     codeAblauf: isoZeit.nullable(),
     anmerkung: z.string().nullable(),
     erledigtAm: isoZeit.nullable(),
+    /** Zustellung der jüngsten Nachricht an den aktuellen Empfänger (historisch: null). */
+    zustellung: FreigabeZustellungSchema.nullable(),
   })
   .strict();
 
@@ -1009,6 +1011,12 @@ export const FreigabeHistorieZeileSchema = z
     anmerkung: z.string().nullable(),
     codeStatus: FreigabeCodeStatusSchema,
     codeAblauf: isoZeit.nullable(),
+    /**
+     * Zustellung der jüngsten Nachricht an den aktuellen Empfänger (offen,
+     * zugestellt, unzustellbar mit Grund, verworfen); null ohne Nachricht und im
+     * historischen Stand. Bei „unzustellbar" kann die Kanzlei neu adressieren.
+     */
+    zustellung: FreigabeZustellungSchema.nullable(),
   })
   .strict();
 export type FreigabeHistorieZeile = z.infer<typeof FreigabeHistorieZeileSchema>;

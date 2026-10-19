@@ -2,6 +2,8 @@
 // Kommunikation (S13) als Service: Freigaben und Kenntnisnahmen eines
 // Programms zum Stichtag (bisher apps/web/src/server/kommunikation-daten.ts).
 // Nur Kanzleipersonen mit Bezug (`kannLesen`); keine Codes, keine Code-Hashes.
+// Je Freigabe der Zustellstatus der jüngsten Nachricht an den aktuellen
+// Empfänger (Stufe 4, nur im aktuellen Stand, ohne Inhalte der Nachricht).
 // =============================================================================
 
 import {
@@ -11,6 +13,7 @@ import {
   type FreigabenHistorieEingabe,
 } from '@tcms/contract';
 import { heuteDatum, leseStand, tagesende } from '../../kern/zeit';
+import { zustellungenDerFreigaben } from '../../kern/zustellung';
 import type { DienstKontext } from '../../kontext';
 import { codeStatus } from './code';
 import { iso, isoTagVon, kanzleiZugriff, programmIdDesMandanten, pruefeEingabe } from './gemeinsam';
@@ -32,6 +35,8 @@ export async function ladeFreigabenHistorie(
     orderBy: [{ angefordertAm: 'desc' }, { id: 'asc' }],
   });
   const jetzt = new Date();
+  // Betrieblicher Zustand wie der Code-Status: nur im aktuellen Stand.
+  const zustellungen = await zustellungenDerFreigaben(ctx.tx, mandantId, roh, { historisch });
   const freigaben: FreigabeHistorieZeile[] = roh.map((f) => {
     // Eine später erledigte Anforderung gilt am Stichtag als offen.
     const spaeter = f.erledigtAm != null && f.erledigtAm.getTime() > ende.getTime();
@@ -47,6 +52,7 @@ export async function ladeFreigabenHistorie(
       anmerkung: spaeter ? null : f.anmerkung,
       codeStatus: historisch ? 'KEIN' : codeStatus(f, jetzt),
       codeAblauf: historisch ? null : iso(f.codeAblauf),
+      zustellung: zustellungen.get(f.id) ?? null,
     };
   });
   return { stand: isoTagVon(stand), historisch, freigaben };

@@ -42,6 +42,7 @@ import { naechsteVersion, type Abschnitt, type BausteinArt } from '@tcms/domain'
 import { mitAudit, type Protokoll } from '../../audit';
 import { ladeKontext } from '../../kern/tcms-kontext';
 import { auditGrenze, tagesende } from '../../kern/zeit';
+import { zustellungenDerFreigaben } from '../../kern/zustellung';
 import type { DienstKontext } from '../../kontext';
 import { gleicheId, kannBearbeiten } from '../../rechte';
 import {
@@ -190,6 +191,8 @@ export async function ladeBeschreibung(
   };
 
   const jetzt = new Date();
+  // Zustellstatus je Freigabe: betrieblicher Zustand, nur im aktuellen Stand.
+  const zustellungen = await zustellungenDerFreigaben(tx, mandantId, freigaben, k);
   const freigabenView = freigaben
     .filter((f) => f.angefordertAm.getTime() <= ende.getTime())
     .map((f) => {
@@ -205,6 +208,7 @@ export async function ladeBeschreibung(
         codeAblauf: k.historisch ? null : iso(f.codeAblauf),
         anmerkung: spaeter ? null : f.anmerkung,
         erledigtAm: spaeter ? null : iso(f.erledigtAm),
+        zustellung: zustellungen.get(f.id) ?? null,
       };
     });
   const nummerJe = new Map(versionen.map((v) => [v.id, v.nummer]));

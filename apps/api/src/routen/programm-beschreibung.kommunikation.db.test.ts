@@ -1,5 +1,6 @@
 // Kommunikation (Freigaben-Historie) über die App (DB_TESTS=1): Erfolg,
-// Stichtag, Negativfälle je Endpunkt.
+// Stichtag, Zustellstatus der Anforderung (offen → unzustellbar über den
+// Systemakteur), Negativfälle je Endpunkt.
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   akteure,
@@ -31,6 +32,36 @@ describe.skipIf(!AKTIV)('Endpunkt Freigaben-Historie (App + PostgreSQL)', () => 
       await senden(w, 'GET', `${m(w.A)}/kommunikation/freigaben?stand=2000-01-01`, a.hb()),
     );
     expect(alt).toMatchObject({ stand: '2000-01-01', historisch: true, freigaben: [] });
+  });
+
+  it('zeigt den Zustellstatus der Anforderung (offen, nach Meldung unzustellbar mit Grund)', async () => {
+    const pfad = `${m(w.A)}/kommunikation/freigaben`;
+    const zustellung = async () =>
+      (
+        (await ok(await senden(w, 'GET', pfad, a.bt())))['freigaben'] as {
+          zustellung: Record<string, unknown> | null;
+        }[]
+      )[0]!.zustellung;
+    expect(await zustellung()).toEqual({
+      status: 'OFFEN',
+      zweck: 'FREIGABE_ANGEFORDERT',
+      erstelltAm: expect.any(String),
+    });
+    const offen = await ok(await senden(w, 'GET', '/v1/nachrichten/offen', a.system()));
+    const [n] = offen['nachrichten'] as { id: string; empfaengerId: string }[];
+    expect(n!.empfaengerId).toBe(w.GV);
+    await ok(
+      await senden(w, 'POST', `/v1/nachrichten/${n!.id}/unzustellbar`, a.system(), {
+        grund: 'EMPFAENGER_UNGUELTIG',
+      }),
+    );
+    expect(await zustellung()).toEqual({
+      status: 'UNZUSTELLBAR',
+      grund: 'EMPFAENGER_UNGUELTIG',
+      zweck: 'FREIGABE_ANGEFORDERT',
+      erstelltAm: expect.any(String),
+      am: expect.any(String),
+    });
   });
 
   pruefeEndpunkte(w, [

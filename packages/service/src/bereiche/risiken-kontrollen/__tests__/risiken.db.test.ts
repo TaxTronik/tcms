@@ -9,7 +9,8 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { erzeugeClient, mitTenant, type PrismaClient } from '@tcms/db';
-import type { DienstKontext } from '../../../kontext';
+import { imSystemdienst, type DienstKontext } from '../../../kontext';
+import { meldeNachrichtUnzustellbar } from '../../programm-beschreibung/nachrichten';
 import { ladeRisiken, ladeRisiko } from '../lesen';
 import {
   risikenFreigeben,
@@ -30,6 +31,7 @@ import {
   kontakt,
   legeProgrammAn,
   rufe,
+  UHR,
   type Programm,
 } from './fixture';
 
@@ -665,6 +667,32 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
         code: null,
         daten: { freigabeId: ok.freigabeId, art: 'RISIKOAKZEPTANZ', titel: f.titel, version: null },
       });
+      // Stufe 4: Die Kanzlei sieht an der Akzeptanz den Zustellstatus der Anforderung.
+      const zustellung = async () =>
+        (
+          await rufe(akt.bt, (ctx) => ladeRisiko(ctx, { mandantId: a.mandantId, risikoId: id }))
+        ).risiko.akzeptanzen.find((x) => x.id === ok.freigabeId)?.zustellung;
+      expect(await zustellung()).toEqual({
+        status: 'OFFEN',
+        zweck: 'FREIGABE_ANGEFORDERT',
+        erstelltAm: expect.any(String),
+      });
+      await imSystemdienst(
+        { art: 'SYSTEM', tenantId: tenant, id: randomUUID(), name: 'Zustellung' },
+        UHR,
+        (ctx) =>
+          meldeNachrichtUnzustellbar(ctx, { nachrichtId: n!.id, grund: 'KEIN_PORTALZUGANG' }),
+      );
+      expect(await zustellung()).toMatchObject({
+        status: 'UNZUSTELLBAR',
+        grund: 'KEIN_PORTALZUGANG',
+        zweck: 'FREIGABE_ANGEFORDERT',
+      });
+      const liste = await rufe(akt.hb, (ctx) => ladeRisiken(ctx, { mandantId: a.mandantId }));
+      expect(
+        liste.risiken.find((x) => x.id === id)?.akzeptanzen.find((x) => x.id === ok.freigabeId)
+          ?.zustellung?.status,
+      ).toBe('UNZUSTELLBAR');
       const zweiteAnf = await fehlerVon(
         rufe(akt.bt, (ctx) =>
           risikoakzeptanzAnfordern(ctx, {
