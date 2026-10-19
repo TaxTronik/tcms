@@ -47,9 +47,11 @@ import type { DienstKontext } from '../../kontext';
 import {
   gleicheId,
   istGesetzlicherVertreter,
+  kannLesen,
   kannPortalLesen,
   type KontaktRolle,
 } from '../../rechte';
+import { halteRollenFest, ladeKontaktRollen } from '../../rollen';
 import { baueBausteine, normalisiereAbschnitte, pruefeSnapshot } from './bausteine';
 import {
   codeAblaufAb,
@@ -101,10 +103,18 @@ function sichtbarImPortal(
   return kannPortalLesen(ctx.akteur, mandantId, rollen) || gleicheId(f.empfaengerId, ctx.akteur.id);
 }
 
-/** Gesperrte, sichtbare Freigabe des Portals (sonst `NICHT_GEFUNDEN`). */
+/**
+ * Gesperrte, sichtbare Freigabe des Portals (sonst `NICHT_GEFUNDEN`). Die
+ * Rollen gelten erst, wie sie nach der Zeilensperre und unter
+ * `halteRollenFest` gelesen sind (TS-05, RT4-T-05): Eine in der Wartezeit
+ * entzogene Rolle zählt nicht mehr, und bis zum Commit wird keine entzogen.
+ */
 async function portalFreigabe(ctx: DienstKontext, mandantId: string, freigabeId: string) {
-  const { rollen, mandant } = await portalZugriff(ctx, mandantId);
+  const { mandant } = await portalZugriff(ctx, mandantId);
   const f = await sperreFreigabe(ctx.tx, mandantId, freigabeId);
+  await halteRollenFest(ctx.tx, mandantId);
+  const rollen = await ladeKontaktRollen(ctx.tx, ctx.akteur);
+  if (!kannLesen(ctx.akteur, mandantId, rollen)) nichtGefunden();
   if (!sichtbarImPortal(ctx, mandantId, rollen, f)) nichtGefunden();
   return { f, rollen, mandant };
 }

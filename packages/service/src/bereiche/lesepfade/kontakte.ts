@@ -26,10 +26,11 @@ import {
   type KontaktRollenAntwort,
   type KontaktRollenEingabe,
 } from '@tcms/contract';
-import { tenantSperre, type Tx } from '@tcms/db';
+import { tenantSperre } from '@tcms/db';
 import { mitAudit } from '../../audit';
 import type { DienstKontext } from '../../kontext';
 import { kannLesen, type MandantRolle } from '../../rechte';
+import { sperreRollenZumAendern } from '../../rollen';
 import { antwortNach, pruefeEingabe } from './hilfen';
 import { brauchtBearbeitung, darfStammdatenPflegen } from './mandant';
 
@@ -76,13 +77,6 @@ export async function ladeKontakte(
   });
 }
 
-/** Sperrt die Mandantenzeile (TS-05); unbekannt bzw. fremder Tenant → NICHT_GEFUNDEN. */
-async function sperreMandant(tx: Tx, id: string): Promise<void> {
-  const z = await tx.$queryRaw<{ id: string }[]>`
-    SELECT id::text AS id FROM "Mandant" WHERE id = ${id}::uuid FOR UPDATE`;
-  if (z.length === 0) throw new DienstFehler('NICHT_GEFUNDEN');
-}
-
 /**
  * Setzt die aktiven Rollen eines Kontakts beim Mandanten auf genau `rollen`
  * (leer = Kontakt deaktivieren). Rollen werden nie gelöscht, nur deaktiviert.
@@ -97,7 +91,8 @@ export async function setzeKontaktRollen(
   brauchtBearbeitung(ctx.akteur, mandantId, 'Die Pflege der Kontaktrollen');
   const tx = ctx.tx;
 
-  await sperreMandant(tx, mandantId);
+  // Dieselbe Zeile halten die Freigabe-Operationen (`halteRollenFest`), bevor sie Rollen prüfen.
+  await sperreRollenZumAendern(tx, mandantId);
   await tenantSperre(tx, `kontakt.${kontaktId}`);
 
   const anderer = await tx.mandantKontaktRolle.count({
