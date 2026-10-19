@@ -18,6 +18,7 @@ import {
   DurchfuehrungLesenEingabeSchema,
   KontrollaufgabenEingabeSchema,
   NachweisLesenEingabeSchema,
+  NachweiseJeDokumentEingabeSchema,
   type DurchfuehrungDetail,
   type DurchfuehrungLesenEingabe,
   type Kontrollaufgabe,
@@ -25,6 +26,8 @@ import {
   type KontrollaufgabenEingabe,
   type NachweisErgebnis,
   type NachweisLesenEingabe,
+  type NachweiseJeDokument,
+  type NachweiseJeDokumentEingabe,
 } from '@tcms/contract';
 import { addTage, fmtDatum, isoDatum, statusAm, type AnzeigeStatus } from '@tcms/domain';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
@@ -561,6 +564,42 @@ export async function listeKontrollaufgaben(
  * kanzleikonsole), TS-03: Kanzleipersonen mit `kannLesen`, Mandantenkontakte
  * nur für Aufgaben, die sie öffnen dürfen. Sonst NICHT_GEFUNDEN.
  */
+/**
+ * Nachweise eines Mandanten zu einer Dokument-ID der kanzleikonsole, auch
+ * entfernte (Abgleich offener Verknüpfungen, ADR 0001 §6). Nur
+ * Kanzleipersonen mit Leserecht; Mandantenkontakte, fremde und unbekannte
+ * Mandanten → NICHT_GEFUNDEN. Die Zugehörigkeit zum Mandanten prüft die
+ * Abfrage selbst (Durchführung → Kontrolle → Programm des Mandanten; RLS
+ * trennt nur Tenants): Eine Dokument-ID eines anderen Mandanten ergibt
+ * dieselbe leere Liste wie eine unbekannte.
+ */
+export async function ladeNachweiseJeDokument(
+  ctx: DienstKontext,
+  eingabe: NachweiseJeDokumentEingabe,
+): Promise<NachweiseJeDokument> {
+  const { mandantId, dokumentId } = pruefeEingabe(NachweiseJeDokumentEingabeSchema, eingabe);
+  if (ctx.akteur.art !== 'KANZLEI') throw new DienstFehler('NICHT_GEFUNDEN');
+  await pruefeLeserecht(ctx, mandantId);
+  const mandant = await ctx.tx.mandant.findFirst({
+    where: { id: mandantId },
+    select: { id: true },
+  });
+  if (!mandant) throw new DienstFehler('NICHT_GEFUNDEN');
+  const liste = await ctx.tx.nachweis.findMany({
+    where: { dokumentId, durchfuehrung: { kontrolle: { programm: { mandantId } } } },
+    orderBy: [{ hochgeladenAm: 'asc' }, { id: 'asc' }],
+    select: { id: true, durchfuehrungId: true, entferntAm: true },
+  });
+  return {
+    dokumentId,
+    nachweise: liste.map((n) => ({
+      id: n.id,
+      durchfuehrungId: n.durchfuehrungId,
+      entfernt: n.entferntAm !== null,
+    })),
+  };
+}
+
 export async function ladeNachweis(
   ctx: DienstKontext,
   eingabe: NachweisLesenEingabe,

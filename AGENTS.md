@@ -167,7 +167,10 @@ für KI-Werkzeuge.
   eine Dokument-ID gehört zu genau einem Mandanten und einem Inhalt (auch nach
   dem Entfernen). Entfernen markiert den Verweis (`entferntAm`/`entferntVon`);
   jeder Lesezugriff filtert `entferntAm IS NULL`, der vollständige Verweis
-  steht zusätzlich im Audit.
+  steht zusätzlich im Audit. Einzige Ausnahme ist der Abgleichspfad
+  „Nachweise je Dokument" (`GET …/nachweise?dokumentId=`, nur Kanzlei mit
+  Leserecht): Er nennt auch entfernte Verweise, aber nur mit ID, Durchführung
+  und `entfernt: true`, und nur die des Mandanten der Anfrage.
 - Mandanten-IDs der kanzleikonsole sind nur je Tenant eindeutig (Schlüssel
   `(tenant_id, id)`): Anlegen und Lesen verraten nie, ob es eine ID in einem
   anderen Tenant gibt. Mandanten nur mit `findFirst`/Tenant-Schlüssel lesen.

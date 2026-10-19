@@ -80,6 +80,52 @@ export const NachweisLesenEingabeSchema = z
   .strict();
 export type NachweisLesenEingabe = z.infer<typeof NachweisLesenEingabeSchema>;
 
+/** Dokument-ID der kanzleikonsole (UUID); kanonisch in Kleinbuchstaben wie gespeichert. */
+const DokumentIdSchema = z.uuid().transform((s) => s.toLowerCase());
+
+/**
+ * Nachweise je Dokument (`GET …/nachweise?dokumentId=`): Abgleich offener
+ * Verknüpfungen der kanzleikonsole mit ihrer Dokumentenpipeline (ADR 0001
+ * §6). Nur Kanzleipersonen mit Leserecht für den Mandanten. `dokumentId` ist
+ * Pflicht (der Dienst antwortet sonst `400`); im Query-Schema optional, weil
+ * das Register jede Query ohne Parameter zulässt und Pflicht im Service prüft.
+ */
+export const NachweiseJeDokumentQuerySchema = z
+  .object({ dokumentId: DokumentIdSchema.optional() })
+  .strict();
+export const NachweiseJeDokumentPfadSchema = z.object({ mandantId: MandantIdSchema }).strict();
+export const NachweiseJeDokumentEingabeSchema = z
+  .object({ mandantId: MandantIdSchema, dokumentId: DokumentIdSchema })
+  .strict();
+/** Eingabe aus Pfad und Query (Pflicht von `dokumentId` prüft der Dienst mit dem Eingabeschema). */
+export type NachweiseJeDokumentEingabe = z.input<typeof NachweiseJeDokumentPfadSchema> &
+  z.input<typeof NachweiseJeDokumentQuerySchema>;
+
+/**
+ * Jeder Nachweis dieses Mandanten mit der Dokument-ID – auch entfernte
+ * (`entfernt: true`; die Bindung der Dokument-ID an Mandant und Inhalt bleibt
+ * bestehen, ADR 0001 §6), damit die kanzleikonsole eine Verknüpfung nach dem
+ * Entfernen freigibt bzw. eine bestätigt. Eine Dokument-ID eines anderen
+ * Mandanten oder eine unbekannte ergibt dieselbe leere Liste (kein
+ * Existenz-Orakel). Keine Dateinamen, Hashes oder Personen.
+ */
+export const NachweiseJeDokumentSchema = z
+  .object({
+    dokumentId: z.string(),
+    nachweise: z.array(
+      z
+        .object({
+          id: z.string(),
+          durchfuehrungId: z.string(),
+          /** Verweis entfernt (vor der Einreichung); sonst aktiv. */
+          entfernt: z.boolean(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type NachweiseJeDokument = z.infer<typeof NachweiseJeDokumentSchema>;
+
 // ---------------------------------------------------------------------------
 // Operationen ohne Body (beginnen, einreichen, bestätigen, Entfallen freigeben)
 // ---------------------------------------------------------------------------

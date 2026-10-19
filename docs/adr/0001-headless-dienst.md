@@ -192,6 +192,11 @@ Tax-CMS nur `{ dokumentId, dateiname, mime, groesse, sha256 }`. Das Tax-CMS
 speichert diesen Verweis (Tabelle `Nachweis`) und gibt ihn zurück; Downloads
 laufen über die kanzleikonsole. Die Demo-Oberfläche nutzt einen Ablage-Port
 mit lokaler Dateiablage, der Dienst einen Port, der nur Verweise annimmt.
+Für den Abgleich ihrer Verknüpfungen fragt die kanzleikonsole
+`GET /v1/mandanten/{mandantId}/nachweise?dokumentId=` (nur Kanzleipersonen mit
+Leserecht): alle Nachweise dieses Mandanten zur Dokument-ID mit ID,
+Durchführung und `entfernt`; eine Dokument-ID eines anderen Mandanten ergibt
+dieselbe leere Liste wie eine unbekannte.
 
 ## 7. HTTP-Vertrag
 

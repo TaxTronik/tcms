@@ -52,6 +52,9 @@ import {
   NachweisEntferntSchema,
   NachweisErgebnisSchema,
   NachweisLesenEingabeSchema,
+  NachweiseJeDokumentPfadSchema,
+  NachweiseJeDokumentQuerySchema,
+  NachweiseJeDokumentSchema,
 } from './bereiche/durchfuehrung';
 import {
   AnlageVerweisSchema,
@@ -591,6 +594,14 @@ export const ENDPUNKTE = register({
     pfad: `${M}/nachweise/:nachweisId`,
     params: NachweisLesenEingabeSchema,
     antwort: NachweisErgebnisSchema,
+  },
+  /** Nachweise je Dokument-ID (Abgleich der kanzleikonsole), auch entfernte; nur Kanzlei. */
+  nachweiseJeDokumentLesen: {
+    methode: 'GET',
+    pfad: `${M}/nachweise`,
+    params: NachweiseJeDokumentPfadSchema,
+    query: NachweiseJeDokumentQuerySchema,
+    antwort: NachweiseJeDokumentSchema,
   },
 
   // ---- Kontrollaufgaben (Portal) -------------------------------------------

@@ -323,6 +323,7 @@ nicht erlaubter oder gleichzeitig geänderter Status `409`, Mängel beim Einreic
 | POST    | `…/entfallen/freigeben`, `…/entfallen/ablehnen`                                              | `kannWuerdigen`, nie die antragstellende Person (zurückziehen darf sie) |
 | POST    | `durchfuehrungen/:id/nachtrag` (201)                                                         | zugewiesen oder `kannBearbeiten`, nur abgeschlossene                    |
 | GET     | `nachweise/:n`                                                                               | Kanzlei mit Bezug                                                       |
+| GET     | `nachweise?dokumentId=` (Abgleich der kanzleikonsole; auch entfernte, nur ID/Durchführung)   | Kanzlei mit Bezug (Leserecht); fremde/unbekannte Dokument-ID: leer      |
 | GET     | `portal/aufgaben`, `portal/aufgaben/:id?stand=`, `portal/anlagen/:n`                         | Kontakt: GV/TCB alle Mandanten-Aufgaben, sonst zugewiesene              |
 | POST    | `portal/aufgaben/:id/speichern`, `…/einreichen`, `…/anlagen` (201), `…/anlagen/:n/entfernen` | zugewiesene Person oder Vertretung                                      |
 | POST    | `portal/aufgaben/:id/zurueckgeben`, `…/bestaetigen`                                          | zweite Person beim Mandanten, nicht beteiligt                           |

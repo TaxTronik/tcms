@@ -16,6 +16,7 @@ import {
   NachtragErgebnisSchema,
   NachweisEntferntSchema,
   NachweisErgebnisSchema,
+  NachweiseJeDokumentSchema,
   DurchfuehrungSpeichernErgebnisSchema,
   type Akteur,
   type AkteurClaims,
@@ -638,5 +639,43 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
       },
     ]);
     expect(a.pruefung.ausserhalb).toEqual(['Saldo']);
+  });
+
+  it('GET nachweise?dokumentId= (Abgleich): aktive und entfernte Nachweise; nur Kanzlei mit Bezug', async () => {
+    const dok = randomUUID();
+    const did = await durchfuehrung(k1);
+    const z = { mandantId: mandant, durchfuehrungId: did };
+    const n = await dienst(C.bearbeiter, (ctx) =>
+      haengeNachweisAn(ctx, { ...z, verweis: { ...verweis(), dokumentId: dok } }),
+    );
+    const N = `/v1/mandanten/${mandant}/nachweise`;
+    const ok = await senden('GET', `${N}?dokumentId=${dok}`, C.pruefer);
+    expect(ok.status).toBe(200);
+    expect(NachweiseJeDokumentSchema.parse((await json(ok))['daten'])).toEqual({
+      dokumentId: dok,
+      nachweise: [{ id: n.nachweis.id, durchfuehrungId: did, entfernt: false }],
+    });
+    // Unbekannte Dokument-ID: leere Liste (wie die eines anderen Mandanten).
+    const leer = await senden('GET', `${N}?dokumentId=${randomUUID()}`, C.bt);
+    expect(((await json(leer))['daten'] as { nachweise: unknown[] }).nachweise).toEqual([]);
+    // Mandantenkontakt (Register: nur KANZLEI) und falscher Mandant: 404 ohne Detail.
+    for (const [ziel, wer] of [
+      [`${N}?dokumentId=${dok}`, C.gv],
+      [`/v1/mandanten/${mandantB}/nachweise?dokumentId=${dok}`, C.bt],
+    ] as const) {
+      const r = await senden('GET', ziel, wer);
+      expect(r.status, ziel).toBe(404);
+      expect(await json(r)).toEqual({ ok: false, fehler: { code: 'NICHT_GEFUNDEN' } });
+    }
+    // Ohne, ungültige, doppelte Dokument-ID oder fremde Parameter: 400.
+    for (const q of [
+      '',
+      '?dokumentId=ab',
+      `?dokumentId=${dok}&dokumentId=${dok}`,
+      `?dokumentId=${dok}&x=1`,
+    ]) {
+      const r = await senden('GET', `${N}${q}`, C.bt);
+      expect(r.status, q).toBe(400);
+    }
   });
 });

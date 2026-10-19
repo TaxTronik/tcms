@@ -8,6 +8,7 @@ export {
   ladeDurchfuehrung,
   ladeKontrollaufgabe,
   ladeNachweis,
+  ladeNachweiseJeDokument,
   listeKontrollaufgaben,
 } from './durchfuehrung/lesen';
 export {

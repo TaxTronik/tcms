@@ -24,6 +24,7 @@ import {
   ladeDurchfuehrung,
   ladeKontrollaufgabe,
   ladeNachweis,
+  ladeNachweiseJeDokument,
   legeNachtragAn,
   lehneEntfallenAb,
   listeKontrollaufgaben,
@@ -82,6 +83,9 @@ export function registriereDurchfuehrung(r: Routen<Tx>): void {
   );
   r.endpunkt(ENDPUNKTE.nachweisLesen, async (c) =>
     ladeNachweis(dienstKontext(c), { ...mandant(c), ...nachweis(c) }),
+  );
+  r.endpunkt(ENDPUNKTE.nachweiseJeDokumentLesen, async (c) =>
+    ladeNachweiseJeDokument(dienstKontext(c), { ...c.query, ...mandant(c) }),
   );
 
   // ----------------------------------------------------------------- Portal
