@@ -1,7 +1,8 @@
 // Postausgang über die App (DB_TESTS=1): nur der Systemakteur (Personen → 404,
 // auch Admins), Query und ID geprüft (400), Zustellung idempotent, unbekannte
-// und fremde IDs → 404, tenantweit (RLS), Abruf und Zustellung im Audit mit
-// erkennbarem Systemakteur, keine Codes im Log.
+// und fremde IDs → 404, tenantweit (RLS), strukturierte Nachrichten, Abruf und
+// Zustellung im Audit mit erkennbarem Systemakteur, verfallene Codes nicht
+// ausgeliefert und geleert, keine Codes im Log.
 import { mitTenant } from '@tcms/db';
 import { legeNachrichtAn } from '@tcms/service';
 import { randomUUID } from 'node:crypto';
@@ -10,33 +11,46 @@ import { json, SYSTEM_ID } from '../__tests__/hilfen';
 import { akteure, legeMandantenAn, neueApiWelt, ok, senden } from './programm-beschreibung.testapp';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
-// Nur der Form nach: Diese Nachricht hängt an keiner echten Freigabe.
-const CODE_DATEN = {
-  freigabeId: 'ckfreigabe0000000000000b',
-  art: 'BESCHREIBUNG' as const,
-  titel: 'CMS-Beschreibung v1.0',
-  version: '1.0',
-  code: '123456',
-  gueltigBis: '2099-01-01T00:00:00.000Z',
-  sha256: null,
-};
 const w = neueApiWelt();
 const a = akteure(w);
 
 describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
   let id = '';
+  let code = '';
+  let freigabeId = '';
   beforeAll(async () => {
     await legeMandantenAn(w);
-    id = await mitTenant(w.T, (tx) =>
-      legeNachrichtAn(tx, {
-        mandantId: w.A,
-        empfaengerId: w.GV,
-        zweck: 'FREIGABE_CODE',
-        daten: CODE_DATEN,
-        betreff: 'Betreff',
-        text: 'Code 123456',
-      }),
+    freigabeId = await mitTenant(w.T, async (tx) => {
+      const p = await tx.tcmsProgramm.create({
+        data: { mandantId: w.A, paketId: 'ecommerce', paketVersion: '1.0' },
+      });
+      const f = await tx.freigabe.create({
+        data: {
+          programmId: p.id,
+          art: 'RISIKOAKZEPTANZ',
+          refId: randomUUID(),
+          titel: 'Risikoakzeptanz EC-UST-01',
+          inhalt: 'Inhalt zur Freigabe',
+          angefordertVon: w.BT,
+          empfaengerId: w.GV,
+        },
+      });
+      return f.id;
+    });
+    // Echter Code über das Portal (wie im Betrieb).
+    await ok(
+      await senden(
+        w,
+        'POST',
+        `/v1/mandanten/${w.A}/portal/freigaben/${freigabeId}/code`,
+        a.kontakt(w.GV, w.A),
+      ),
     );
+    const n = await mitTenant(w.T, (tx) =>
+      tx.nachricht.findFirstOrThrow({ where: { zweck: 'FREIGABE_CODE' } }),
+    );
+    id = n.id;
+    code = n.code!;
   });
 
   it('nur der Systemakteur: Personen (auch Admin/Partner) und Kontakte → 404, kein Audit', async () => {
@@ -63,7 +77,7 @@ describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
     expect(await mitTenant(w.T, (tx) => tx.auditEvent.count())).toBe(vorher);
     expect(
       await mitTenant(w.T, (tx) => tx.nachricht.findUniqueOrThrow({ where: { id } })),
-    ).toMatchObject({ zugestelltAm: null, text: 'Code 123456' });
+    ).toMatchObject({ zugestelltAm: null, verworfenAm: null, code });
   });
 
   it('GET /v1/nachrichten/offen und POST …/zugestellt (Erfolg, idempotent, Audit erkennbar)', async () => {
@@ -76,9 +90,17 @@ describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
           empfaengerId: w.GV,
           empfaengerArt: 'KONTAKT',
           zweck: 'FREIGABE_CODE',
-          daten: CODE_DATEN,
-          betreff: 'Betreff',
-          text: 'Code 123456',
+          daten: {
+            freigabeId,
+            art: 'RISIKOAKZEPTANZ',
+            titel: 'Risikoakzeptanz EC-UST-01',
+            version: null,
+            code,
+            gueltigBis: expect.any(String),
+            sha256: null,
+          },
+          betreff: 'Freigabe angefordert: Risikoakzeptanz EC-UST-01',
+          text: expect.stringContaining(code),
           erstelltAm: expect.any(String),
         },
       ],
@@ -112,10 +134,10 @@ describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
         actorName: 'System: Zustellung kanzleikonsole',
       });
       expect(e.detail).toMatchObject({ systemakteur: true });
-      expect(JSON.stringify(e.detail)).not.toContain('123456');
+      expect(JSON.stringify(e.detail)).not.toContain(code);
     }
     // Kein Code und kein Name im Log des Dienstes.
-    expect(w.t.logRoh.join('\n')).not.toContain('123456');
+    expect(w.t.logRoh.join('\n')).not.toContain(code);
     expect(w.t.logRoh.join('\n')).not.toContain('Zustellung kanzleikonsole');
   });
 
@@ -156,5 +178,46 @@ describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
     expect(
       await mitTenant(w.T, (tx) => tx.nachricht.findUniqueOrThrow({ where: { id: zweite } })),
     ).toMatchObject({ zugestelltAm: null, text: 'T' });
+  });
+
+  it('verfallene Code-Nachricht: nicht ausgeliefert, Klartext geleert, Audit ohne Code', async () => {
+    const verfallen = await mitTenant(w.T, (tx) =>
+      legeNachrichtAn(tx, {
+        mandantId: w.A,
+        empfaengerId: w.GV,
+        zweck: 'FREIGABE_CODE',
+        // Freigabe unbekannt: Der Code gilt nicht (mehr).
+        daten: {
+          freigabeId: 'ckunbekanntefreigabe0000',
+          art: 'BESCHREIBUNG',
+          titel: 'CMS-Beschreibung v1.0',
+          version: '1.0',
+          code: '987650',
+          gueltigBis: '2099-01-01T00:00:00.000Z',
+          sha256: null,
+        },
+        betreff: 'Betreff',
+        text: 'Ihr Bestätigungscode: 987650',
+      }),
+    );
+    const r = await senden(w, 'GET', '/v1/nachrichten/offen', a.system());
+    const roh = await r.text();
+    expect(r.status).toBe(200);
+    expect(roh).not.toContain(verfallen);
+    expect(roh).not.toContain('987650');
+    const zeile = await mitTenant(w.T, (tx) =>
+      tx.nachricht.findUniqueOrThrow({ where: { id: verfallen } }),
+    );
+    expect(zeile).toMatchObject({ code: null, text: '', zugestelltAm: null });
+    expect(zeile.verworfenAm).not.toBeNull();
+    const audit = await mitTenant(w.T, (tx) =>
+      tx.auditEvent.findMany({
+        where: { aktion: 'tcms.nachricht.verworfen', objektId: verfallen },
+      }),
+    );
+    expect(audit).toHaveLength(1);
+    expect(audit[0]!.detail).toMatchObject({ grund: 'FREIGABE_NICHT_OFFEN', systemakteur: true });
+    expect(JSON.stringify(audit)).not.toContain('987650');
+    expect(w.t.logRoh.join('\n')).not.toContain('987650');
   });
 });

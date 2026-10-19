@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NachrichtenOffenSchema } from '@tcms/contract';
 import type { PrismaClient } from '@tcms/db';
 import type { DienstKontext, SystemKontext } from '../../kontext';
+import { codeAblaufAb, codeHash } from './code';
 import {
   bestaetigeNachrichtZustellung,
   ladeOffeneNachrichten,
@@ -48,19 +49,44 @@ describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
     titel: 'Compliance-Ziele · Umsatzsteuer',
     version: null,
   });
+  /** Echte Freigabe mit aktivem Code 123456 (sonst verwürfe der Abruf die Code-Nachricht). */
+  let codeFreigabe = '';
+  let gueltigBis = '';
   const datenCode = (code = '123456') => ({
-    freigabeId: 'ckfreigabe0000000000000b',
+    freigabeId: codeFreigabe,
     art: 'BESCHREIBUNG' as const,
     titel: 'CMS-Beschreibung v1.2',
     version: '1.2',
     code,
-    gueltigBis: '2026-10-26T09:00:00.000Z',
+    gueltigBis,
     sha256: 'a'.repeat(64),
   });
 
   beforeAll(async () => {
     w = await baueWelt();
     zweite = zweiteVerbindung();
+    await inWelt(w, async (tx) => {
+      const p = await tx.tcmsProgramm.create({
+        data: { mandantId: w.mandantA, paketId: 'ecommerce', paketVersion: '1.0' },
+      });
+      const f = await tx.freigabe.create({
+        data: {
+          programmId: p.id,
+          art: 'BESCHREIBUNG',
+          refId: randomUUID(),
+          titel: 'CMS-Beschreibung v1.2',
+          angefordertVon: w.bt,
+          empfaengerId: w.gv,
+        },
+      });
+      const ablauf = codeAblaufAb(new Date());
+      await tx.freigabe.update({
+        where: { id: f.id },
+        data: { codeHash: codeHash(f.id, '123456'), codeAblauf: ablauf },
+      });
+      codeFreigabe = f.id;
+      gueltigBis = ablauf.toISOString();
+    });
     ids = await inWelt(w, async (tx) => {
       const a = await legeNachrichtAn(tx, {
         mandantId: w.mandantA,
@@ -158,11 +184,11 @@ describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
     expect(z.empfaengerArt).toBe('KONTAKT');
     expect(JSON.stringify(z.daten)).not.toContain('123456');
     expect(z.daten).toEqual({
-      freigabeId: 'ckfreigabe0000000000000b',
+      freigabeId: codeFreigabe,
       art: 'BESCHREIBUNG',
       titel: 'CMS-Beschreibung v1.2',
       version: '1.2',
-      gueltigBis: '2026-10-26T09:00:00.000Z',
+      gueltigBis,
       sha256: 'a'.repeat(64),
     });
   });

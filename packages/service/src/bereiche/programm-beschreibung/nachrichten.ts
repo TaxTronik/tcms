@@ -7,8 +7,11 @@
 // Zeile, `betreff`/`text` bleiben als Rückfall.
 //
 // Sparsamkeit: Ein Bestätigungscode steht im Klartext nur in `code` (und im
-// Rückfalltext), nie in `daten`. „Zugestellt" setzt `zugestelltAm` und leert
-// `code` und `text`; der Vorgang steht im Audit (ohne Text und Code).
+// Rückfalltext), nie in `daten`, und nur bis zur Zustellung: „Zugestellt"
+// setzt `zugestelltAm` und leert `code` und `text`; der Vorgang steht im Audit
+// (ohne Text und Code). Gilt der Code nicht mehr (Freigabe erledigt, Code
+// abgelaufen, ersetzt, gesperrt oder neu adressiert), liefert der nächste
+// Abruf die Nachricht nicht mehr aus und leert sie (`verworfenAm`).
 //
 // Abholen und Bestätigen ausschließlich durch den Systemakteur der
 // kanzleikonsole (`SystemKontext`, Stufe 4): Der Zustell-Worker ist keine
@@ -35,10 +38,12 @@ import {
   type NachrichtZweck,
   type OffeneNachricht,
 } from '@tcms/contract';
-import type { Prisma, Tx } from '@tcms/db';
+import type { Freigabe, Prisma, Tx } from '@tcms/db';
 import type { z } from 'zod';
-import { mitAudit } from '../../audit';
+import { mitAudit, type Protokoll } from '../../audit';
 import type { SystemKontext } from '../../kontext';
+import { gleicheId } from '../../rechte';
+import { codePasst, istGesperrt, leseCodeZustand } from './code';
 import { pruefeEingabe } from './gemeinsam';
 
 // Typprüfung: Die Datenbank-Enums sind genau die Listen des Vertrags.
@@ -151,10 +156,108 @@ function brauchtSystem(ctx: SystemKontext): void {
   if (a?.art !== 'SYSTEM') throw new DienstFehler('NICHT_GEFUNDEN');
 }
 
+/** Grund, aus dem eine Code-Nachricht nicht mehr ausgeliefert wird (nur IDs und Codes im Audit). */
+export type VerwerfGrund = 'FREIGABE_NICHT_OFFEN' | 'CODE_ABGELAUFEN' | 'CODE_UNGUELTIG';
+
+/**
+ * Prüft, ob der Code einer offenen Code-Nachricht noch der aktive Code ihrer
+ * Freigabe ist: Freigabe vorhanden, im Mandanten der Nachricht, offen, an
+ * denselben Empfänger, nicht gesperrt, Code nicht abgelaufen (echte Zeit,
+ * Sicherheitsfrist) und der Hash passt (ein neu angeforderter Code oder eine
+ * Neuadressierung ersetzt ihn). Sonst der Grund zum Verwerfen.
+ */
+function grundZumVerwerfen(
+  n: { mandantId: string; empfaengerId: string; daten: Prisma.JsonValue; code: string | null },
+  f:
+    | (Pick<
+        Freigabe,
+        'id' | 'status' | 'empfaengerId' | 'codeHash' | 'codeAblauf' | 'codeFehlversuche'
+      > & { programm: { mandantId: string } })
+    | undefined,
+  jetzt: Date,
+): VerwerfGrund | null {
+  if (!f || f.status !== 'OFFEN' || f.programm.mandantId !== n.mandantId) {
+    return 'FREIGABE_NICHT_OFFEN';
+  }
+  // Erst: Ist es noch der aktive Code dieses Empfängers? (ersetzt, neu adressiert, gesperrt)
+  const z = leseCodeZustand(f);
+  if (
+    n.code === null ||
+    istGesperrt(z) ||
+    !gleicheId(f.empfaengerId, n.empfaengerId) ||
+    !codePasst(f.id, n.code, z.hash)
+  ) {
+    return 'CODE_UNGUELTIG';
+  }
+  if (!f.codeAblauf || f.codeAblauf.getTime() <= jetzt.getTime()) return 'CODE_ABGELAUFEN';
+  return null;
+}
+
+/** Höchstzahl offener Code-Nachrichten, die ein Abruf zusätzlich prüft (begrenzt die Arbeit). */
+export const MAX_CODE_PRUEFUNG_JE_ABRUF = 1000;
+
+type CodeZeile = {
+  id: string;
+  mandantId: string;
+  empfaengerId: string;
+  daten: Prisma.JsonValue;
+  code: string | null;
+};
+
+/**
+ * Code-Nachrichten unter `zeilen`, deren Code nicht mehr gilt
+ * (`grundZumVerwerfen`); unlesbare Vorlagendaten gelten als veraltet (fail
+ * closed, nie ausgeliefert).
+ */
+async function veralteteCodes(
+  tx: Tx,
+  zeilen: readonly CodeZeile[],
+  jetzt: Date,
+): Promise<{ id: string; empfaengerId: string; grund: VerwerfGrund }[]> {
+  if (zeilen.length === 0) return [];
+  const freigabeIdVon = (daten: Prisma.JsonValue): string | null => {
+    const r = NachrichtDatenFreigabeAngefordertSchema.shape.freigabeId.safeParse(
+      daten && typeof daten === 'object' && !Array.isArray(daten) ? daten['freigabeId'] : null,
+    );
+    return r.success ? r.data : null;
+  };
+  const ids = [...new Set(zeilen.map((n) => freigabeIdVon(n.daten)).filter((x) => x !== null))];
+  const freigaben = new Map(
+    (
+      await tx.freigabe.findMany({
+        where: { id: { in: ids } },
+        select: {
+          id: true,
+          status: true,
+          empfaengerId: true,
+          codeHash: true,
+          codeAblauf: true,
+          codeFehlversuche: true,
+          programm: { select: { mandantId: true } },
+        },
+      })
+    ).map((f) => [f.id, f]),
+  );
+  const veraltet: { id: string; empfaengerId: string; grund: VerwerfGrund }[] = [];
+  for (const n of zeilen) {
+    const freigabeId = freigabeIdVon(n.daten);
+    const grund = grundZumVerwerfen(n, freigabeId ? freigaben.get(freigabeId) : undefined, jetzt);
+    if (grund) veraltet.push({ id: n.id, empfaengerId: n.empfaengerId, grund });
+  }
+  return veraltet;
+}
+
 /**
  * Offene Nachrichten des Tenants (älteste zuerst) zur Zustellung durch die
- * kanzleikonsole. Der Abruf wird protokolliert (IDs, kein Text): Nachrichten
- * können Bestätigungscodes enthalten.
+ * kanzleikonsole. Ausgeliefert wird nur, was geprüft ist: Jede Code-Nachricht
+ * unter den Kandidaten und zusätzlich die ältesten
+ * `MAX_CODE_PRUEFUNG_JE_ABRUF` offenen Code-Nachrichten werden gegen ihre
+ * Freigabe geprüft. Gilt der Code nicht mehr (Freigabe erledigt, Code
+ * abgelaufen, ersetzt, gesperrt oder neu adressiert), wird die Nachricht
+ * verworfen – `verworfenAm` gesetzt, `code` und `text` geleert, je Nachricht
+ * ein Audit-Eintrag mit Grund (ohne Code) – und nicht ausgeliefert; der Abruf
+ * liefert dann entsprechend weniger. Der Abruf wird protokolliert (IDs, kein
+ * Text).
  */
 export async function ladeOffeneNachrichten(
   ctx: SystemKontext,
@@ -163,23 +266,56 @@ export async function ladeOffeneNachrichten(
   brauchtSystem(ctx);
   const e = pruefeEingabe(NachrichtenOffenEingabeSchema, eingabe);
   const limit = e.limit ?? STANDARD_NACHRICHTEN_LIMIT;
-  const zeilen = await ctx.tx.nachricht.findMany({
-    where: { zugestelltAm: null, verworfenAm: null },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  // Codefristen laufen auf echter Zeit, nie auf einer fachlichen Uhr (AGENTS.md).
+  const jetzt = new Date();
+  const offen = { zugestelltAm: null, verworfenAm: null };
+  const reihenfolge = [{ createdAt: 'asc' as const }, { id: 'asc' as const }];
+  const kandidaten = await ctx.tx.nachricht.findMany({
+    where: offen,
+    orderBy: reihenfolge,
     take: limit,
   });
-  const nachrichten = zeilen.map(alsOffeneNachricht);
-  if (nachrichten.length === 0) return { nachrichten };
-  return mitAudit(ctx, async () => ({
-    wert: { nachrichten },
-    protokoll: {
+  const weitere = await ctx.tx.nachricht.findMany({
+    where: { ...offen, zweck: 'FREIGABE_CODE' },
+    orderBy: reihenfolge,
+    take: MAX_CODE_PRUEFUNG_JE_ABRUF,
+    select: { id: true, mandantId: true, empfaengerId: true, daten: true, code: true },
+  });
+  const zuPruefen = new Map<string, CodeZeile>();
+  for (const z of [...kandidaten.filter((k) => k.zweck === 'FREIGABE_CODE'), ...weitere]) {
+    zuPruefen.set(z.id, z);
+  }
+  const veraltet = await veralteteCodes(ctx.tx, [...zuPruefen.values()], jetzt);
+  const ausgeschlossen = new Set<string>();
+  const protokoll: Protokoll[] = [];
+  for (const v of veraltet) {
+    ausgeschlossen.add(v.id);
+    // Bedingt: Eine gleichzeitige Zustellung oder ein anderer Abruf verwirft nicht doppelt.
+    const r = await ctx.tx.nachricht.updateMany({
+      where: { id: v.id, ...offen },
+      data: { verworfenAm: jetzt, code: null, text: '' },
+    });
+    if (r.count !== 1) continue;
+    protokoll.push({
+      aktion: 'tcms.nachricht.verworfen',
+      objektTyp: 'Nachricht',
+      objektId: v.id,
+      programmId: null,
+      detail: { zweck: 'FREIGABE_CODE', empfaengerId: v.empfaengerId, grund: v.grund },
+    });
+  }
+  const nachrichten = kandidaten.filter((z) => !ausgeschlossen.has(z.id)).map(alsOffeneNachricht);
+  if (nachrichten.length > 0) {
+    protokoll.push({
       aktion: 'tcms.nachricht.abgerufen',
       objektTyp: 'Nachricht',
       objektId: nachrichten[0]!.id,
       programmId: null,
       detail: { anzahl: nachrichten.length, ids: nachrichten.map((n) => n.id) },
-    },
-  }));
+    });
+  }
+  if (protokoll.length === 0) return { nachrichten };
+  return mitAudit(ctx, async () => ({ wert: { nachrichten }, protokoll }));
 }
 
 /**
