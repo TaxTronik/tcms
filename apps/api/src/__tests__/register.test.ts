@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { baueRoutentabelle, type AppDeps } from '../app';
 import { erzeugeDienst } from '../dienst';
 import { SpeicherJti } from '../jti';
-import type { Routen } from '../routen';
+import { pruefeGegenRegister, type Routen } from '../routen';
 import { registriereAlle } from '../routen/index';
 import { aufbau, bestaetigtSenden, json, MANDANT, SCHLUESSEL, TOKEN_ALT } from './hilfen';
 
@@ -42,11 +42,12 @@ const ohne =
     });
 
 describe('Routentabelle und Endpunktregister', () => {
-  it('stimmen genau überein (Methode, Muster, portal, Akteur, Status, Schemas)', () => {
+  it('stimmen genau überein (Methode, Muster, Akteursarten, Akteur, Status, Schemas)', () => {
     const eintraege = tabelle(registriereAlle, ENDPUNKT_LISTE).eintraege();
-    const schluessel = (m: string, p: string, portal: boolean) => `${m} ${p} portal=${portal}`;
-    expect(eintraege.map((r) => schluessel(r.methode, r.pfad, r.portal)).sort()).toEqual(
-      ENDPUNKT_LISTE.map((e) => schluessel(e.methode, e.pfad, e.portal)).sort(),
+    const schluessel = (m: string, p: string, akteure: readonly string[]) =>
+      `${m} ${p} akteure=${akteure.join('+')}`;
+    expect(eintraege.map((r) => schluessel(r.methode, r.pfad, r.akteure)).sort()).toEqual(
+      ENDPUNKT_LISTE.map((e) => schluessel(e.methode, e.pfad, e.akteure)).sort(),
     );
     for (const r of eintraege) {
       const e = r.endpunkt!;
@@ -89,7 +90,11 @@ describe('Routentabelle und Endpunktregister', () => {
 
   it('bricht ab, wenn eine Route einen abweichenden Eintrag gleichen Namens nutzt', () => {
     // z. B. versehentlich als Portal-Endpunkt geöffnet
-    const kopie = { ...ENDPUNKTE.kontakteLesen, portal: true } as const;
+    const kopie = {
+      ...ENDPUNKTE.kontakteLesen,
+      akteure: ['KANZLEI', 'MANDANT'],
+      portal: true,
+    } as const;
     const abweichend = (r: Routen<Tx>) =>
       registriereAlle({
         endpunkt: (e, h) => r.endpunkt(e.name === 'kontakteLesen' ? kopie : e, h),
@@ -98,6 +103,21 @@ describe('Routentabelle und Endpunktregister', () => {
     expect(() => erzeugeDienst(deps, abweichend)).toThrow(
       /verweist auf fremden Eintrag kontakteLesen/,
     );
+  });
+
+  it('bricht ab, wenn die Akteursarten einer Route vom Register abweichen', () => {
+    const eintraege = tabelle(registriereAlle, ENDPUNKT_LISTE).eintraege();
+    for (const [name, akteure] of [
+      ['kontakteLesen', ['KANZLEI', 'MANDANT']],
+      ['nachrichtenOffenLesen', ['SYSTEM', 'KANZLEI']],
+      ['portalFreigabenLesen', ['MANDANT']],
+      ['auditLesen', ['SYSTEM']],
+    ] as const) {
+      const geaendert = eintraege.map((r) => (r.endpunkt?.name === name ? { ...r, akteure } : r));
+      expect(() => pruefeGegenRegister(geaendert, ENDPUNKT_LISTE), name).toThrow(
+        new RegExp(`weicht von ${name} ab`),
+      );
+    }
   });
 
   it('prüft Pfadparameter mit dem Schema aus dem Register, bevor der Handler läuft', async () => {

@@ -9,12 +9,19 @@
 //
 // Fachrouten entstehen aus dem Endpunktregister des Vertrags
 // (`Routen.endpunkt`, `ENDPUNKTE` aus @tcms/contract): Methode, Muster,
-// Portal-Kennzeichen, Schemas und Erfolgsstatus stehen nur dort, die Routen
-// liefern nur den Handler. `pruefeGegenRegister` vergleicht beim Start die
+// zugelassene Akteursarten, Schemas und Erfolgsstatus stehen nur dort, die
+// Routen liefern nur den Handler. `pruefeGegenRegister` vergleicht beim Start die
 // Tabelle mit dem Register (eine Quelle der Wahrheit).
 // =============================================================================
 
-import { DienstFehler, type Akteur, type Endpunkt } from '@tcms/contract';
+import {
+  DienstFehler,
+  NUR_KANZLEI,
+  pruefeAkteure,
+  type Akteur,
+  type AkteurArt,
+  type Endpunkt,
+} from '@tcms/contract';
 import type { z } from 'zod';
 
 export const METHODEN = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
@@ -42,8 +49,12 @@ export interface RoutenDefinition<
   methode: Methode;
   /** Muster unter `/v1/`, z. B. `/v1/mandanten/:mandantId/risiken`. */
   pfad: string;
-  /** `MANDANT`-Personen zugelassen (Portal-Endpunkt, ADR §3.3). Standard: nein. */
-  portal?: boolean;
+  /**
+   * Zugelassene Akteursarten (ADR §3.3); Standard: nur `KANZLEI`. Dieselben
+   * Regeln wie im Endpunktregister (`pruefeAkteure`): `SYSTEM` nur allein und
+   * nicht auf Mandantenpfaden.
+   */
+  akteure?: readonly AkteurArt[];
   /** zod-Schema des JSON-Bodys; ohne Schema muss der Body leer sein. */
   body?: SB;
   /** zod-Schema der Query als Objekt; ohne Schema ist keine Query erlaubt. */
@@ -78,7 +89,8 @@ export interface RoutenEintrag<Tx> {
   akteur: boolean;
   /** Handler eingebauter Routen ohne Akteur (kein Tenant, keine Eingaben). */
   ohneAkteur: (() => Promise<unknown>) | undefined;
-  portal: boolean;
+  /** Zugelassene Akteursarten; jede andere Art erhält 404 (`pruefeZugang`). Leer ohne Akteur. */
+  akteure: readonly AkteurArt[];
   /** Pfad unter `/v1/mandanten/:mandantId/…`: Bindung an `cli.id` erzwungen. */
   mandantGebunden: boolean;
   body: z.ZodType | undefined;
@@ -109,13 +121,19 @@ export class RoutenTabelle<Tx> {
     endpunkt?: Endpunkt,
   ) {
     const { segmente, mandantGebunden } = this.#pruefe(def.methode, def.pfad);
+    const akteure = pruefeAkteure(
+      `${def.methode} ${def.pfad}`,
+      def.pfad,
+      true,
+      def.akteure ?? NUR_KANZLEI,
+    );
     this.#eintraege.push({
       methode: def.methode,
       pfad: def.pfad,
       segmente,
       akteur: true,
       ohneAkteur: undefined,
-      portal: def.portal === true,
+      akteure,
       mandantGebunden,
       body: def.body,
       query: def.query,
@@ -133,7 +151,7 @@ export class RoutenTabelle<Tx> {
       {
         methode: endpunkt.methode,
         pfad: endpunkt.pfad,
-        portal: endpunkt.portal,
+        akteure: endpunkt.akteure,
         body: endpunkt.bodySchema ?? undefined,
         query: endpunkt.querySchema ?? undefined,
         params: endpunkt.paramsSchema,
@@ -164,7 +182,7 @@ export class RoutenTabelle<Tx> {
       segmente,
       akteur: false,
       ohneAkteur: handler,
-      portal: false,
+      akteure: Object.freeze([]),
       mandantGebunden: false,
       body: undefined,
       query: undefined,
@@ -261,7 +279,7 @@ function mehrdeutig(a: readonly string[], b: readonly string[]): boolean {
 /**
  * Vergleicht die Routentabelle mit dem Endpunktregister: Jede Route stammt aus
  * genau einem Registereintrag und stimmt mit ihm überein (Methode, Muster,
- * Portal, Akteur, Schemas, Status); jeder Registereintrag hat genau eine Route.
+ * Akteursarten, Akteur, Schemas, Status); jeder Registereintrag hat genau eine Route.
  * Wirft mit allen Abweichungen (nur Namen und Muster, keine Werte).
  */
 export function pruefeGegenRegister<Tx>(
@@ -293,7 +311,7 @@ export function pruefeGegenRegister<Tx>(
     const gleich =
       r.methode === e.methode &&
       r.pfad === e.pfad &&
-      r.portal === e.portal &&
+      gleicheArten(r.akteure, e.akteure) &&
       r.akteur === e.akteur &&
       r.mandantGebunden === e.mandantenbezogen &&
       r.status === e.erfolgStatus &&
@@ -311,20 +329,35 @@ export function pruefeGegenRegister<Tx>(
   }
 }
 
+/** Gleiche Akteursarten in gleicher Reihenfolge (Abgleich mit dem Register). */
+function gleicheArten(a: readonly AkteurArt[], b: readonly AkteurArt[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
 /**
- * Mandantenbindung (ADR §3.3). Wirft `404 NICHT_GEFUNDEN` (nicht 403, damit
- * keine Existenz verraten wird), wenn
- * - ein Systemakteur (`knd: SYSTEM`) eine Fachroute aufruft (bisher lässt keine
- *   Route ihn zu),
- * - eine `MANDANT`-Person eine Route ohne Portal-Kennzeichen aufruft oder
- * - der Pfad an einen Mandanten gebunden ist und `cli.id` fehlt oder abweicht.
+ * Akteursart und Mandantenbindung (ADR §3.3), vor jeder Auswertung der
+ * Eingaben. Wirft `404 NICHT_GEFUNDEN` (nicht 403, damit keine Existenz
+ * verraten wird), wenn
+ * - die Art des Akteurs nicht zu den zugelassenen Arten der Route gehört
+ *   (Mandantenkontakt auf Kanzlei-Route, Systemakteur auf einer Route für
+ *   Personen, Person auf einer Systemroute) oder
+ * - der Pfad an einen Mandanten gebunden ist und `cli.id` fehlt oder abweicht
+ *   (ein Systemakteur hat nie einen Mandantenbezug).
  * Vergleich byte-genau, ohne Umwandlung der Schreibweise.
  */
-export function bindeMandant(akteur: Akteur, mandantId: string | null, portal: boolean): void {
-  if (akteur.art === 'SYSTEM') throw new DienstFehler('NICHT_GEFUNDEN');
-  if (akteur.art === 'MANDANT' && !portal) throw new DienstFehler('NICHT_GEFUNDEN');
+export function pruefeZugang(
+  akteur: Akteur,
+  akteure: readonly AkteurArt[],
+  mandantId: string | null,
+): void {
+  if (!akteure.includes(akteur.art)) throw new DienstFehler('NICHT_GEFUNDEN');
   if (mandantId === null) return;
-  const bestaetigt = akteur.art === 'KANZLEI' ? akteur.mandant?.id : akteur.mandantId;
+  const bestaetigt =
+    akteur.art === 'KANZLEI'
+      ? akteur.mandant?.id
+      : akteur.art === 'MANDANT'
+        ? akteur.mandantId
+        : undefined;
   if (bestaetigt === undefined || bestaetigt !== mandantId) {
     throw new DienstFehler('NICHT_GEFUNDEN');
   }

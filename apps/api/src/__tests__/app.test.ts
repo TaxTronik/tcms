@@ -2,7 +2,7 @@ import { AKTEUR_HEADER, DienstFehler, MAX_BODY_BYTES, bodySha256 } from '@tcms/c
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { SpeicherJti } from '../jti';
-import type { Routen } from '../routen';
+import { RoutenTabelle, type Routen } from '../routen';
 import {
   JETZT_S,
   MANDANT,
@@ -47,7 +47,7 @@ const testRouten = (r: Routen<unknown>) => {
   r.route({
     methode: 'GET',
     pfad: '/v1/mandanten/:mandantId/portal',
-    portal: true,
+    akteure: ['KANZLEI', 'MANDANT'],
     handler: async ({ akteur }) => ({ art: akteur.art }),
   });
   r.route({ methode: 'GET', pfad: '/v1/kanzlei', handler: async () => ({ bereich: 'kanzlei' }) });
@@ -694,6 +694,47 @@ describe('Schritt 7: Mandantenbindung (ADR §3.3)', () => {
     // Protokoll: Art des Akteurs erkennbar, keine Namen.
     expect(t.log.filter((z) => z['akteurArt'] === 'SYSTEM')).toHaveLength(6);
     expect(t.logRoh.join('\n')).not.toContain('Zustellung kanzleikonsole');
+  });
+
+  it('Systemroute (akteure SYSTEM): nur der Systemakteur, keine Person – auch kein Admin', async () => {
+    let handler = 0;
+    const t = aufbau({
+      routen: (r) =>
+        r.route({
+          methode: 'GET',
+          pfad: '/v1/system',
+          akteure: ['SYSTEM'],
+          handler: async ({ akteur }) => {
+            handler++;
+            return { art: akteur.art };
+          },
+        }),
+    });
+    const z = '/v1/system';
+    const leer = bodySha256(new Uint8Array());
+    const sys = await bestaetigtSenden(t.app, {
+      ziel: z,
+      roheClaims: systemClaims({ req: { m: 'GET', p: z, b: leer } }),
+    });
+    expect(sys.status).toBe(200);
+    expect(await json(sys)).toEqual({ ok: true, daten: { art: 'SYSTEM' } });
+    const admin = claims({ rol: { adm: true, bt: true }, req: { m: 'GET', p: z, b: leer } });
+    for (const c of [admin, mandantClaims(MANDANT, { req: { m: 'GET', p: z, b: leer } })]) {
+      const r = await bestaetigtSenden(t.app, { ziel: z, roheClaims: c });
+      expect(r.status, c.knd).toBe(404);
+    }
+    expect(handler).toBe(1);
+    expect(t.tenants).toEqual([TENANT]);
+  });
+
+  it('die Routentabelle weist SYSTEM neben Personen und auf Mandantenpfaden ab', () => {
+    const t = new RoutenTabelle<unknown>();
+    const def = (pfad: string, akteure: readonly ('KANZLEI' | 'MANDANT' | 'SYSTEM')[]) => () =>
+      t.eintragen({ methode: 'GET', pfad, akteure, handler: async () => ({}) });
+    expect(def('/v1/a', ['KANZLEI', 'SYSTEM'])).toThrow(/SYSTEM nur allein/);
+    expect(def('/v1/mandanten/:mandantId/a', ['SYSTEM'])).toThrow(/nicht auf Mandantenpfaden/);
+    expect(def('/v1/b', [])).toThrow(/mindestens eine/);
+    expect(def('/v1/c', ['SYSTEM'])).not.toThrow();
   });
 
   it('prüft die Bindung vor dem Body (404 statt 400 für fremde Mandanten)', async () => {

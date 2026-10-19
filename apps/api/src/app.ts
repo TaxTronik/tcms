@@ -10,7 +10,7 @@
 //   5. Body roh lesen, gestreamtes hartes Limit – sonst 413
 //   6. Akteursbestätigung gegen tatsächliche Methode, rohes Target, Body-Hash
 //   7. jti einmalig
-//   8. Mandantenbindung (ADR §3.3) – sonst 404
+//   8. Akteursart der Route und Mandantenbindung (ADR §3.3) – sonst 404
 //   9. erst jetzt Pfadparameter, Query und JSON lesen und validieren
 //  10. Route in genau einer Tenant-Transaktion (`mitTenant`)
 // Jeder Authentifizierungsfehler (4, 6, 7) ergibt dieselbe Antwort
@@ -44,7 +44,7 @@ import { jsonLogger, type Logger, type LogWert } from './log';
 import {
   MANDANT_PARAM,
   RoutenTabelle,
-  bindeMandant,
+  pruefeZugang,
   pruefeGegenRegister,
   type Methode,
   type Routen,
@@ -205,9 +205,10 @@ export function erzeugeApp<Tx = unknown>(deps: AppDeps<Tx>): Hono<{ Bindings: Bi
     felder.akteurId = akteur.id;
     felder.akteurArt = akteur.art;
 
-    // 8. Mandantenbindung vor jeder Auswertung der Eingaben (404 statt 400).
+    // 8. Akteursart der Route und Mandantenbindung vor jeder Auswertung der
+    //    Eingaben (404 statt 400).
     const mandantId = route.mandantGebunden ? (treffer.params[MANDANT_PARAM] ?? '') : null;
-    bindeMandant(akteur, mandantId, route.portal);
+    pruefeZugang(akteur, route.akteure, mandantId);
     if (mandantId !== null) felder.mandantId = mandantId;
 
     // 9. Erst jetzt Pfadparameter (Schema aus dem Register), Query und JSON.

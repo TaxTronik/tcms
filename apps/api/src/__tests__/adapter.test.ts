@@ -15,7 +15,7 @@ const routen = (r: Routen<unknown>) => {
   r.route({
     methode: 'GET',
     pfad: '/v1/mandanten/:mandantId/portal',
-    portal: true,
+    akteure: ['KANZLEI', 'MANDANT'],
     handler: async () => ({ erreicht: true }),
   });
   r.route({

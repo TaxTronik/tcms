@@ -5,7 +5,13 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { BausteinSatzSchema, BeschreibungSnapshotSchema } from '../bereiche/programm-beschreibung';
-import { ENDPUNKT_LISTE, ENDPUNKT_METHODEN, ENDPUNKTE, type Endpunkt } from '../endpunkte';
+import {
+  ENDPUNKT_LISTE,
+  ENDPUNKT_METHODEN,
+  ENDPUNKTE,
+  pruefeAkteure,
+  type Endpunkt,
+} from '../endpunkte';
 
 const SEGMENT_FEST = /^[a-z0-9-]+$/;
 const SEGMENT_PARAM = /^:[a-zA-Z][a-zA-Z0-9]*$/;
@@ -113,6 +119,45 @@ describe('Endpunktregister', () => {
       const portalPfad = e.pfad.startsWith(`${MANDANT}/portal/`);
       expect(e.portal, e.name).toBe(portalPfad || e.name === 'ich');
     }
+  });
+
+  it('nennt je Endpunkt die zugelassenen Akteursarten; portal ist daraus abgeleitet', () => {
+    for (const e of ENDPUNKT_LISTE) {
+      expect(Object.isFrozen(e.akteure), e.name).toBe(true);
+      expect(new Set(e.akteure).size, e.name).toBe(e.akteure.length);
+      for (const a of e.akteure) expect(['KANZLEI', 'MANDANT', 'SYSTEM'], e.name).toContain(a);
+      expect(e.portal, e.name).toBe(e.akteure.includes('MANDANT'));
+      if (!e.akteur) expect(e.akteure, e.name).toEqual([]);
+      else expect(e.akteure.length, e.name).toBeGreaterThan(0);
+      if (e.akteure.includes('SYSTEM')) {
+        // Systemendpunkte lassen keine Person zu und sind nie an einen Mandanten gebunden.
+        expect(e.akteure, e.name).toEqual(['SYSTEM']);
+        expect(e.mandantenbezogen, e.name).toBe(false);
+      }
+    }
+    expect(ENDPUNKTE.ich.akteure).toEqual(['KANZLEI', 'MANDANT']);
+    expect(ENDPUNKTE.kontextLesen.akteure).toEqual(['KANZLEI']);
+  });
+
+  it('weist falsch definierte Akteursarten beim Laden ab (fail closed)', () => {
+    const M = '/v1/mandanten/:mandantId/x';
+    const fehler: [string, boolean, unknown[] | undefined, RegExp][] = [
+      ['/v1/x', true, [], /mindestens eine/],
+      ['/v1/x', true, ['ADMIN'], /unbekannte Akteursart/],
+      ['/v1/x', true, ['KANZLEI', 'KANZLEI'], /doppelt/],
+      ['/v1/x', true, ['SYSTEM', 'KANZLEI'], /SYSTEM nur allein/],
+      ['/v1/x', true, ['MANDANT', 'SYSTEM'], /SYSTEM nur allein/],
+      [M, true, ['SYSTEM'], /nicht auf Mandantenpfaden/],
+      ['/v1/x', false, ['KANZLEI'], /ohne Bestätigung/],
+    ];
+    for (const [pfad, akteur, akteure, meldung] of fehler) {
+      expect(() => pruefeAkteure('test', pfad, akteur, akteure), JSON.stringify(akteure)).toThrow(
+        meldung,
+      );
+    }
+    expect(pruefeAkteure('test', '/v1/x', true, undefined)).toEqual(['KANZLEI']);
+    expect(pruefeAkteure('test', '/v1/x', true, ['SYSTEM'])).toEqual(['SYSTEM']);
+    expect(pruefeAkteure('test', '/v1/x', false, undefined)).toEqual([]);
   });
 
   it('verlangt die Akteursbestätigung überall außer bei health', () => {

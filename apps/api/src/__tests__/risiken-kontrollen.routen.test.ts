@@ -19,7 +19,7 @@ function definitionen() {
   return liste.map((e) => ({
     methode: e.methode,
     pfad: e.pfad,
-    portal: e.portal,
+    akteure: e.akteure,
     body: e.bodySchema ?? undefined,
     query: e.querySchema ?? undefined,
   }));
@@ -35,7 +35,7 @@ describe('Routen risiken-kontrollen', () => {
   it('nur Kanzleipersonen, nur unter /v1/mandanten/:mandantId/', () => {
     for (const d of definitionen()) {
       expect(d.pfad.startsWith('/v1/mandanten/:mandantId/')).toBe(true);
-      expect(d.portal).not.toBe(true);
+      expect(d.akteure).toEqual(['KANZLEI']);
     }
   });
 
