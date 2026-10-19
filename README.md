@@ -225,6 +225,28 @@ Header-Werte und Bodys). Fremde Mandanten und nicht kanonische Pfade ergeben `40
 `GET /v1/health` braucht nur das Dienst-Token, `GET /v1/ich` liefert den abgeleiteten Akteur
 (Vertragstest).
 
+**Endpunkte Kontrolldurchführung** (`durchfuehrung`, Pfade unter `/v1/mandanten/:mandantId/`;
+Rechte prüft `@tcms/service`, nicht Sichtbares ergibt `404`, fehlendes Recht `403` mit Grund, ein
+nicht erlaubter oder gleichzeitig geänderter Status `409`, Mängel beim Einreichen `400` mit
+`felder.maengel`):
+
+| Methode | Pfad                                                                                         | Recht                                                                   |
+| ------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| GET     | `durchfuehrungen/:id?stand=`                                                                 | Kanzlei mit Bezug (`kannLesen`); Rechte als Flags                       |
+| POST    | `durchfuehrungen/:id/beginnen`, `…/speichern`, `…/einreichen`                                | zugewiesene Person oder Vertretung                                      |
+| POST    | `durchfuehrungen/:id/nachweise` (201), `…/nachweise/:n/entfernen`                            | zugewiesene Person; Entfernen nur vor der Einreichung                   |
+| POST    | `durchfuehrungen/:id/zurueckweisen`, `…/gegenzeichnen`                                       | Gegenzeichnung bzw. zuständige BT, nie Beteiligte (Vier-Augen)          |
+| POST    | `durchfuehrungen/:id/entfallen/beantragen`                                                   | zugewiesen oder `kannBearbeiten`                                        |
+| POST    | `…/entfallen/freigeben`, `…/entfallen/ablehnen`                                              | `kannWuerdigen`, nie die antragstellende Person (zurückziehen darf sie) |
+| POST    | `durchfuehrungen/:id/nachtrag` (201)                                                         | zugewiesen oder `kannBearbeiten`, nur abgeschlossene                    |
+| GET     | `nachweise/:n`                                                                               | Kanzlei mit Bezug                                                       |
+| GET     | `portal/aufgaben`, `portal/aufgaben/:id?stand=`, `portal/anlagen/:n`                         | Kontakt: GV/TCB alle Mandanten-Aufgaben, sonst zugewiesene              |
+| POST    | `portal/aufgaben/:id/speichern`, `…/einreichen`, `…/anlagen` (201), `…/anlagen/:n/entfernen` | zugewiesene Person oder Vertretung                                      |
+| POST    | `portal/aufgaben/:id/zurueckgeben`, `…/bestaetigen`                                          | zweite Person beim Mandanten, nicht beteiligt                           |
+
+Nachweise sind Verweise der kanzleikonsole (`{ verweis: { dokumentId (UUID), dateiname, mime,
+groesse, sha256 } }`); eine Dokument-ID gehört zu genau einem Mandanten und einem Inhalt.
+
 Tests: `pnpm --filter @tcms/api test`. Die PostgreSQL-Tests laufen gegen eine Datenbank, die wie in
 Produktion aufgebaut ist (Bootstrap und Migration wie oben unter „Datenbank“), ausschließlich als
 Laufzeitrolle `tcms_app`:
@@ -247,7 +269,8 @@ mit diesen Rollen nicht startet.
 - **E-Mail:** kein Versand; Nachrichten und Bestätigungscodes stehen im Entwicklungs-Postausgang.
 - **Nachweisablage:** Demo: Dateisystem unter `.data/nachweise`, Pfad nur in der Form
   `<2 Hex>/<SHA-256>`, beim Lesen gegen den SHA-256 geprüft. Kein WORM-Speicher, kein Virenscan.
-  Der Dienst speichert nur Verweise; Dateien nimmt die kanzleikonsole an (ADR 0001 §6).
+  Der Dienst speichert nur Verweise; Dateien nimmt die kanzleikonsole an (ADR 0001 §6). Die Demo
+  spielt dabei die kanzleikonsole (Ablage, Dokument-ID als UUID) und reicht nur den Verweis weiter.
 - **Audit:** SHA-256-Hashkette je Tenant (Kettenversion 2), ohne qualifizierten Zeitstempel.
 - **Demo-Lader:** lesen über `db` aus `apps/web/src/server/demo.ts` (je Aufruf eine Transaktion im
   Demo-Tenant, nur lesende Methoden); Prüfung und Änderung vieler Actions liegen noch nicht in
