@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { erzeugeClient, mitTenant, type PrismaClient } from '@tcms/db';
+import { schlageRisikenVor } from '@tcms/domain';
 import type { DienstKontext } from '../../../kontext';
 import { ladeProfil } from '../lesen';
 import { profilAendern, vorgeschlagenesRisikoAufnehmen } from '../profil';
@@ -121,6 +122,29 @@ describe.skipIf(!AKTIV)('Geschäftsprofil: Fachoperationen', () => {
       expect(f.code).toBe('KONFLIKT');
       const p = await rufe(akt.hb, (ctx) => ladeProfil(ctx, { mandantId: a.mandantId }));
       expect(p.staende).toHaveLength(2);
+      // Im Voraus erfasster Stand (gültig in 30 Tagen) mit Gebrauchtware → EC-UST-14:
+      // erscheint in den Ständen, die Vorschläge folgen aber dem heute gültigen Stand.
+      const offen2 = p.staende.find((x) => x.gueltigBis === null)!;
+      const kuenftig = structuredClone(offen2.antworten);
+      kuenftig.p4.gebrauchtware = true;
+      const spaeter = new Date(Date.parse(`${HEUTE}T00:00:00Z`) + 30 * 86_400_000)
+        .toISOString()
+        .slice(0, 10);
+      await rufe(akt.hb, (ctx) =>
+        profilAendern(ctx, {
+          mandantId: a.mandantId,
+          profilStandId: offen2.id,
+          profil: kuenftig,
+          gueltigAb: spaeter,
+          ereignisseAnlegen: false,
+        }),
+      );
+      const p2 = await rufe(akt.hb, (ctx) => ladeProfil(ctx, { mandantId: a.mandantId }));
+      expect(p2.staende).toHaveLength(3);
+      expect(p2.vorschlaege.map((v) => v.code)).not.toContain('EC-UST-14');
+      expect(p2.vorschlaege.map((v) => v.code)).toEqual(
+        schlageRisikenVor(offen2.antworten).map((v) => v.code),
+      );
     });
 
     it('TS-05: zwei gleichzeitige Änderungen desselben Stands → genau eine, keine Gabelung', async () => {

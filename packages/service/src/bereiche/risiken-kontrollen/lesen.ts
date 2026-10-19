@@ -485,7 +485,10 @@ function kontrolleEintrag(
     gegenzeichnungMandant: x.gegenzeichnungMandant,
     nachweis: x.nachweis,
     mindestNachweise: x.mindestNachweise,
-    schritte: x.schritte.map((s) => ({ titel: String(s.titel), hinweis: String(s.hinweis) })),
+    schritte: x.schritte.map((s) => ({
+      titel: String(s.titel ?? ''),
+      hinweis: String(s.hinweis ?? ''),
+    })),
     kennzahlen: x.kennzahlen.map((kz) => ({
       key: kz.key,
       label: kz.label,
@@ -688,8 +691,13 @@ export async function ladeProfil(ctx: DienstKontext, eingabe: ProfilLesen): Prom
     erstelltVon: s.erstelltVon,
     createdAt: s.createdAt.toISOString(),
   }));
+  // Zum Stichtag gültiger Stand (ein im Voraus erfasster, später gültiger zählt nicht).
   const gueltig = [...programm.profile]
-    .filter((s) => !s.gueltigBis || s.gueltigBis.getTime() > ende.getTime())
+    .filter(
+      (s) =>
+        s.gueltigAb.getTime() <= ende.getTime() &&
+        (!s.gueltigBis || s.gueltigBis.getTime() > ende.getTime()),
+    )
     .sort((a, b) => b.gueltigAb.getTime() - a.gueltigAb.getTime())[0];
   const risikoJe = new Map(programm.risiken.map((r) => [r.code, r]));
   const vorschlaege = gueltig
