@@ -69,7 +69,10 @@ export interface VerantwortungDaten {
     partei: 'KANZLEI' | 'MANDANT';
     durchfuehrend: string;
     vertretung: string;
+    /** Name der gegenzeichnenden Person (ältere Snapshots: mit Endung „ (Mandant)"). */
     gegenzeichnung: string;
+    /** Gegenzeichnung beim Mandanten (fehlt in älteren Snapshots). */
+    gegenzeichnungMandant?: boolean;
     durchfuehrendId?: string | null;
     vertretungId?: string | null;
     gegenzeichnungId?: string | null;

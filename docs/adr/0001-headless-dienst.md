@@ -292,8 +292,10 @@ Ausschluss von zugestellt und unzustellbar. Pfadparameter prüft er nach der
 Mandantenbindung mit `paramsSchema` (`400`). Die API-Tests prüfen jede Antwort
 gegen `antwortSchema` bzw. `FehlerSchema`. Antwortschemas sind streng
 (unbekannte Felder abgewiesen), außer dem Inhalt eingefrorener
-CMS-Beschreibungen (Snapshot). Die kanzleikonsole speist ihren Client direkt
-aus einem Eintrag.
+CMS-Beschreibungen (Snapshot, `BausteinSatzSnapshotSchema`: später ergänzte
+Felder optional, weil der SHA-256 den Inhalt festschreibt). Die lebenden
+Bausteine sind streng, und neue Snapshots entstehen nur in dieser strengen
+Form. Die kanzleikonsole speist ihren Client direkt aus einem Eintrag.
 
 ## 8. Betrieb (Stufe 2, in der kanzleikonsole)
 

@@ -388,6 +388,12 @@ Rechte prüft `packages/service`, Eingaben und Antworten in
 | POST    | `…/portal/freigaben/:freigabeId/code` bzw. `freigeben` | adressierte gesetzliche Vertretung                                          |
 | POST    | `…/portal/freigaben/:freigabeId/kenntnisnahme`         | adressierte Person                                                          |
 
+Die lebenden Bausteine der Beschreibung (`bausteine`, Portal `live`) sind streng (`BausteinSatzSchema`:
+jedes Feld Pflicht, keine Zusatzfelder); neue Snapshots friert der Dienst nur in dieser Form ein.
+Eingefrorene Inhalte liest der Vertrag tolerant (`BausteinSatzSnapshotSchema`), weil ihr SHA-256 sie
+festschreibt. Baustein VERANTWORTUNG: `gegenzeichnung` ist nur der Name, `gegenzeichnungMandant` sagt,
+ob beim Mandanten gegengezeichnet wird; ältere Snapshots ohne das Feld tragen „ (Mandant)" im Namen.
+
 `GET …/einrichtung` liefert in beiden Zuständen (Assistent offen oder eingerichtet) `heute`: den
 Kalendertag der Uhr des Dienstes (Europe/Berlin), mit dem auch die Prüfung beim Speichern rechnet.
 

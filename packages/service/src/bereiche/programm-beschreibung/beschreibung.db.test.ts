@@ -7,7 +7,11 @@
 
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { BeschreibungViewSchema } from '@tcms/contract';
+import {
+  BausteinSatzSchema,
+  BeschreibungSnapshotSchema,
+  BeschreibungViewSchema,
+} from '@tcms/contract';
 import { pruefeAuditKette, type PrismaClient } from '@tcms/db';
 import { pruefeSnapshot } from './bausteine';
 import {
@@ -193,6 +197,17 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
     expect(snap.bausteine.VERANTWORTUNG.rollen.map((x) => x.name)).toContain(
       'StB Test Berufsträgerin',
     );
+    // Neue Snapshots: Gegenzeichnung beim Mandanten als Feld, nie als Textendung;
+    // der eingefrorene Inhalt erfüllt sogar die strenge Form der lebenden Bausteine.
+    const verantwortung = BeschreibungSnapshotSchema.parse(version.snapshot).bausteine!
+      .VERANTWORTUNG!;
+    expect(verantwortung.kontrollen.length).toBeGreaterThan(0);
+    expect(BausteinSatzSchema.shape.VERANTWORTUNG.parse(verantwortung)).toEqual(verantwortung);
+    for (const x of verantwortung.kontrollen) {
+      expect(typeof x.gegenzeichnungMandant, x.code).toBe('boolean');
+      expect(x.gegenzeichnung, x.code).not.toMatch(/\(Mandant\)/);
+      if (x.gegenzeichnungMandant) expect(x.gegenzeichnungId, x.code).toBe(x.vertretungId);
+    }
     expect(freigabe).toMatchObject({
       art: 'BESCHREIBUNG',
       refId: erste,

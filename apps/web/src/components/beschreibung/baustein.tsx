@@ -272,7 +272,9 @@ function Inhalt<A extends BausteinArt>({ art, d }: { art: A; d: NonNullable<Baus
                     {x.vertretung}
                   </td>
                   <td className="text-xs" style={TD}>
+                    {/* Ältere Snapshots ohne Feld tragen „ (Mandant)" schon im Namen. */}
                     {x.gegenzeichnung}
+                    {x.gegenzeichnungMandant ? ' (Mandant)' : ''}
                   </td>
                 </tr>
               ))}

@@ -10,6 +10,7 @@
 // =============================================================================
 
 import {
+  BausteinSatzSchema,
   BeschreibungAbschnittSchema,
   type BausteinSatzDaten,
   type BeschreibungAbschnitt,
@@ -145,7 +146,10 @@ export function baueBausteine(k: TcmsKontext, o: BausteinOptionen): BausteinSatz
           partei: x.partei,
           durchfuehrend: name(x.durchfuehrendId),
           vertretung: name(x.vertretungId),
-          gegenzeichnung: x.gegenzeichnungMandant ? `${name(gegen)} (Mandant)` : name(gegen),
+          // Nur der Name; dass beim Mandanten gegengezeichnet wird, sagt das
+          // Feld `gegenzeichnungMandant` (früher als Textendung „ (Mandant)").
+          gegenzeichnung: name(gegen),
+          gegenzeichnungMandant: x.gegenzeichnungMandant,
           durchfuehrendId: x.durchfuehrendId,
           vertretungId: x.vertretungId,
           gegenzeichnungId: gegen,
@@ -199,6 +203,12 @@ export function baueSnapshot(
   satz: BausteinSatzDaten,
   erzeugtAm: Date,
 ): { snapshot: BeschreibungSnapshot; sha256: string } {
+  // Neue Snapshots nur in der strengen Form des Vertrags (jedes Feld, keine
+  // Zusatzfelder): Was eingefroren und gehasht ist, lässt sich nicht mehr
+  // berichtigen. Fail closed (500 ohne Details); toleriert werden nur ältere.
+  if (!BausteinSatzSchema.safeParse(satz).success) {
+    throw new Error('Bausteine entsprechen nicht dem Vertrag; kein Snapshot.');
+  }
   const genutzt = new Set<BausteinArt>();
   for (const a of version.abschnitte)
     for (const b of a.bloecke) if (b.typ === 'baustein') genutzt.add(b.art);

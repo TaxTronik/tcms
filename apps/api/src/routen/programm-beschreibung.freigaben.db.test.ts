@@ -3,6 +3,7 @@
 // Portal: lesen, Code, freigeben, Kenntnisnahme; Neuadressierung) und je
 // Endpunkt die Negativfälle. Codes erscheinen nur im Postausgang.
 import { mitTenant } from '@tcms/db';
+import { snapshotHash } from '@tcms/service';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { json } from '../__tests__/hilfen';
 import {
@@ -140,6 +141,67 @@ describe.skipIf(!AKTIV)('Endpunkte CMS-Beschreibung und Freigaben (App + Postgre
         },
       ),
     );
+  });
+
+  it('Baustein VERANTWORTUNG: Feld gegenzeichnungMandant; ältere Snapshots bleiben lesbar', async () => {
+    const besch = await ok(await senden(w, 'GET', `${m(w.A)}/beschreibung`, a.bt()));
+    // Lebend und im neuen Snapshot: Flag statt Textendung (Vertrag streng, vertrag.ts).
+    type K = { gegenzeichnung: string; gegenzeichnungMandant?: boolean };
+    const lebend = (besch['bausteine'] as { VERANTWORTUNG: { kontrollen: K[] } }).VERANTWORTUNG;
+    const versionen = besch['versionen'] as {
+      nummer: string;
+      snapshot: { bausteine?: { VERANTWORTUNG?: { kontrollen: K[] } } } | null;
+      snapshotGeprueft: boolean | null;
+    }[];
+    const neu = versionen.find((x) => x.nummer === '1.0')!.snapshot!.bausteine!.VERANTWORTUNG!;
+    for (const k of [...lebend.kontrollen, ...neu.kontrollen]) {
+      expect(typeof k.gegenzeichnungMandant).toBe('boolean');
+      expect(k.gegenzeichnung).not.toMatch(/\(Mandant\)/);
+    }
+    // Ein vor der Änderung eingefrorener Inhalt (Endung im Namen, ohne Flag und IDs)
+    // wird unverändert geliefert; der SHA-256 stimmt weiter.
+    const alt = {
+      nummer: '0.9',
+      mandant: 'API-Mandant A GmbH',
+      eingefroren: true,
+      stand: '2026-06-30',
+      abschnitte: [{ key: 'organisation', bloecke: [{ typ: 'baustein', art: 'VERANTWORTUNG' }] }],
+      bausteine: {
+        VERANTWORTUNG: {
+          rollen: [{ rolle: 'Gesetzliche Vertretung', name: 'Jana Weller' }],
+          kontrollen: [
+            {
+              code: 'K-EC-02',
+              titel: 'Abgleich',
+              partei: 'MANDANT',
+              durchfuehrend: 'Murat Aydin',
+              vertretung: 'Sabine Kraus',
+              gegenzeichnung: 'Sabine Kraus (Mandant)',
+            },
+          ],
+        },
+      },
+    };
+    await mitTenant(w.T, async (tx) => {
+      const p = await tx.tcmsProgramm.findFirstOrThrow({ where: { mandantId: w.A } });
+      await tx.beschreibungVersion.create({
+        data: {
+          programmId: p.id,
+          nummer: '0.9',
+          status: 'ABGELOEST',
+          abschnitte: alt.abschnitte,
+          freigegebenVon: w.GV,
+          freigegebenAm: new Date('2026-07-01T10:00:00.000Z'),
+          snapshot: alt,
+          snapshotSha256: snapshotHash(alt),
+          createdAt: new Date('2026-06-30T10:00:00.000Z'),
+        },
+      });
+    });
+    const danach = await ok(await senden(w, 'GET', `${m(w.A)}/beschreibung`, a.bt()));
+    const v09 = (danach['versionen'] as typeof versionen).find((x) => x.nummer === '0.9')!;
+    expect(v09.snapshot).toEqual(alt);
+    expect(v09.snapshotGeprueft).toBe(true);
   });
 
   const V = (x: string) => `${m(x)}/beschreibung/versionen/v123`;

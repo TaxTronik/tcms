@@ -1,6 +1,7 @@
 // Eingefrorener Inhalt (rein): SHA-256 über kanonisches JSON, Manipulation und
 // fehlende Teile werden erkannt; Abschnitte werden streng gelesen.
 import { describe, expect, it } from 'vitest';
+import { BausteinSatzSchema } from '@tcms/contract';
 import { ABSCHNITTE } from '@tcms/domain';
 import type { FeststellungSicht, TcmsKontext } from '../../kern/tcms-kontext';
 import {
@@ -125,5 +126,96 @@ describe('Baustein FESTSTELLUNGEN (RT-01)', () => {
       verantwortung: { berufstraeger: null, bearbeitung: null },
     });
     expect(b.FESTSTELLUNGEN.feststellungen.map((f) => f.nummer)).toEqual(['F-offen']);
+  });
+});
+
+describe('Baustein VERANTWORTUNG: Gegenzeichnung beim Mandanten als Feld', () => {
+  const kontrolle = (
+    code: string,
+    partei: 'KANZLEI' | 'MANDANT',
+    gegenzeichnungMandant: boolean,
+  ) => ({
+    code,
+    titel: `Kontrolle ${code}`,
+    partei,
+    durchfuehrendId: 'd',
+    vertretungId: 'v',
+    gegenzeichnerId: 'g',
+    gegenzeichnungMandant,
+    art: 'D',
+    frequenz: { turnus: 'MONATLICH', anlass: false },
+    schluessel: true,
+    design: 'ANGEMESSEN',
+    designVon: null,
+    designAm: null,
+    risikoCodes: [],
+  });
+  const k = {
+    programm: null,
+    profil: null,
+    kontaktRollen: [],
+    teilbereich: null,
+    appetit: 'MITTEL',
+    ziele: [],
+    risiken: [],
+    kontrollen: [
+      kontrolle('K-EC-01', 'KANZLEI', false),
+      kontrolle('K-EC-02', 'MANDANT', true),
+      kontrolle('K-EC-03', 'MANDANT', false),
+    ],
+    laenderStand: null,
+    fernverkaeufeLfd: 0,
+    fernverkaeufeVorjahr: 0,
+    schwelle: { label: '—' },
+    laender: [],
+    stand: new Date('2026-10-19T00:00:00Z'),
+    feststellungen: [],
+  } as unknown as TcmsKontext;
+  const namen: Record<string, string> = { d: 'Durch', v: 'Vertretung', g: 'Gegen' };
+  const optionen = {
+    name: (id: string | null | undefined) => (id ? (namen[id] ?? '—') : '—'),
+    verantwortung: { berufstraeger: null, bearbeitung: null },
+  };
+
+  it('nennt nur den Namen; gegenzeichnungMandant und die ID sagen, wer gegenzeichnet', () => {
+    const b = baueBausteine(k, optionen);
+    expect(
+      b.VERANTWORTUNG.kontrollen.map((x) => [
+        x.code,
+        x.gegenzeichnung,
+        x.gegenzeichnungMandant,
+        x.gegenzeichnungId,
+      ]),
+    ).toEqual([
+      ['K-EC-01', 'Gegen', false, 'g'],
+      ['K-EC-02', 'Vertretung', true, 'v'],
+      ['K-EC-03', 'Gegen', false, 'g'],
+    ]);
+    for (const x of b.VERANTWORTUNG.kontrollen) expect(x.gegenzeichnung).not.toMatch(/\(Mandant\)/);
+    // Der lebende Satz erfüllt das strenge Schema (jedes Feld, keine Zusatzfelder).
+    expect(BausteinSatzSchema.parse(b)).toEqual(b);
+  });
+
+  it('friert neue Snapshots nur in der strengen Form ein (fail closed)', () => {
+    const abschnitte = normalisiereAbschnitte([
+      { key: 'organisation', bloecke: [{ typ: 'baustein', art: 'VERANTWORTUNG' }] },
+    ]);
+    const kopf = {
+      mandant: { id: 'm', name: 'Test GmbH', rechtsform: 'KapG', datevNr: null },
+      stand: k.stand,
+    };
+    const gut = baueBausteine(k, optionen);
+    const { snapshot } = baueSnapshot({ nummer: '1.0', abschnitte }, kopf, gut, k.stand);
+    expect(snapshot.bausteine?.VERANTWORTUNG?.kontrollen[1]).toMatchObject({
+      gegenzeichnung: 'Vertretung',
+      gegenzeichnungMandant: true,
+    });
+    const ohneFlag = structuredClone(gut);
+    delete (ohneFlag.VERANTWORTUNG.kontrollen[1] as { gegenzeichnungMandant?: boolean })
+      .gegenzeichnungMandant;
+    expect(() => baueSnapshot({ nummer: '1.0', abschnitte }, kopf, ohneFlag, k.stand)).toThrow();
+    const zusatz = structuredClone(gut);
+    (zusatz.VERANTWORTUNG.kontrollen[0] as Record<string, unknown>)['intern'] = 'x';
+    expect(() => baueSnapshot({ nummer: '1.0', abschnitte }, kopf, zusatz, k.stand)).toThrow();
   });
 });

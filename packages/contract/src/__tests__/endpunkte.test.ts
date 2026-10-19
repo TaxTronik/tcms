@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { BausteinSatzSchema, BeschreibungSnapshotSchema } from '../bereiche/programm-beschreibung';
+import { BeschreibungSnapshotSchema } from '../bereiche/programm-beschreibung';
 import {
   ENDPUNKT_LISTE,
   ENDPUNKT_METHODEN,
@@ -32,12 +32,13 @@ function beispiel(name: string): string {
 }
 
 /**
- * Bewusste Ausnahmen: Inhalt einer eingefrorenen CMS-Beschreibung (Snapshot,
- * per SHA-256 festgeschrieben) und die daraus gebauten Bausteine. Der Dienst
- * gibt den gespeicherten Inhalt unverändert zurück; ein strenges Schema würde
- * frühere Snapshots nach einer Formatänderung unlesbar machen.
+ * Bewusste Ausnahme: Inhalt einer eingefrorenen CMS-Beschreibung (Snapshot,
+ * per SHA-256 festgeschrieben, samt seiner Bausteine). Der Dienst gibt den
+ * gespeicherten Inhalt unverändert zurück; ein strenges Schema würde frühere
+ * Snapshots nach einer Formatänderung unlesbar machen. Die lebenden Bausteine
+ * (`BausteinSatzSchema`) sind dagegen streng und werden hier mitgeprüft.
  */
-const AUSNAHMEN: ReadonlySet<unknown> = new Set([BeschreibungSnapshotSchema, BausteinSatzSchema]);
+const AUSNAHMEN: ReadonlySet<unknown> = new Set([BeschreibungSnapshotSchema]);
 
 /** Alle Objekt-Schemas innerhalb eines Schemas, die unbekannte Felder durchlassen. */
 function nichtStrikt(schema: z.ZodType, pfad = 'daten', gesehen = new Set<unknown>()): string[] {
