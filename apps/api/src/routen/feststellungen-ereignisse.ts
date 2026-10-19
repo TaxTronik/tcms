@@ -17,6 +17,8 @@ import {
   FeststellungWeiterBodySchema,
   FolgeHinzufuegenBodySchema,
   FolgenAnlegenBodySchema,
+  LandHinzufuegenBodySchema,
+  LandStaendeBodySchema,
   MassnahmeBodySchema,
   MassnahmeErledigenBodySchema,
   NachkontrolleBodySchema,
@@ -41,11 +43,13 @@ import {
   erledigeMassnahme,
   fuegeErklaerungHinzu,
   fuegeFolgeHinzu,
+  fuegeLandHinzu,
   ladeEreignis,
   ladeEreignisAnlage,
   ladeEreignisse,
   ladeFeststellung,
   ladeFeststellungen,
+  ladeLaender,
   ladePortalMeldungen,
   legeFolgenAn,
   legeMassnahmeAn,
@@ -57,6 +61,7 @@ import {
   schalteFeststellungWeiter,
   schliesseEreignisAb,
   setzeVertraulich,
+  speichereLandStaende,
   verwerfeFolge,
 } from '@tcms/service';
 import type { Routen, RoutenKontext } from '../routen';
@@ -276,5 +281,27 @@ export function registriereFeststellungenEreignisse(r: Routen<Tx>): void {
     body: PortalMeldungBodySchema,
     status: 201,
     handler: (c) => meldeEreignis(dienstKontext(c), { ...c.body, ...mandant(c) }),
+  });
+
+  // ---------------------------------------------------------- S12 Länder-Monitor
+  r.route({
+    methode: 'GET',
+    pfad: `${M}/laender`,
+    query: StandQuerySchema,
+    handler: (c) => ladeLaender(dienstKontext(c), { ...c.query, ...mandant(c) }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${M}/laender`,
+    body: LandHinzufuegenBodySchema,
+    status: 201,
+    handler: (c) => fuegeLandHinzu(dienstKontext(c), { ...c.body, ...mandant(c) }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${M}/laender/staende`,
+    body: LandStaendeBodySchema,
+    status: 201,
+    handler: (c) => speichereLandStaende(dienstKontext(c), { ...c.body, ...mandant(c) }),
   });
 }

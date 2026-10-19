@@ -746,6 +746,111 @@ export const PortalMeldungenSchema = z
   .strict();
 
 // ===========================================================================
+// Länder-Monitor (S12)
+// ===========================================================================
+
+/** Spalte DECIMAL(14,2), fachliche Obergrenze wie bisher (100 Mrd. EUR). */
+export const MAX_LAND_EUR = 100_000_000_000;
+export const LandCodeSchema = z.string().regex(/^[A-Z]{2}$/);
+
+export const LandEingabeSchema = z
+  .object({
+    land: LandCodeSchema,
+    fernverkaeufeLfdEur: z.number().min(0).max(MAX_LAND_EUR),
+    fernverkaeufeVorjahrEur: z.number().min(0).max(MAX_LAND_EUR),
+    /** Monat `YYYY-MM`, ab dem ein Lager besteht. */
+    lagerSeit: z
+      .string()
+      .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+      .nullable(),
+    oss: z.boolean(),
+    lokaleUstNr: z.boolean(),
+    zmRelevant: z.boolean(),
+    steuersaetzeGeprueftAm: TagSchema.nullable(),
+  })
+  .strict();
+
+export const LaenderLesenSchema = z.object(lesen).strict();
+
+/**
+ * Neue Länderstände (Historie bleibt). `datenstand` ist das fachliche Datum der
+ * erfassten Werte (nicht nach heute), kein Lese-Stichtag (TS-07).
+ */
+export const LandStaendeBodySchema = z
+  .object({
+    datenstand: TagSchema,
+    laender: z
+      .array(LandEingabeSchema)
+      .min(1)
+      .max(40)
+      .refine((l) => new Set(l.map((x) => x.land)).size === l.length, 'Land doppelt angegeben'),
+  })
+  .strict();
+export const LandStaendeSchema = LandStaendeBodySchema.extend(mandant).strict();
+
+export const LandHinzufuegenBodySchema = z
+  .object({ datenstand: TagSchema, land: LandEingabeSchema })
+  .strict();
+export const LandHinzufuegenSchema = LandHinzufuegenBodySchema.extend(mandant).strict();
+
+export const LandStandSchema = z
+  .object({
+    id: z.string(),
+    land: z.string(),
+    fernverkaeufeLfdEur: z.number(),
+    fernverkaeufeVorjahrEur: z.number(),
+    lagerSeit: z.string().nullable(),
+    oss: z.boolean(),
+    lokaleUstNr: z.boolean(),
+    zmRelevant: z.boolean(),
+    steuersaetzeGeprueftAm: TagSchema.nullable(),
+    stand: TagSchema,
+    quelle: z.enum(['MANUELL', 'CSV']),
+    erfasstVon: z.string().nullable(),
+    createdAt: iso,
+    registrierung: z.enum(['VOLLSTAENDIG', 'FEHLT', 'PRUEFEN']),
+  })
+  .strict();
+
+export const LaenderSchema = z
+  .object({
+    stand: TagSchema,
+    historisch: z.boolean(),
+    programmId: z.string().nullable(),
+    /** Stände je Land bis zum Stichtag, neueste zuerst. */
+    historie: z.array(z.object({ land: z.string(), staende: z.array(LandStandSchema) }).strict()),
+    /** Nicht vertrauliche Feststellungen mit Länderbezug. */
+    feststellungen: z.array(
+      z
+        .object({
+          land: z.string(),
+          eintraege: z.array(
+            z
+              .object({
+                id: z.string(),
+                nummer: z.string(),
+                titel: z.string(),
+                status: FeststellungStatusSchema,
+                p153Offen: z.boolean(),
+              })
+              .strict(),
+          ),
+        })
+        .strict(),
+    ),
+    namen: NamenSchema,
+  })
+  .strict();
+
+export const LandStaendeErgebnisSchema = z
+  .object({
+    staende: z.array(z.object({ id: z.string(), land: z.string() }).strict()),
+    /** Nummern der ausgelösten Ereignisse (T-02 neues Lagerland, T-04 Schwellenwechsel). */
+    ereignisse: z.array(z.string()),
+  })
+  .strict();
+
+// ===========================================================================
 // Typen
 // ===========================================================================
 
@@ -802,3 +907,11 @@ export type FolgenAngelegt = z.infer<typeof FolgenAngelegtSchema>;
 export type FolgeErgebnis = z.infer<typeof FolgeErgebnisSchema>;
 export type PortalMeldungErgebnis = z.infer<typeof PortalMeldungErgebnisSchema>;
 export type PortalMeldungen = z.infer<typeof PortalMeldungenSchema>;
+
+export type LandEingabe = z.infer<typeof LandEingabeSchema>;
+export type LaenderLesen = z.infer<typeof LaenderLesenSchema>;
+export type LandStaendeEingabe = z.infer<typeof LandStaendeSchema>;
+export type LandHinzufuegenEingabe = z.infer<typeof LandHinzufuegenSchema>;
+export type LandStand = z.infer<typeof LandStandSchema>;
+export type Laender = z.infer<typeof LaenderSchema>;
+export type LandStaendeErgebnis = z.infer<typeof LandStaendeErgebnisSchema>;

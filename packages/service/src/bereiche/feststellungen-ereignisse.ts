@@ -51,6 +51,12 @@ export {
   PORTAL_TYPEN,
 } from './feststellungen-ereignisse/portal';
 export {
+  fuegeLandHinzu,
+  ladeLaender,
+  registrierungVon,
+  speichereLandStaende,
+} from './feststellungen-ereignisse/laender';
+export {
   EINGABE_UNGUELTIG,
   legeAusserplanmaessigeDurchfuehrungAn,
   legeFeststellungAn,
