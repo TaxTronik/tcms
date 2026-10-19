@@ -64,14 +64,16 @@ describe.skipIf(!AKTIV)('leseKontext gegen PostgreSQL', () => {
 
   it('vertraulich: nur Nummer, Status und Erfassung wie der dedizierte Lesepfad (RT-01)', async () => {
     const f = await mitTenant(DEMO_TENANT_ID, async (tx) => {
-      // Eine Feststellung aus dem Seed (Nummernkreis 2026, erfasst bis zum Demo-Tag), damit
-      // Daten anderer Testläufe auf derselben Datenbank die Auswahl nicht verschieben.
+      // Eine Feststellung aus dem Seed (Nummernkreis 2026, erfasst vor dem Demo-Tag), damit
+      // Daten anderer Testläufe auf derselben Datenbank die Auswahl nicht verschieben: Die
+      // Web-Tests erfassen mit der Demo-Uhr am Demo-Tag selbst (z. B. „Lager ohne
+      // Registrierung“, Teil eines Katalogtitels – die Prüfung unten schlüge dann fehl).
       const x = await tx.feststellung.findFirstOrThrow({
         where: {
           programm: { mandantId: DEMO_IDS.talwind },
           erfasstVon: { not: DEMO_IDS.thomas },
           nummer: { startsWith: 'F-2026-' },
-          erfasstAm: { lte: new Date('2026-10-16T23:59:59Z') },
+          erfasstAm: { lt: new Date('2026-10-16T00:00:00Z') },
         },
         include: { massnahmen: { select: { verantwortlich: true } } },
         orderBy: { nummer: 'desc' },
