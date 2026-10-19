@@ -4,20 +4,28 @@
 // Editor, Review und Terminal anders erscheinen, als Compiler und Laufzeit ihn
 // lesen (umgedrehte Bereiche in Regexen, versteckte Bedingungen, unsichtbare
 // Bezeichner). Dieser statische Test prüft jede versionierte Datei – den Blob
-// im Git-Index und, falls vorhanden, die Datei im Arbeitsbaum – und verbietet:
+// im Git-Index und, falls vorhanden, die Datei im Arbeitsbaum.
+//
+// Verboten ist genau die Zeichenregel des Vertrags (`UNZULAESSIG_KLASSE` in
+// bereiche/lesepfade.ts: Unicode-Eigenschaften Cc, Cf, Zl, Zp,
+// Default_Ignorable_Code_Point, Cs; eine Quelle für Eingaben und Repository,
+// RT4-T-02) – außer TAB, LF und CR vor LF. Befunde nach Art:
 //
 //   bidi      U+202A–U+202E, U+2066–U+2069 (Einbettung, Isolierung), U+200E,
 //             U+200F, U+061C (Richtungsmarken)
-//   format    jedes andere Formatzeichen (Unicode-Kategorie Cf), darunter
-//             U+200B–U+200D, U+2060–U+2064, U+00AD, U+FEFF (auch als BOM: alle
-//             Dateien BOM-frei) und die Tag-Zeichen U+E0000–U+E007F
 //   trenner   U+2028/U+2029 (Zeilenende für JavaScript, in vielen Ansichten
 //             unsichtbar)
 //   steuer    C0-Steuerzeichen außer TAB und LF, ein CR ohne folgendes LF
 //             (überschreibt im Terminal die Zeile), DEL und C1
-//   fueller   unsichtbare „Buchstaben" U+115F, U+1160, U+3164, U+FFA0
-//             (unsichtbare Bezeichner) und Variantenselektoren U+FE00–U+FE0F,
-//             U+E0100–U+E01EF (versteckte Nutzlast)
+//   format    jedes andere Formatzeichen (Unicode-Kategorie Cf), darunter
+//             U+200B–U+200D, U+2060–U+2064, U+00AD, U+FEFF (auch als BOM: alle
+//             Dateien BOM-frei) und die Tag-Zeichen U+E0000–U+E007F
+//   fueller   alles übrige standardmäßig Unsichtbare: „Buchstaben" U+115F,
+//             U+1160, U+3164, U+FFA0, unsichtbare kombinierende Zeichen U+034F,
+//             U+17B4/U+17B5, U+180B–U+180F (in JavaScript gültige
+//             Bezeichnerzeichen: zwei gleich aussehende Bezeichner) und
+//             Variantenselektoren U+FE00–U+FE0F, U+E0100–U+E01EF (versteckte
+//             Nutzlast)
 //
 // Im Quelltext gehören solche Zeichen als Escape geschrieben (`\u202e`). Eine
 // Datei, die nicht gültiges UTF-8 ist oder ein NUL enthält, ist ein Befund,
@@ -29,6 +37,7 @@
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { UNZULAESSIG_KLASSE } from '../bereiche/lesepfade';
 import { blobInhalte, indexEintraege, REPO_WURZEL } from './repo-git';
 
 type Art = 'bidi' | 'format' | 'trenner' | 'steuer' | 'fueller' | 'kodierung';
@@ -42,22 +51,22 @@ interface Befund {
 }
 
 const BIDI = /[\u202a-\u202e\u2066-\u2069\u200e\u200f\u061c]/u;
-const TRENNER = /[\u2028\u2029]/u;
-const STEUER = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]|\r(?!\n)/u;
-const FUELLER = /[\u115f\u1160\u3164\uffa0\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/u;
+const TRENNER = /[\p{Zl}\p{Zp}]/u;
+const STEUER = /\p{Cc}/u;
 const FORMAT = /\p{Cf}/u;
-/** Alles Verbotene in einem Durchlauf; die Art bestimmt `art()`. */
-const VERBOTEN = new RegExp(
-  [BIDI, TRENNER, STEUER, FUELLER, FORMAT].map((r) => r.source).join('|'),
-  'gu',
-);
+/**
+ * Alles Verbotene in einem Durchlauf: die Zeichenregel des Vertrags ohne TAB,
+ * LF und ein CR unmittelbar vor LF. Die Art bestimmt `art()`.
+ */
+const VERBOTEN = new RegExp(String.raw`(?![\t\n]|\r\n)[${UNZULAESSIG_KLASSE}]`, 'gu');
 
 function art(zeichen: string): Exclude<Art, 'kodierung'> {
   if (BIDI.test(zeichen)) return 'bidi';
   if (TRENNER.test(zeichen)) return 'trenner';
   if (STEUER.test(zeichen)) return 'steuer';
-  if (FUELLER.test(zeichen)) return 'fueller';
-  return 'format';
+  if (FORMAT.test(zeichen)) return 'format';
+  // Übrige: standardmäßig unsichtbare Zeichen ohne Formatkategorie (Default_Ignorable).
+  return 'fueller';
 }
 
 const codePoint = (z: string) =>
@@ -114,8 +123,8 @@ export function binaerEndungen(gitattributes: string): Set<string> {
 const AUSNAHMEN: Record<string, { zeichen: string[]; begruendung: string }> = {};
 
 describe('befundeIn (Prüfer)', () => {
-  // Jeder in der Aufgabe genannte Code Point einzeln – unabhängig davon, was
-  // die Unicode-Tabelle der Laufzeit unter `\p{Cf}` führt.
+  // Jeder in der Aufgabe und in RT4-T-02 genannte Code Point einzeln – auch
+  // als Gegenprobe zur Unicode-Tabelle der Laufzeit.
   const PFLICHT: [number, Art][] = [
     ...[0x202a, 0x202b, 0x202c, 0x202d, 0x202e].map((c) => [c, 'bidi'] as [number, Art]),
     ...[0x2066, 0x2067, 0x2068, 0x2069].map((c) => [c, 'bidi'] as [number, Art]),
@@ -145,6 +154,11 @@ describe('befundeIn (Prüfer)', () => {
     [0x007f, 'steuer'],
     [0x0085, 'steuer'],
     [0x009f, 'steuer'],
+    [0x180e, 'format'],
+    [0x206f, 'format'],
+    [0x1bca0, 'format'],
+    [0x1d173, 'format'],
+    [0x1d17a, 'format'],
     [0x115f, 'fueller'],
     [0x1160, 'fueller'],
     [0x3164, 'fueller'],
@@ -153,6 +167,17 @@ describe('befundeIn (Prüfer)', () => {
     [0xfe0f, 'fueller'],
     [0xe0100, 'fueller'],
     [0xe01ef, 'fueller'],
+    // RT4-T-02: unsichtbare kombinierende Zeichen (gültige Bezeichnerzeichen).
+    [0x034f, 'fueller'],
+    [0x17b4, 'fueller'],
+    [0x17b5, 'fueller'],
+    [0x180b, 'fueller'],
+    [0x180c, 'fueller'],
+    [0x180d, 'fueller'],
+    [0x180f, 'fueller'],
+    // Reservierte, standardmäßig unsichtbare Code Points.
+    [0x2065, 'fueller'],
+    [0xe0080, 'fueller'],
   ];
 
   it.each(PFLICHT.map(([cp, a]) => [codePoint(String.fromCodePoint(cp)), cp, a] as const))(

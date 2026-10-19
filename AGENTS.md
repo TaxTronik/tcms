@@ -276,10 +276,12 @@ vorhandenen Tokens aufsetzen.
   streng, wie `scripts/pruefe-lieferkette.sh` verlangt.
 - Keine rohen unsichtbaren oder bidirektionalen Zeichen in versionierten Dateien
   („Trojan Source"): Richtungs- und Formatzeichen, Zeilentrenner U+2028/U+2029,
-  Steuerzeichen außer TAB/LF, unsichtbare Füller und Variantenselektoren stehen im
-  Quelltext nur als Escape; alle Dateien UTF-8 ohne BOM. Der statische Test
+  Steuerzeichen außer TAB/LF, unsichtbare Füller, unsichtbare kombinierende
+  Zeichen und Variantenselektoren stehen im Quelltext nur als Escape; alle Dateien
+  UTF-8 ohne BOM. Der statische Test
   `packages/contract/src/__tests__/repo-zeichen.test.ts` prüft Index und
-  Arbeitsbaum; Ausnahmen nur je Datei und Zeichen mit Begründung.
+  Arbeitsbaum mit derselben Zeichenregel wie die Eingaben (`UNZULAESSIG_KLASSE`,
+  ohne TAB und LF, RT4-T-02); Ausnahmen nur je Datei und Zeichen mit Begründung.
 - Einzeilige Texte und Dateinamen in Eingaben prüfen nur über die eine Regel
   `UNZULAESSIGE_ZEICHEN` bzw. `DATEINAME_UNZULAESSIG`
   (`packages/contract/src/bereiche/lesepfade.ts`); keine eigenen Zeichenklassen
