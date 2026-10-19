@@ -606,8 +606,18 @@ export async function fordereBeschreibungsfreigabeAn(
       },
     });
     await legeNachrichtAn(tx, {
+      mandantId,
       empfaengerId,
       zweck: 'FREIGABE_CODE',
+      daten: {
+        freigabeId: freigabe.id,
+        art: 'BESCHREIBUNG',
+        titel,
+        version: v.nummer,
+        code,
+        gueltigBis: codeAblauf.toISOString(),
+        sha256,
+      },
       ...codeNachrichtText({ mandant: mandant.name, titel, code, codeAblauf, sha256 }),
     });
     protokoll.push({

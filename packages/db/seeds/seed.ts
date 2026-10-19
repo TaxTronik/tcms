@@ -1380,7 +1380,7 @@ async function main() {
       erstelltVon: leon.id,
     },
   });
-  await prisma.freigabe.create({
+  const freigabeV12 = await prisma.freigabe.create({
     data: {
       programmId: tw.programmId,
       art: 'BESCHREIBUNG',
@@ -1630,8 +1630,16 @@ async function main() {
   // Postausgang: Hinweis an die adressierte gesetzliche Vertreterin (Personen-ID, TS-06).
   await prisma.nachricht.create({
     data: {
+      mandantId: talwind.id,
       empfaengerId: jana.id,
+      empfaengerArt: 'KONTAKT',
       zweck: 'FREIGABE_ANGEFORDERT',
+      daten: {
+        freigabeId: freigabeV12.id,
+        art: 'BESCHREIBUNG',
+        titel: 'CMS-Beschreibung v1.2',
+        version: '1.2',
+      },
       betreff: 'Freigabe angefordert: CMS-Beschreibung v1.2',
       text: 'Im Portal wartet die CMS-Beschreibung v1.2 auf Ihre Freigabe. Den Bestätigungscode erhalten Sie beim Freigeben.',
       createdAt: zeit(utc(2026, 9, 30), 8, 46),

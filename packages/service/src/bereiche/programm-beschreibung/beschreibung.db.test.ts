@@ -210,6 +210,21 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
     expect(code).toMatch(/^\d{6}$/);
     expect(nachrichten[0]!.text).toContain(r.snapshotSha256);
     expect(nachrichten[0]!.text).not.toContain('Gesetzliche Vertretung Test');
+    // Strukturiert (Stufe 4): Mandant, Empfängerart, Vorlagendaten; Code nur in `code`.
+    expect(nachrichten[0]).toMatchObject({
+      mandantId: w.mandantA,
+      empfaengerArt: 'KONTAKT',
+      code,
+      daten: {
+        freigabeId: r.freigabeId,
+        art: 'BESCHREIBUNG',
+        titel: `CMS-Beschreibung v${version.nummer}`,
+        version: version.nummer,
+        gueltigBis: freigabe.codeAblauf!.toISOString(),
+        sha256: r.snapshotSha256,
+      },
+    });
+    expect(JSON.stringify(nachrichten[0]!.daten)).not.toContain(code!);
     // Kein Code in Antwort und Audit.
     expect(JSON.stringify(r)).not.toContain(code!);
     const audit = await auditZu(w, erste);

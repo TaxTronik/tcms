@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto';
 import { ENDPUNKT_LISTE, bodySha256 } from '@tcms/contract';
 import { mitTenant, type Tx } from '@tcms/db';
+import { legeNachrichtAn } from '@tcms/service';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Routen } from '../routen';
 import { registriereAlle } from '../routen/index';
@@ -44,15 +45,19 @@ describe.skipIf(!AKTIV)('Systemakteur über alle Endpunkte (Dienst + PostgreSQL)
   beforeAll(async () => {
     nachrichtId = await mitTenant(T, async (tx) => {
       await tx.mandant.create({ data: { id: M, name: 'System-Test GmbH', rechtsform: 'KapG' } });
-      const n = await tx.nachricht.create({
-        data: {
-          empfaengerId: randomUUID(),
-          zweck: 'FREIGABE_ANGEFORDERT',
-          betreff: 'B',
-          text: 'T',
+      return legeNachrichtAn(tx, {
+        mandantId: M,
+        empfaengerId: randomUUID(),
+        zweck: 'FREIGABE_ANGEFORDERT',
+        daten: {
+          freigabeId: 'ckfreigabe0000000000000a',
+          art: 'ZIELE',
+          titel: 'Ziele',
+          version: null,
         },
+        betreff: 'B',
+        text: 'T',
       });
-      return n.id;
     });
   });
 

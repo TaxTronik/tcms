@@ -42,16 +42,17 @@ enum MandantRolle {
 /// Primärschlüssel (tenant_id, id): Dieselbe ID kann in zwei Tenants bestehen;
 /// das Anlegen verrät nie, ob es sie in einem anderen Tenant gibt (Welle 2).
 model Mandant {
-  id         String                @db.Uuid
-  tenantId   String                @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
-  name       String
-  rechtsform String
-  datevNr    String?
-  aktiv      Boolean               @default(true)
-  createdAt  DateTime              @default(now())
-  updatedAt  DateTime              @default(now()) @updatedAt
-  programme  TcmsProgramm[]
-  kontakte   MandantKontaktRolle[]
+  id          String                @db.Uuid
+  tenantId    String                @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  name        String
+  rechtsform  String
+  datevNr     String?
+  aktiv       Boolean               @default(true)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @default(now()) @updatedAt
+  programme   TcmsProgramm[]
+  kontakte    MandantKontaktRolle[]
+  nachrichten Nachricht[]
 
   @@id([tenantId, id])
   @@index([tenantId, name])
@@ -831,20 +832,40 @@ enum NachrichtZweck {
   EREIGNIS_GEMELDET
 }
 
-/// Postausgang: Die kanzleikonsole holt offene Nachrichten ab und stellt sie
-/// zu. Empfänger nur als Personen-ID (TS-06). „Zugestellt" setzt
-/// `zugestelltAm` und leert `text` (er kann einen Bestätigungscode enthalten).
+/// Empfängerart einer Nachricht (wie `NACHRICHT_EMPFAENGER_ARTEN` im Vertrag):
+/// Mandantenkontakt (Mail-Outbox der kanzleikonsole) oder Kanzleiperson
+/// (In-App-Benachrichtigung). Folgt aus dem Zweck (CHECK in der Migration).
+enum NachrichtEmpfaengerArt {
+  KONTAKT
+  KANZLEI
+}
+
+/// Postausgang: Die kanzleikonsole holt offene Nachrichten mit ihrem
+/// Systemakteur ab und stellt sie zu (Stufe 4). Empfänger nur als Personen-ID
+/// (TS-06), Mandant als Anker, Vorlagendaten in `daten` (ohne Geheimnis),
+/// Bestätigungscode nur in `code`. „Zugestellt" (`zugestelltAm`) und
+/// „verworfen" (`verworfenAm`: Freigabe erledigt, Code abgelaufen oder ersetzt)
+/// leeren `text` und `code`; CHECKs in der Migration erzwingen das.
 model Nachricht {
-  id           String         @id @default(cuid())
-  tenantId     String         @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
-  empfaengerId String         @db.Uuid
-  zweck        NachrichtZweck
-  betreff      String
-  text         String
-  createdAt    DateTime       @default(now())
-  zugestelltAm DateTime?
+  id            String                 @id @default(cuid())
+  tenantId      String                 @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  mandantId     String                 @db.Uuid
+  mandant       Mandant                @relation(fields: [tenantId, mandantId], references: [tenantId, id])
+  empfaengerId  String                 @db.Uuid
+  empfaengerArt NachrichtEmpfaengerArt
+  zweck         NachrichtZweck
+  betreff       String
+  text          String
+  /// Vorlagendaten je Zweck ohne `code` (Vertrag `OffeneNachrichtSchema`).
+  daten         Json
+  /// Bestätigungscode (6 Ziffern), nur bei FREIGABE_CODE und nur solange offen.
+  code          String?
+  createdAt     DateTime               @default(now())
+  zugestelltAm  DateTime?
+  verworfenAm   DateTime?
 
   @@index([tenantId, zugestelltAm, createdAt])
+  @@index([tenantId, mandantId])
 }
 
 // ---------------------------------------------------------------------------

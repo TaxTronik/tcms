@@ -39,7 +39,7 @@ import {
   type PortalFreigebenErgebnis,
   type PortalKenntnisnahmeEingabe,
 } from '@tcms/contract';
-import type { Freigabe } from '@tcms/db';
+import type { Freigabe, Tx } from '@tcms/db';
 import { mitAudit, type Protokoll } from '../../audit';
 import { ladeKontext } from '../../kern/tcms-kontext';
 import type { DienstKontext } from '../../kontext';
@@ -266,6 +266,22 @@ export async function ladePortalFreigaben(
 // Portal: Code anfordern
 // ---------------------------------------------------------------------------
 
+/**
+ * Vorgelegte Version einer Beschreibungsfreigabe (Nummer und SHA-256 des
+ * eingefrorenen Inhalts) für die Vorlagendaten der Nachricht; sonst null.
+ */
+async function vorgelegteVersion(
+  tx: Tx,
+  f: Pick<Freigabe, 'art' | 'refId' | 'programmId'>,
+): Promise<{ version: string | null; sha256: string | null }> {
+  if (f.art !== 'BESCHREIBUNG') return { version: null, sha256: null };
+  const v = await tx.beschreibungVersion.findFirst({
+    where: { id: f.refId, programmId: f.programmId },
+    select: { nummer: true, snapshotSha256: true },
+  });
+  return { version: v?.nummer ?? null, sha256: v?.snapshotSha256 ?? null };
+}
+
 /** Prüft die Handlungsrechte für eine Freigabe mit Code (Reihenfolge = Fehlermeldung). */
 function pruefeFreigabeRecht(
   ctx: DienstKontext,
@@ -296,14 +312,7 @@ export async function fordereFreigabeCodeAn(
   pruefeFreigabeRecht(ctx, mandantId, rollen, f);
   const z = leseCodeZustand(f);
   if (istGesperrt(z)) throw new DienstFehler('KONFLIKT', GESPERRT);
-  let sha256: string | null = null;
-  if (f.art === 'BESCHREIBUNG') {
-    const v = await ctx.tx.beschreibungVersion.findFirst({
-      where: { id: f.refId, programmId: f.programmId },
-      select: { snapshotSha256: true },
-    });
-    sha256 = v?.snapshotSha256 ?? null;
-  }
+  const { version, sha256 } = await vorgelegteVersion(ctx.tx, f);
   // Neuer Code ersetzt den alten; die Fehlversuche dieser Freigabe bleiben stehen.
   const code = erzeugeCode();
   const codeAblauf = codeAblaufAb(new Date());
@@ -321,8 +330,18 @@ export async function fordereFreigabeCodeAn(
     });
     if (r.count !== 1) throw new DienstFehler('KONFLIKT', ERLEDIGT);
     await legeNachrichtAn(tx, {
+      mandantId,
       empfaengerId: ctx.akteur.id,
       zweck: 'FREIGABE_CODE',
+      daten: {
+        freigabeId: f.id,
+        art: f.art,
+        titel: f.titel,
+        version,
+        code,
+        gueltigBis: codeAblauf.toISOString(),
+        sha256,
+      },
       ...codeNachrichtText({ mandant: mandant.name, titel: f.titel, code, codeAblauf, sha256 }),
     });
     return {
@@ -634,6 +653,7 @@ export async function adressiereFreigabeNeu(
         : 'Die Kenntnisnahme richtet sich an einen Kontakt des Mandanten mit aktiver Rolle.',
     ]);
   }
+  const { version } = await vorgelegteVersion(ctx.tx, f);
   return mitAudit(ctx, async (tx) => {
     const r = await tx.freigabe.updateMany({
       where: { id: f.id, status: 'OFFEN', empfaengerId: f.empfaengerId },
@@ -641,8 +661,10 @@ export async function adressiereFreigabeNeu(
     });
     if (r.count !== 1) throw new DienstFehler('KONFLIKT', 'Diese Anforderung hat sich geändert.');
     await legeNachrichtAn(tx, {
+      mandantId,
       empfaengerId,
       zweck: 'FREIGABE_NEU_ADRESSIERT',
+      daten: { freigabeId: f.id, art: f.art, titel: f.titel, version },
       ...neuAdressiertText({ mandant: mandant.name, titel: f.titel, brauchtCode: code }),
     });
     return {

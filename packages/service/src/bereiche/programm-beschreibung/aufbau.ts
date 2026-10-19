@@ -442,12 +442,13 @@ export async function schreibeVersion1(
           `${i + 1}. ${z.text.trim()} (Wesentlichkeitsgrenze ${fmtEurGanz(z.wesentlichkeitEur)}, Risikoappetit ${KLASSE_LABEL[z.risikoappetit]})`,
       ),
     ].join('\n');
+    const titel = `Compliance-Ziele · ${tb.name}`;
     const fr = await tx.freigabe.create({
       data: {
         programmId,
         art: 'ZIELE',
         refId: tb.id,
-        titel: `Compliance-Ziele · ${tb.name}`,
+        titel,
         inhalt,
         angefordertVon: nutzer.id,
         angefordertAm: zeitpunkt,
@@ -456,8 +457,10 @@ export async function schreibeVersion1(
     });
     freigabeId = fr.id;
     await legeNachrichtAn(tx, {
+      mandantId: u.mandant.id,
       empfaengerId,
       zweck: 'FREIGABE_ANGEFORDERT',
+      daten: { freigabeId: fr.id, art: 'ZIELE', titel, version: null },
       betreff: 'Freigabe angefordert: Compliance-Ziele',
       text: `Im Portal warten die Compliance-Ziele der ${u.mandant.name} auf Ihre Freigabe. Den Bestätigungscode erhalten Sie beim Freigeben.`,
     });

@@ -1,12 +1,14 @@
 // =============================================================================
 // Postausgang (Nachricht): Der Dienst versendet keine E-Mails. Er legt
-// Nachrichten ab, die kanzleikonsole holt sie ab und stellt sie zu (Stufe 4).
-// Empfänger werden ausschließlich über die Personen-ID adressiert (TS-06), nie
-// über Namen oder Adressen; der Zweck steht als Enum in der Zeile.
+// Nachrichten ab, die kanzleikonsole holt sie ab und stellt sie mit eigenen
+// Vorlagen zu (Stufe 4). Empfänger werden ausschließlich über die Personen-ID
+// adressiert (TS-06), nie über Namen oder Adressen; Zweck, Mandant,
+// Empfängerart und die Vorlagendaten (`daten`) stehen strukturiert in der
+// Zeile, `betreff`/`text` bleiben als Rückfall.
 //
-// „Zugestellt" setzt `zugestelltAm` und leert den Text: Er kann einen
-// Bestätigungscode im Klartext enthalten, der nach der Zustellung nicht im
-// Tax-CMS liegen bleiben soll; der Vorgang steht im Audit (ohne Text).
+// Sparsamkeit: Ein Bestätigungscode steht im Klartext nur in `code` (und im
+// Rückfalltext), nie in `daten`. „Zugestellt" setzt `zugestelltAm` und leert
+// `code` und `text`; der Vorgang steht im Audit (ohne Text und Code).
 //
 // Abholen und Bestätigen ausschließlich durch den Systemakteur der
 // kanzleikonsole (`SystemKontext`, Stufe 4): Der Zustell-Worker ist keine
@@ -17,9 +19,16 @@
 
 import {
   DienstFehler,
+  NACHRICHT_EMPFAENGER,
   NACHRICHT_ZWECKE,
+  NachrichtDatenEreignisGemeldetSchema,
+  NachrichtDatenFreigabeAngefordertSchema,
+  NachrichtDatenFreigabeCodeSchema,
+  NachrichtDatenFreigabeNeuAdressiertSchema,
   NachrichtenOffenEingabeSchema,
   NachrichtZugestelltEingabeSchema,
+  OffeneNachrichtSchema,
+  type NachrichtEmpfaengerArt,
   type NachrichtenOffenEingabe,
   type NachrichtZugestelltEingabe,
   type NachrichtZugestelltErgebnis,
@@ -27,49 +36,109 @@ import {
   type OffeneNachricht,
 } from '@tcms/contract';
 import type { Prisma, Tx } from '@tcms/db';
+import type { z } from 'zod';
 import { mitAudit } from '../../audit';
 import type { SystemKontext } from '../../kontext';
 import { pruefeEingabe } from './gemeinsam';
 
-// Typprüfung: Der Datenbank-Enum ist genau die Liste des Vertrags.
+// Typprüfung: Die Datenbank-Enums sind genau die Listen des Vertrags.
 type Gleich<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 const _zweckePassen: Gleich<Prisma.NachrichtCreateInput['zweck'], NachrichtZweck> = true;
+const _artenPassen: Gleich<Prisma.NachrichtCreateInput['empfaengerArt'], NachrichtEmpfaengerArt> =
+  true;
 void _zweckePassen;
+void _artenPassen;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const STANDARD_NACHRICHTEN_LIMIT = 50;
 
+/** Schema der Vorlagendaten je Zweck (aus dem Vertrag). */
+const DATEN_SCHEMA: { readonly [Z in NachrichtZweck]: z.ZodType } = {
+  FREIGABE_ANGEFORDERT: NachrichtDatenFreigabeAngefordertSchema,
+  FREIGABE_CODE: NachrichtDatenFreigabeCodeSchema,
+  FREIGABE_NEU_ADRESSIERT: NachrichtDatenFreigabeNeuAdressiertSchema,
+  EREIGNIS_GEMELDET: NachrichtDatenEreignisGemeldetSchema,
+};
+
+/** Zweck und Vorlagendaten einer neuen Nachricht (bei FREIGABE_CODE mit Code). */
+export type NachrichtInhalt = {
+  [Z in NachrichtZweck]: { zweck: Z; daten: Extract<OffeneNachricht, { zweck: Z }>['daten'] };
+}[NachrichtZweck];
+
+export type NeueNachricht = NachrichtInhalt & {
+  /** Mandant, zu dem die Nachricht gehört (Anker im Tenant). */
+  mandantId: string;
+  empfaengerId: string;
+  /** Rückfalltext für Zustellwege ohne Vorlage. */
+  betreff: string;
+  text: string;
+  /** Fachliche Zeit der Anlage (Uhr der Operation); sonst Datenbankzeit. */
+  erstelltAm?: Date;
+};
+
 /**
  * Legt eine Nachricht im Postausgang ab (in der Transaktion der fachlichen
- * Änderung). Empfänger nur als Personen-ID; unbekannter Zweck oder keine UUID
- * ist ein Programmierfehler (fail closed).
+ * Änderung). Empfänger und Mandant nur als ID, die Empfängerart folgt aus dem
+ * Zweck (`NACHRICHT_EMPFAENGER`), die Vorlagendaten werden gegen den Vertrag
+ * geprüft. Ein Verstoß ist ein Programmierfehler (fail closed, Meldung ohne
+ * Werte). Der Code landet nur in der Spalte `code`, nie in `daten`.
  */
-export async function legeNachrichtAn(
-  tx: Tx,
-  n: {
-    empfaengerId: string;
-    zweck: NachrichtZweck;
-    betreff: string;
-    text: string;
-    /** Fachliche Zeit der Anlage (Uhr der Operation); sonst Datenbankzeit. */
-    erstelltAm?: Date;
-  },
-): Promise<string> {
+export async function legeNachrichtAn(tx: Tx, n: NeueNachricht): Promise<string> {
   if (!UUID.test(n.empfaengerId)) throw new Error('[service] Empfänger ohne gültige ID');
+  if (!UUID.test(n.mandantId)) throw new Error('[service] Nachricht ohne gültigen Mandanten');
   if (!(NACHRICHT_ZWECKE as readonly string[]).includes(n.zweck)) {
     throw new Error('[service] Unbekannter Nachrichtenzweck');
   }
+  const geprueft = DATEN_SCHEMA[n.zweck].safeParse(n.daten);
+  if (!geprueft.success) throw new Error('[service] Vorlagendaten verletzen den Vertrag');
+  const { code, ...ohneCode } = geprueft.data as Record<string, unknown> & { code?: string };
   const z = await tx.nachricht.create({
     data: {
+      mandantId: n.mandantId.toLowerCase(),
       empfaengerId: n.empfaengerId.toLowerCase(),
+      empfaengerArt: NACHRICHT_EMPFAENGER[n.zweck],
       zweck: n.zweck,
       betreff: n.betreff,
       text: n.text,
+      daten: ohneCode as Prisma.InputJsonValue,
+      code: n.zweck === 'FREIGABE_CODE' ? (code ?? null) : null,
       ...(n.erstelltAm ? { createdAt: n.erstelltAm } : {}),
     },
     select: { id: true },
   });
   return z.id;
+}
+
+/** Gespeicherte Zeile → offene Nachricht des Vertrags; Abweichung = Fehler (fail closed). */
+function alsOffeneNachricht(z: {
+  id: string;
+  mandantId: string;
+  empfaengerId: string;
+  empfaengerArt: string;
+  zweck: string;
+  betreff: string;
+  text: string;
+  daten: Prisma.JsonValue;
+  code: string | null;
+  createdAt: Date;
+}): OffeneNachricht {
+  const daten =
+    z.zweck === 'FREIGABE_CODE' && z.daten && typeof z.daten === 'object' && !Array.isArray(z.daten)
+      ? { ...z.daten, code: z.code }
+      : z.daten;
+  const n = OffeneNachrichtSchema.safeParse({
+    id: z.id,
+    mandantId: z.mandantId,
+    empfaengerId: z.empfaengerId,
+    empfaengerArt: z.empfaengerArt,
+    zweck: z.zweck,
+    betreff: z.betreff,
+    text: z.text,
+    erstelltAm: z.createdAt.toISOString(),
+    daten,
+  });
+  if (!n.success) throw new Error('[service] Gespeicherte Nachricht verletzt den Vertrag');
+  return n.data;
 }
 
 /**
@@ -95,18 +164,11 @@ export async function ladeOffeneNachrichten(
   const e = pruefeEingabe(NachrichtenOffenEingabeSchema, eingabe);
   const limit = e.limit ?? STANDARD_NACHRICHTEN_LIMIT;
   const zeilen = await ctx.tx.nachricht.findMany({
-    where: { zugestelltAm: null },
+    where: { zugestelltAm: null, verworfenAm: null },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     take: limit,
   });
-  const nachrichten: OffeneNachricht[] = zeilen.map((z) => ({
-    id: z.id,
-    empfaengerId: z.empfaengerId,
-    zweck: z.zweck,
-    betreff: z.betreff,
-    text: z.text,
-    erstelltAm: z.createdAt.toISOString(),
-  }));
+  const nachrichten = zeilen.map(alsOffeneNachricht);
   if (nachrichten.length === 0) return { nachrichten };
   return mitAudit(ctx, async () => ({
     wert: { nachrichten },
@@ -146,7 +208,7 @@ export async function bestaetigeNachrichtZustellung(
   // die andere findet unter der Zeilensperre keine offene Zeile mehr.
   const r = await ctx.tx.nachricht.updateMany({
     where: { id: zeile.id, zugestelltAm: null },
-    data: { zugestelltAm: ctx.uhr.jetzt(), text: '' },
+    data: { zugestelltAm: ctx.uhr.jetzt(), text: '', code: null },
   });
   if (r.count !== 1) return ergebnis;
   return mitAudit(ctx, async () => ({

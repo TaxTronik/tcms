@@ -589,6 +589,13 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
       tx.nachricht.findMany({ where: { empfaengerId: w.gv2, zweck: 'FREIGABE_NEU_ADRESSIERT' } }),
     );
     expect(n).toHaveLength(1);
+    const f = await freigabeZeile(id);
+    expect(n[0]).toMatchObject({
+      mandantId: w.mandantA,
+      empfaengerArt: 'KONTAKT',
+      code: null,
+      daten: { freigabeId: id, art: f.art, titel: f.titel, version: null },
+    });
     // Die frühere Empfängerin kann nichts mehr tun, die neue schon.
     expect((await fehlerVon(im(gv, (ctx) => fordereFreigabeCodeAn(ctx, fa(id))))).code).toBe(
       'NICHT_BERECHTIGT',

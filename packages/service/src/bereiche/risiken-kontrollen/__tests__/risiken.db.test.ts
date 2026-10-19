@@ -661,7 +661,12 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
           where: { empfaengerId: a.personen.gv, zweck: 'FREIGABE_ANGEFORDERT' },
         }),
       );
-      expect(n).not.toBeNull();
+      expect(n).toMatchObject({
+        mandantId: a.mandantId,
+        empfaengerArt: 'KONTAKT',
+        code: null,
+        daten: { freigabeId: ok.freigabeId, art: 'RISIKOAKZEPTANZ', titel: f.titel, version: null },
+      });
       const zweiteAnf = await fehlerVon(
         rufe(akt.bt, (ctx) =>
           risikoakzeptanzAnfordern(ctx, {

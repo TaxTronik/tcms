@@ -245,10 +245,14 @@ async function baueFixture(client: PrismaClient, tenant: string): Promise<Fixtur
       });
       const nachricht = await tx.nachricht.create({
         data: {
+          mandantId: mandant.id,
           empfaengerId: randomUUID(),
+          empfaengerArt: 'KONTAKT',
           zweck: 'FREIGABE_CODE',
           betreff: 'Betreff',
           text: 'Text',
+          daten: { freigabeId: freigabe.id },
+          code: '123456',
         },
       });
       await schreibeAudit(tx, {

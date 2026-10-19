@@ -41,25 +41,48 @@ describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
   const admin = () => kanzlei(w, randomUUID(), null, { admin: true });
   let ids: string[] = [];
 
+  /** Vorlagendaten je Zweck (gültig laut Vertrag). */
+  const datenAngefordert = (freigabeId = 'ckfreigabe0000000000000a') => ({
+    freigabeId,
+    art: 'ZIELE' as const,
+    titel: 'Compliance-Ziele · Umsatzsteuer',
+    version: null,
+  });
+  const datenCode = (code = '123456') => ({
+    freigabeId: 'ckfreigabe0000000000000b',
+    art: 'BESCHREIBUNG' as const,
+    titel: 'CMS-Beschreibung v1.2',
+    version: '1.2',
+    code,
+    gueltigBis: '2026-10-26T09:00:00.000Z',
+    sha256: 'a'.repeat(64),
+  });
+
   beforeAll(async () => {
     w = await baueWelt();
     zweite = zweiteVerbindung();
     ids = await inWelt(w, async (tx) => {
       const a = await legeNachrichtAn(tx, {
+        mandantId: w.mandantA,
         empfaengerId: w.gv,
         zweck: 'FREIGABE_CODE',
+        daten: datenCode(),
         betreff: 'B1',
         text: 'Code 123456',
       });
       const b = await legeNachrichtAn(tx, {
+        mandantId: w.mandantA,
         empfaengerId: w.tcb,
         zweck: 'FREIGABE_ANGEFORDERT',
+        daten: datenAngefordert(),
         betreff: 'B2',
         text: 'T2',
       });
       const c = await legeNachrichtAn(tx, {
-        empfaengerId: w.gv2,
+        mandantId: w.mandantB,
+        empfaengerId: w.gvB,
         zweck: 'FREIGABE_NEU_ADRESSIERT',
+        daten: { ...datenAngefordert(), art: 'KENNTNISNAHME' },
         betreff: 'B3',
         text: 'T3',
       });
@@ -70,40 +93,143 @@ describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
     await zweite?.$disconnect();
   });
 
-  it('Anlage nur mit Personen-ID und bekanntem Zweck (TS-06, fail closed)', async () => {
-    for (const n of [
-      { empfaengerId: 'Jana Weller', zweck: 'FREIGABE_CODE' },
-      { empfaengerId: `${randomUUID()}x`, zweck: 'FREIGABE_CODE' },
-      { empfaengerId: randomUUID(), zweck: 'UNBEKANNT' },
-    ]) {
-      await expect(
-        inWelt(w, (tx) => legeNachrichtAn(tx, { ...n, betreff: 'x', text: 'x' } as never)),
-      ).rejects.toThrow(/Empfänger|Nachrichtenzweck/);
+  it('Anlage nur mit Personen- und Mandanten-ID, bekanntem Zweck und gültigen Vorlagendaten (fail closed)', async () => {
+    const basis = {
+      mandantId: w.mandantA,
+      empfaengerId: randomUUID(),
+      zweck: 'FREIGABE_ANGEFORDERT',
+      daten: datenAngefordert(),
+      betreff: 'x',
+      text: 'x',
+    };
+    for (const [over, meldung] of [
+      [{ empfaengerId: 'Jana Weller' }, /Empfänger/],
+      [{ empfaengerId: `${randomUUID()}x` }, /Empfänger/],
+      [{ mandantId: 'Testmandant A GmbH' }, /Mandanten/],
+      [{ zweck: 'UNBEKANNT' }, /Nachrichtenzweck/],
+      [{ daten: { ...datenAngefordert(), titel: '' } }, /Vorlagendaten/],
+      [{ daten: { ...datenAngefordert(), name: 'Jana Weller' } }, /Vorlagendaten/],
+      [{ zweck: 'FREIGABE_CODE', daten: { ...datenCode(), code: '12345' } }, /Vorlagendaten/],
+      [{ zweck: 'FREIGABE_CODE', daten: datenAngefordert() }, /Vorlagendaten/],
+      [{ zweck: 'EREIGNIS_GEMELDET', daten: datenAngefordert() }, /Vorlagendaten/],
+    ] as const) {
+      const fehler = await inWelt(w, (tx) =>
+        legeNachrichtAn(tx, { ...basis, ...over } as never),
+      ).catch((e: unknown) => e as Error);
+      expect((fehler as Error).message, JSON.stringify(over)).toMatch(meldung);
+      // Meldung ohne Werte (kein Code, kein Name).
+      expect((fehler as Error).message).not.toMatch(/12345|Jana/);
     }
-    // Schreibweise der ID wird kanonisch gespeichert.
+    // Mandant eines anderen Tenants bzw. unbekannter Mandant: Fremdschlüssel (tenant_id, id).
+    await expect(
+      inWelt(w, (tx) => legeNachrichtAn(tx, { ...basis, mandantId: randomUUID() } as never)),
+    ).rejects.toThrow();
+    // Schreibweise der IDs wird kanonisch gespeichert; Empfängerart folgt aus dem Zweck.
     const id = randomUUID();
     const nid = await inWelt(w, (tx) =>
       legeNachrichtAn(tx, {
+        mandantId: w.mandantA.toUpperCase(),
         empfaengerId: id.toUpperCase(),
-        zweck: 'FREIGABE_ANGEFORDERT',
+        zweck: 'EREIGNIS_GEMELDET',
+        daten: {
+          ereignisId: 'ckereignis000000000000a',
+          nummer: '2026-E-0001',
+          titel: 'Neuer Marktplatz',
+          typ: 'Marktplatz',
+          gemeldetVonId: w.gv,
+        },
         betreff: 'K',
         text: 'K',
       }),
     );
     const z = await inWelt(w, (tx) => tx.nachricht.findUniqueOrThrow({ where: { id: nid } }));
-    expect(z.empfaengerId).toBe(id);
+    expect(z).toMatchObject({
+      empfaengerId: id,
+      mandantId: w.mandantA,
+      empfaengerArt: 'KANZLEI',
+      code: null,
+    });
     await inWelt(w, (tx) => tx.nachricht.delete({ where: { id: nid } }));
+  });
+
+  it('Code steht nur in der Spalte code, nie in daten', async () => {
+    const z = await inWelt(w, (tx) => tx.nachricht.findUniqueOrThrow({ where: { id: ids[0] } }));
+    expect(z.code).toBe('123456');
+    expect(z.empfaengerArt).toBe('KONTAKT');
+    expect(JSON.stringify(z.daten)).not.toContain('123456');
+    expect(z.daten).toEqual({
+      freigabeId: 'ckfreigabe0000000000000b',
+      art: 'BESCHREIBUNG',
+      titel: 'CMS-Beschreibung v1.2',
+      version: '1.2',
+      gueltigBis: '2026-10-26T09:00:00.000Z',
+      sha256: 'a'.repeat(64),
+    });
+  });
+
+  it('die Datenbank erzwingt Empfängerart, Codeformat und leeren Klartext nach der Zustellung', async () => {
+    const roh = (data: Record<string, unknown>) =>
+      inWelt(w, (tx) =>
+        tx.nachricht.create({
+          data: {
+            mandantId: w.mandantA,
+            empfaengerId: randomUUID(),
+            empfaengerArt: 'KONTAKT',
+            zweck: 'FREIGABE_ANGEFORDERT',
+            betreff: 'b',
+            text: 't',
+            daten: {},
+            ...data,
+          } as never,
+        }),
+      );
+    for (const [name, data] of [
+      ['Ereignis an Kontakt', { zweck: 'EREIGNIS_GEMELDET' }],
+      ['Freigabe an Kanzlei', { empfaengerArt: 'KANZLEI' }],
+      ['Code bei anderem Zweck', { code: '123456' }],
+      ['Code nicht sechs Ziffern', { zweck: 'FREIGABE_CODE', code: '12a456' }],
+      ['offene Code-Nachricht ohne Code', { zweck: 'FREIGABE_CODE' }],
+      ['daten kein Objekt', { daten: ['x'] }],
+      ['zugestellt mit Text', { zugestelltAm: new Date() }],
+      [
+        'verworfen mit Code',
+        { zweck: 'FREIGABE_CODE', code: '123456', text: '', verworfenAm: new Date() },
+      ],
+    ] as const) {
+      await expect(roh(data), name).rejects.toThrow();
+    }
+    await expect(
+      inWelt(w, (tx) =>
+        tx.nachricht.update({ where: { id: ids[0] }, data: { zugestelltAm: new Date() } }),
+      ),
+    ).rejects.toThrow();
   });
 
   it('liefert offene Nachrichten nach Alter, begrenzt; Abruf im Audit (Systemakteur erkennbar, ohne Text)', async () => {
     const r = await imSystem(system(w), (ctx) => ladeOffeneNachrichten(ctx, {}));
     expect(NachrichtenOffenSchema.parse(r)).toEqual(r);
     expect(r.nachrichten.map((n) => n.id)).toEqual(ids);
-    expect(r.nachrichten[0]).toMatchObject({
+    expect(r.nachrichten[0]).toEqual({
+      id: ids[0],
+      mandantId: w.mandantA,
       empfaengerId: w.gv,
+      empfaengerArt: 'KONTAKT',
       zweck: 'FREIGABE_CODE',
+      daten: datenCode(),
       betreff: 'B1',
       text: 'Code 123456',
+      erstelltAm: expect.any(String),
+    });
+    expect(r.nachrichten[1]).toMatchObject({
+      mandantId: w.mandantA,
+      empfaengerArt: 'KONTAKT',
+      zweck: 'FREIGABE_ANGEFORDERT',
+      daten: datenAngefordert(),
+    });
+    expect(r.nachrichten[2]).toMatchObject({
+      mandantId: w.mandantB,
+      zweck: 'FREIGABE_NEU_ADRESSIERT',
+      daten: { art: 'KENNTNISNAHME' },
     });
     const zwei = await imSystem(system(w), (ctx) => ladeOffeneNachrichten(ctx, { limit: 2 }));
     expect(zwei.nachrichten).toHaveLength(2);
@@ -199,6 +325,8 @@ describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
     const offen = await imSystem(a, (ctx) => ladeOffeneNachrichten(ctx, {}));
     expect(zeile.zugestelltAm).not.toBeNull();
     expect(zeile.text).toBe('');
+    expect(zeile.code).toBeNull();
+    expect(JSON.stringify(zeile.daten)).not.toContain('123456');
     expect(offen.nachrichten.map((n) => n.id)).not.toContain(ids[0]);
     expect(audit).toHaveLength(1);
     expect(JSON.stringify(audit[0]!.detail)).not.toContain('123456');

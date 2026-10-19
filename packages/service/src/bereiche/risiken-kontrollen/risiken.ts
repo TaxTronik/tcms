@@ -819,8 +819,10 @@ export async function risikoakzeptanzAnfordern(
       });
       // TS-06: Empfänger als Kontakt-ID; die kanzleikonsole stellt zu und löst Namen auf.
       await legeNachrichtAn(tx, {
+        mandantId,
         empfaengerId,
         zweck: 'FREIGABE_ANGEFORDERT',
+        daten: { freigabeId: f.id, art: 'RISIKOAKZEPTANZ', titel, version: null },
         betreff: `Freigabe angefordert: ${titel}`,
         text: `Im Portal wartet eine Risikoakzeptanz (${risiko.code}) auf Ihre Entscheidung. Den Bestätigungscode erhalten Sie beim Freigeben.`,
         erstelltAm: zeitpunkt,

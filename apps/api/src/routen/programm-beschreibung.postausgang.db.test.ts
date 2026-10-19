@@ -3,12 +3,23 @@
 // und fremde IDs → 404, tenantweit (RLS), Abruf und Zustellung im Audit mit
 // erkennbarem Systemakteur, keine Codes im Log.
 import { mitTenant } from '@tcms/db';
+import { legeNachrichtAn } from '@tcms/service';
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { json, SYSTEM_ID } from '../__tests__/hilfen';
 import { akteure, legeMandantenAn, neueApiWelt, ok, senden } from './programm-beschreibung.testapp';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
+// Nur der Form nach: Diese Nachricht hängt an keiner echten Freigabe.
+const CODE_DATEN = {
+  freigabeId: 'ckfreigabe0000000000000b',
+  art: 'BESCHREIBUNG' as const,
+  titel: 'CMS-Beschreibung v1.0',
+  version: '1.0',
+  code: '123456',
+  gueltigBis: '2099-01-01T00:00:00.000Z',
+  sha256: null,
+};
 const w = neueApiWelt();
 const a = akteure(w);
 
@@ -16,18 +27,16 @@ describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
   let id = '';
   beforeAll(async () => {
     await legeMandantenAn(w);
-    id = (
-      await mitTenant(w.T, (tx) =>
-        tx.nachricht.create({
-          data: {
-            empfaengerId: w.GV,
-            zweck: 'FREIGABE_CODE',
-            betreff: 'Betreff',
-            text: 'Code 123456',
-          },
-        }),
-      )
-    ).id;
+    id = await mitTenant(w.T, (tx) =>
+      legeNachrichtAn(tx, {
+        mandantId: w.A,
+        empfaengerId: w.GV,
+        zweck: 'FREIGABE_CODE',
+        daten: CODE_DATEN,
+        betreff: 'Betreff',
+        text: 'Code 123456',
+      }),
+    );
   });
 
   it('nur der Systemakteur: Personen (auch Admin/Partner) und Kontakte → 404, kein Audit', async () => {
@@ -63,8 +72,11 @@ describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
       nachrichten: [
         {
           id,
+          mandantId: w.A,
           empfaengerId: w.GV,
+          empfaengerArt: 'KONTAKT',
           zweck: 'FREIGABE_CODE',
+          daten: CODE_DATEN,
           betreff: 'Betreff',
           text: 'Code 123456',
           erstelltAm: expect.any(String),
@@ -82,6 +94,7 @@ describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
     // Zugestellt: Text (Code) geleert, Zustellung vermerkt.
     const zeile = await mitTenant(w.T, (tx) => tx.nachricht.findUniqueOrThrow({ where: { id } }));
     expect(zeile.text).toBe('');
+    expect(zeile.code).toBeNull();
     expect(zeile.zugestelltAm).not.toBeNull();
     const audit = await mitTenant(w.T, (tx) =>
       tx.auditEvent.findMany({
@@ -118,13 +131,21 @@ describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
     expect(
       (await senden(w, 'POST', '/v1/nachrichten/n123/zugestellt', a.system(), { x: 1 })).status,
     ).toBe(400);
-    const zweite = (
-      await mitTenant(w.T, (tx) =>
-        tx.nachricht.create({
-          data: { empfaengerId: w.TCB, zweck: 'FREIGABE_ANGEFORDERT', betreff: 'B', text: 'T' },
-        }),
-      )
-    ).id;
+    const zweite = await mitTenant(w.T, (tx) =>
+      legeNachrichtAn(tx, {
+        mandantId: w.A,
+        empfaengerId: w.TCB,
+        zweck: 'FREIGABE_ANGEFORDERT',
+        daten: {
+          freigabeId: 'ckfreigabe0000000000000a',
+          art: 'ZIELE',
+          titel: 'Ziele',
+          version: null,
+        },
+        betreff: 'B',
+        text: 'T',
+      }),
+    );
     const fremd = a.system(randomUUID());
     expect(await ok(await senden(w, 'GET', '/v1/nachrichten/offen', fremd))).toEqual({
       nachrichten: [],

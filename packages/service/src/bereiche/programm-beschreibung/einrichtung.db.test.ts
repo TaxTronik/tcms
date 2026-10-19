@@ -285,6 +285,12 @@ describe.skipIf(!AKTIV)('Einrichtungsassistent (Service, PostgreSQL)', () => {
       codeHash: null,
     });
     expect(nachrichten.map((n) => n.zweck)).toEqual(['FREIGABE_ANGEFORDERT']);
+    expect(nachrichten[0]).toMatchObject({
+      mandantId: m.mandantId,
+      empfaengerArt: 'KONTAKT',
+      code: null,
+      daten: { freigabeId: r.freigabeId, art: 'ZIELE', titel: freigabe.titel, version: null },
+    });
     expect(kette.gueltig).toBe(true);
     const aktionen = audit.map((a) => a.aktion);
     expect(aktionen).toContain('tcms.programm.version1_angelegt');

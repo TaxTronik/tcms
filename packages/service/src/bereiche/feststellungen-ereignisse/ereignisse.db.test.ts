@@ -785,7 +785,20 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
         tx.nachricht.findFirstOrThrow({ where: { betreff: { contains: r.nummer } } }),
       );
       // TS-06: adressiert über die ID, nie über den mitgelieferten Namen.
-      expect(n).toMatchObject({ empfaengerId: w.p.hb, zweck: 'EREIGNIS_GEMELDET' });
+      expect(n).toMatchObject({
+        empfaengerId: w.p.hb,
+        zweck: 'EREIGNIS_GEMELDET',
+        mandantId: w.mandant,
+        empfaengerArt: 'KANZLEI',
+        code: null,
+        daten: {
+          ereignisId: r.id,
+          nummer: r.nummer,
+          titel: eingabe.titel,
+          typ: expect.any(String),
+          gemeldetVonId: a.id,
+        },
+      });
       expect(JSON.stringify(n)).not.toContain('Leon Brandt');
     }
     // Ohne genannte Person entsteht keine Nachricht (das Ereignis steht im Eingang).

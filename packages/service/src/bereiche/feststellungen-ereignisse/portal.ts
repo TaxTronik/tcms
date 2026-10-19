@@ -109,8 +109,16 @@ export async function meldeEreignis(
     // Nachricht: Das Ereignis steht im Ereigniseingang.
     if (x.benachrichtigen) {
       await legeNachrichtAn(tx, {
+        mandantId,
         empfaengerId: x.benachrichtigen.id,
         zweck: 'EREIGNIS_GEMELDET',
+        daten: {
+          ereignisId: e.id,
+          nummer: e.nummer,
+          titel: x.titel,
+          typ: typTitel,
+          gemeldetVonId: ctx.akteur.id,
+        },
         betreff: `Neues Ereignis ${e.nummer}: ${typTitel}`,
         text: `${akteurName} hat für ${mandant.name} am ${fmtDatumZeit(zeitpunkt)} ein Ereignis gemeldet: „${x.titel}". Bitte im Ereigniseingang triagieren.`,
         erstelltAm: zeitpunkt,
