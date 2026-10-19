@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Akteur } from '@tcms/contract';
 import {
   aktiveRollen,
+  auswirkungBeimAnlegen,
   istGesetzlicherVertreter,
   kannBearbeiten,
   kannDurchfuehren,
@@ -300,6 +301,23 @@ describe('Rechtematrix (ADR 0001 §5) für Mandant M1', () => {
   it('Mandanten-ID wird ohne Rücksicht auf Groß-/Kleinschreibung verglichen', () => {
     expect(kannBearbeiten(ADMIN_BT, M1.toUpperCase())).toBe(true);
     expect(kannLesen(GV, M1.toUpperCase(), ROLLEN)).toBe(true);
+  });
+});
+
+// ------------------------------------------------------------------- TS-04 --
+
+describe('Steuerliche Auswirkung beim Anlegen (TS-04)', () => {
+  it('„NEIN" nur mit Würdigungsrecht, sonst „UNKLAR" (zu würdigen)', () => {
+    expect(auswirkungBeimAnlegen(BT_ZUST, M1, 'NEIN')).toBe('NEIN');
+    expect(auswirkungBeimAnlegen(ADMIN_BT, M1, 'NEIN')).toBe('NEIN');
+    for (const a of [HB, BT_OHNE_ZUST, ADMIN_OHNE_BT, CLI_BT_OHNE_ROLLE, ADMIN_OHNE_CLI, GV]) {
+      expect(auswirkungBeimAnlegen(a, M1, 'NEIN')).toBe('UNKLAR');
+    }
+    expect(auswirkungBeimAnlegen(BT_ZUST, M2, 'NEIN')).toBe('UNKLAR');
+  });
+  it('„JA" und „UNKLAR" bleiben unverändert', () => {
+    expect(auswirkungBeimAnlegen(HB, M1, 'JA')).toBe('JA');
+    expect(auswirkungBeimAnlegen(HB, M1, 'UNKLAR')).toBe('UNKLAR');
   });
 });
 

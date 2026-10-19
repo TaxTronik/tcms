@@ -38,7 +38,7 @@ vi.mock('next/navigation', () => ({
 
 const { erzeugeCookie } = await import('../sitzung-regeln');
 const { codeAnfordern, kenntnisnehmen } = await import('./freigaben');
-const { entscheideP153 } = await import('./feststellungen');
+const { entscheideP153, erfasseFeststellung } = await import('./feststellungen');
 const { brauchtPortal } = await import('../sitzung');
 
 const als = (personId: string) => {
@@ -147,6 +147,35 @@ describe.skipIf(!AKTIV)('Demo-Actions gegen PostgreSQL', () => {
       tx.feststellung.findUniqueOrThrow({ where: { id: p153Feststellung } }),
     );
     expect(f.p153EntschiedenVon).toBe(DEMO_IDS.anna);
+  });
+
+  it('TS-04: „keine Auswirkung" setzt nur eine Berufsträgerin; sonst „unklar"', async () => {
+    const programm = await imDemo((tx) =>
+      tx.tcmsProgramm.findFirstOrThrow({ where: { mandantId: DEMO_IDS.talwind } }),
+    );
+    const eingabe = (titel: string) =>
+      form({
+        programmId: programm.id,
+        titel,
+        sachverhalt: 'Rundungsdifferenz in der OSS-Meldung, Betrag unter Toleranz.',
+        quelle: 'STICHPROBE',
+        quelleText: 'Stichprobe Oktober',
+        klasse: 'HINWEIS',
+        schwere: 'GERING',
+        auswirkung: 'NEIN',
+      });
+    als(DEMO_IDS.leon);
+    expect(await erfasseFeststellung(null, eingabe('Rundung OSS (Bearbeitung)'))).toMatchObject({
+      ok: expect.stringContaining('unklar'),
+    });
+    als(DEMO_IDS.anna);
+    await erfasseFeststellung(null, eingabe('Rundung OSS (Berufsträgerin)'));
+    const [leon, anna] = await imDemo(async (tx) => [
+      await tx.feststellung.findFirstOrThrow({ where: { titel: 'Rundung OSS (Bearbeitung)' } }),
+      await tx.feststellung.findFirstOrThrow({ where: { titel: 'Rundung OSS (Berufsträgerin)' } }),
+    ]);
+    expect(leon.auswirkung).toBe('UNKLAR');
+    expect(anna.auswirkung).toBe('NEIN');
   });
 
   it('Mandantenkontakt mit deaktivierter Rolle kommt nicht ins Portal', async () => {

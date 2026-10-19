@@ -30,6 +30,15 @@ export function kannWuerdigen(a: Akteur, m: MandantRef): boolean {
   return R.kannWuerdigen(mitBezug(a, m.id), m.id);
 }
 
+/** TS-04: „NEIN" beim Anlegen nur mit Würdigungsrecht, sonst „UNKLAR". */
+export function auswirkungBeimAnlegen(
+  a: Akteur,
+  m: MandantRef,
+  angegeben: R.Auswirkung,
+): R.Auswirkung {
+  return R.auswirkungBeimAnlegen(mitBezug(a, m.id), m.id, angegeben);
+}
+
 export function kannDurchfuehren(
   a: Akteur,
   k: R.KontrollZustaendigkeit,

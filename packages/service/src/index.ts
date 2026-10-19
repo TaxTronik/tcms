@@ -24,6 +24,7 @@ export { mitAudit, type Protokoll } from './audit';
 export { ladeKontaktRollen } from './rollen';
 export {
   aktiveRollen,
+  auswirkungBeimAnlegen,
   gleicheId,
   istBerufstraeger,
   istGesetzlicherVertreter,
@@ -37,6 +38,7 @@ export {
   kannWuerdigen,
   mandantBezug,
   zweitePerson,
+  type Auswirkung,
   type Entscheidung,
   type KontaktRolle,
   type KontrollZustaendigkeit,

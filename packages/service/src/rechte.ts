@@ -122,6 +122,21 @@ export function kannWuerdigen(a: Akteur, mandantId: string): boolean {
   return a.istAdmin || bezug.zustaendigBerufstraeger;
 }
 
+export type Auswirkung = 'JA' | 'NEIN' | 'UNKLAR';
+
+/**
+ * Steuerliche Auswirkung beim Anlegen einer Feststellung (TS-04): „NEIN" schließt
+ * den §-153-Pfad aus und ist damit eine Würdigungsentscheidung. Ohne
+ * `kannWuerdigen` wird die Feststellung als „UNKLAR" (zu würdigen) angelegt.
+ */
+export function auswirkungBeimAnlegen(
+  a: Akteur,
+  mandantId: string,
+  angegeben: Auswirkung,
+): Auswirkung {
+  return angegeben === 'NEIN' && !kannWuerdigen(a, mandantId) ? 'UNKLAR' : angegeben;
+}
+
 /**
  * Vertrauliche Feststellungen (Fachkonzept §13) nur für Beteiligte: Admin,
  * zuständige:r Berufsträger:in, Hauptbearbeitung und die beteiligten Personen

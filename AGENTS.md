@@ -55,7 +55,10 @@ für KI-Werkzeuge.
    Ausblenden. Gesperrte Bedienelemente bleiben sichtbar und erklären per
    Tooltip, warum sie gesperrt sind.
 5. Die §-153-Würdigung entscheidet ausschließlich ein Berufsträger. Die vier
-   Optionen sind gleichrangig, ohne Vorauswahl und ohne Empfehlung.
+   Optionen sind gleichrangig, ohne Vorauswahl und ohne Empfehlung. Auch die
+   Einstufung „keine steuerliche Auswirkung" beim Anlegen ist eine
+   Würdigungsentscheidung: ohne `kannWuerdigen` entsteht die Feststellung als
+   „unklar" (`auswirkungBeimAnlegen`, TS-04).
 6. Historische Stichtage (`?stand=YYYY-MM-DD`) sind schreibgeschützt.
    Mutationen sind dort deaktiviert.
 7. Keine KI-Entscheidungen. Vorschläge (z. B. Risikovorschlag aus dem

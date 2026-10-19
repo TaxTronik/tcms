@@ -21,6 +21,7 @@ import {
 } from '../durchfuehrung-daten';
 import type { Ergebnis } from '../ergebnis';
 import { naechsteFeststellungsnummer } from '../nummern';
+import { auswirkungBeimAnlegen } from '../berechtigung';
 import { handelnde } from '../demo';
 import { brauchtKanzlei } from '../sitzung';
 import { heute } from '../zeit';
@@ -96,7 +97,12 @@ export async function gegenzeichneDurchfuehrung(_prev: Ergebnis, fd: FormData): 
         .filter((v): v is string => typeof v === 'string' && erlaubt.has(v));
       if (risikoIds.length === 0)
         return { fehler: 'Feststellung unvollständig: mindestens ein betroffenes Risiko wählen.' };
-      inline = { ...p.data, risikoIds };
+      // TS-04: „keine Auswirkung" nur mit Würdigungsrecht, sonst „unklar" (zu würdigen).
+      inline = {
+        ...p.data,
+        fAuswirkung: auswirkungBeimAnlegen(nutzer, { id: d.mandantId }, p.data.fAuswirkung),
+        risikoIds,
+      };
     }
 
     const nummer = await mitAudit(nutzer, async (tx, zeitpunkt) => {

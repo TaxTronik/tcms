@@ -25,7 +25,13 @@ import {
   naechsteWiedervorlageNr,
   p153Abschliessend,
 } from '../feststellungen-daten';
-import { kannBearbeiten, kannWuerdigen, mitBezug, zweitePerson } from '../berechtigung';
+import {
+  auswirkungBeimAnlegen,
+  kannBearbeiten,
+  kannWuerdigen,
+  mitBezug,
+  zweitePerson,
+} from '../berechtigung';
 import { brauchtKanzlei } from '../sitzung';
 import { heute, jetzt } from '../zeit';
 
@@ -738,7 +744,10 @@ export async function erfasseFeststellung(_prev: Ergebnis, fd: FormData): Promis
     if (!d) return { fehler: 'Die gewählte Durchführung gehört nicht zu diesem Mandanten.' };
     durchfuehrungId = d.id;
   }
-  const { titel, sachverhalt, quelle, quelleText, klasse, schwere, auswirkung } = p.data;
+  const { titel, sachverhalt, quelle, quelleText, klasse, schwere } = p.data;
+  // TS-04: „keine Auswirkung" ist eine Würdigungsentscheidung (nur Berufsträger:innen).
+  const auswirkung = auswirkungBeimAnlegen(n, programm.mandant, p.data.auswirkung);
+  const herabgestuft = auswirkung !== p.data.auswirkung;
   const nummer = await mitAudit(n, async (tx, zeitpunkt) => {
     const nr = await naechsteFeststellungsnummer(tx, programm.id, zeitpunkt.getUTCFullYear());
     const f = await tx.feststellung.create({
@@ -766,10 +775,20 @@ export async function erfasseFeststellung(_prev: Ergebnis, fd: FormData): Promis
         objektTyp: 'Feststellung',
         objektId: f.id,
         programmId: programm.id,
-        detail: { nummer: nr, quelle: quelleText, manuell: true, auswirkung },
+        detail: {
+          nummer: nr,
+          quelle: quelleText,
+          manuell: true,
+          auswirkung,
+          ...(herabgestuft ? { auswirkungAngegeben: p.data.auswirkung } : {}),
+        },
       },
     };
   });
   aktualisiereMandant(programm.mandantId);
-  return { ok: `Feststellung ${nummer} erfasst.` };
+  return {
+    ok: herabgestuft
+      ? `Feststellung ${nummer} erfasst. Die steuerliche Auswirkung „nein“ stufen nur Berufsträger:innen ein; sie ist als „unklar“ zur Würdigung erfasst.`
+      : `Feststellung ${nummer} erfasst.`,
+  };
 }

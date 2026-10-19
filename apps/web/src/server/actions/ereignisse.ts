@@ -16,7 +16,7 @@ import {
   legeAusserplanmaessigeDurchfuehrungAn,
   naechsteFeststellungsnummer,
 } from '../feststellungen-daten';
-import { kannBearbeiten, zweitePerson } from '../berechtigung';
+import { auswirkungBeimAnlegen, kannBearbeiten, zweitePerson } from '../berechtigung';
 import { brauchtKanzlei } from '../sitzung';
 import { heute, jetzt } from '../zeit';
 
@@ -299,7 +299,8 @@ export async function legeFolgenAn(_prev: Ergebnis, fd: FormData): Promise<Ergeb
             ereignisId: e.id,
             klasse: fs.klasse,
             schwere: fs.schwere,
-            auswirkung: fs.auswirkung,
+            // TS-04: „keine Auswirkung" nur mit Würdigungsrecht, sonst „unklar".
+            auswirkung: auswirkungBeimAnlegen(n, { id: mandantId }, fs.auswirkung),
             status: 'ERFASST',
             erfasstVon: n.id,
             erfasstAm: zeitpunkt,
