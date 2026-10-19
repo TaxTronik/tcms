@@ -290,7 +290,8 @@ describe.skipIf(!AKTIV)('Lebensdauer der Code-Nachrichten (Service, PostgreSQL)'
         tx.nachricht.findMany({ where: { zweck: 'FREIGABE_CODE' }, select: { text: true } }),
       )
     )
-      .map((n) => /(\d{6})/.exec(n.text)?.[1])
+      // Nur der Code selbst (wie die übrigen Tests); Titel können Ziffern enthalten.
+      .map((n) => /Bestätigungscode: (\d{6})/.exec(n.text)?.[1])
       .filter((c): c is string => !!c);
     const audit = ohneIds(
       await inWelt(w, (tx) =>
