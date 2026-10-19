@@ -27,9 +27,9 @@ import { FormDialog } from '@/components/feststellungen/dialog';
 import { FeststellungFilter } from '@/components/feststellungen/filter';
 import { erfasseFeststellung } from '@/server/actions/feststellungen';
 import {
-  istBeteiligt,
   kontrollCode,
   ladeFeststellungListe,
+  type FeststellungListenZeile,
   type MassnahmeZeile,
 } from '@/server/feststellungen-daten';
 import { personKurzname } from '@/server/kontext';
@@ -66,7 +66,7 @@ export default async function FeststellungenSeite({
   const { id } = await params;
   const sp = await searchParams;
   const seite = await ladeStaffSeite(id, sp);
-  const { ctx, basis, mitStand, nutzer } = seite;
+  const { ctx, basis, mitStand } = seite;
 
   if (!ctx.programm) {
     return (
@@ -79,51 +79,36 @@ export default async function FeststellungenSeite({
     );
   }
 
-  const zusatz = await ladeFeststellungListe(ctx.programm.id, ctx.stand);
-  const darfSehen = (fid: string) => {
-    const f = ctx.feststellungen.find((x) => x.id === fid);
-    const z = zusatz.get(fid);
-    if (!f || !z) return false;
-    if (!f.vertraulich) return true;
-    return istBeteiligt(
-      nutzer,
-      {
-        erfasstVon: z.erfasstVon,
-        p153EntschiedenVon: z.p153EntschiedenVon,
-        massnahmenVerantwortlich: z.massnahmen.map((m) => m.verantwortlich),
-      },
-      ctx.mandant.id,
-    );
-  };
+  // Liste aus dem Service: vertrauliche Feststellungen sind für Nicht-Beteiligte maskiert.
+  const liste: FeststellungListenZeile[] = await ladeFeststellungListe(id, seite.standIso);
 
   const fStatus = eins(sp['status']);
   const fKlasse = eins(sp['klasse']);
   const fQuelle = eins(sp['quelle']);
   const fP153 = eins(sp['p153']) === '1';
-  const gefiltert = ctx.feststellungen.filter((f) => {
+  const gefiltert = liste.filter((f) => {
     if (fStatus === 'offen' && (f.status === 'GESCHLOSSEN' || f.status === 'VERWORFEN'))
       return false;
     if (fStatus && fStatus !== 'offen' && f.status !== fStatus) return false;
-    if (fKlasse && f.klasse !== fKlasse) return false;
-    if (fQuelle && f.quelle !== fQuelle) return false;
-    if (fP153 && !f.p153Offen) return false;
+    // Maskierte Einträge haben keine Klasse, Quelle oder §-153-Angaben.
+    if (fKlasse && (f.maskiert || f.klasse !== fKlasse)) return false;
+    if (fQuelle && (f.maskiert || f.quelle !== fQuelle)) return false;
+    if (fP153 && (f.maskiert || !f.p153Offen)) return false;
     return true;
   });
 
-  const offen = ctx.feststellungen.filter(
-    (f) => f.status !== 'GESCHLOSSEN' && f.status !== 'VERWORFEN',
-  ).length;
-  const p153Offen = ctx.feststellungen.filter((f) => f.p153Offen).length;
+  const offen = liste.filter((f) => f.status !== 'GESCHLOSSEN' && f.status !== 'VERWORFEN').length;
+  const p153Offen = liste.filter((f) => !f.maskiert && f.p153Offen).length;
 
   // Maßnahmen-Übersicht (offene Maßnahmen offener Feststellungen, nach Frist).
-  const massnahmen: (MassnahmeZeile & { nummer: string; sichtbar: boolean })[] = [];
+  type Zeile = Pick<MassnahmeZeile, 'id' | 'feststellungId' | 'wiedervorlageNr' | 'frist'> &
+    Partial<Pick<MassnahmeZeile, 'beschreibung' | 'verantwortlich'>> & { nummer: string };
+  const massnahmen: Zeile[] = [];
   let erledigtGesamt = 0;
-  for (const f of ctx.feststellungen) {
-    const z = zusatz.get(f.id);
-    if (!z || f.status === 'VERWORFEN') continue;
-    for (const m of z.massnahmen) {
-      if (m.status === 'OFFEN')
-        massnahmen.push({ ...m, nummer: f.nummer, sichtbar: darfSehen(f.id) });
+  for (const f of liste) {
+    if (f.status === 'VERWORFEN') continue;
+    for (const m of f.massnahmen) {
+      if (m.status === 'OFFEN') massnahmen.push({ ...m, nummer: f.nummer });
       else erledigtGesamt++;
     }
   }
@@ -154,7 +139,7 @@ export default async function FeststellungenSeite({
         'Nummer wird automatisch vergeben (F-Jahr-lfd. Nr.). Bei steuerlicher Auswirkung „ja“ oder „unklar“ startet der §-153-Pfad.'
       }
       action={erfasseFeststellung}
-      felder={{ programmId: ctx.programm.id }}
+      felder={{ mandantId: id }}
       bestaetigen="Erfassen"
       breit
       disabled={!seite.darfBearbeiten}
@@ -355,7 +340,7 @@ export default async function FeststellungenSeite({
           <Leerzustand
             icon="FileCheck"
             text={
-              ctx.feststellungen.length === 0
+              liste.length === 0
                 ? 'Noch keine Feststellungen erfasst.'
                 : 'Keine Feststellung entspricht den Filtern.'
             }
@@ -382,8 +367,7 @@ export default async function FeststellungenSeite({
               <tbody>
                 {gefiltert.map((f) => {
                   const href = mitStand(`${basis}/feststellungen/${f.id}`);
-                  const z = zusatz.get(f.id);
-                  if (!darfSehen(f.id)) {
+                  if (f.maskiert) {
                     return (
                       <tr key={f.id}>
                         <td style={ZELLE}>
@@ -410,7 +394,7 @@ export default async function FeststellungenSeite({
                         : null;
                   const ueberfaellig =
                     f.aeltesteFrist && tageZwischen(ctx.stand, f.aeltesteFrist) < 0;
-                  const gesamt = f.massnahmen;
+                  const gesamt = f.massnahmenGesamt;
                   return (
                     <tr key={f.id} className="row-link">
                       <td style={ZELLE}>
@@ -435,7 +419,7 @@ export default async function FeststellungenSeite({
                             <VertraulichBadge />
                           </span>
                         ) : null}
-                        {z?.verwerfenOffen ? (
+                        {f.verwerfenOffen ? (
                           <span
                             style={{ marginLeft: 6 }}
                             className="badge-yellow"
@@ -471,9 +455,9 @@ export default async function FeststellungenSeite({
                       <td style={{ ...ZELLE, maxWidth: 200 }}>
                         <P153Badge
                           erforderlich={p153Erforderlich(f.auswirkung) && f.status !== 'VERWORFEN'}
-                          entscheidung={z?.p153Entscheidung ?? null}
-                          am={z?.p153EntschiedenAm ?? null}
-                          frist={z?.p153Frist ?? null}
+                          entscheidung={f.p153?.entscheidung ?? null}
+                          am={f.p153?.am ?? null}
+                          frist={f.p153?.frist ?? null}
                         />
                       </td>
                       <td className="td-num" style={{ ...ZELLE, whiteSpace: 'nowrap' }}>
@@ -517,13 +501,11 @@ export default async function FeststellungenSeite({
         )}
         <div className="card-footer">
           <span>
-            {ctx.feststellungen.length} Feststellungen gesamt · {offen} offen · {p153Offen}{' '}
-            §-153-Würdigung{p153Offen === 1 ? '' : 'en'} offen
-            {gefiltert.length !== ctx.feststellungen.length
-              ? ` · ${gefiltert.length} angezeigt`
-              : ''}
+            {liste.length} Feststellungen gesamt · {offen} offen · {p153Offen} §-153-Würdigung
+            {p153Offen === 1 ? '' : 'en'} offen
+            {gefiltert.length !== liste.length ? ` · ${gefiltert.length} angezeigt` : ''}
           </span>
-          {gefiltert.length !== ctx.feststellungen.length ? (
+          {gefiltert.length !== liste.length ? (
             <Link href={mitStand(`${basis}/feststellungen`)} className="text-muted">
               Alle anzeigen
             </Link>
@@ -566,7 +548,7 @@ export default async function FeststellungenSeite({
                         </Link>
                       </td>
                       <td className="text-sm">
-                        {m.sichtbar ? (
+                        {m.beschreibung !== undefined ? (
                           m.beschreibung
                         ) : (
                           <span className="text-muted">vertraulich</span>
@@ -582,7 +564,9 @@ export default async function FeststellungenSeite({
                         </Link>
                       </td>
                       <td className="text-sm">
-                        {m.sichtbar ? personKurzname(ctx, m.verantwortlich) : '—'}
+                        {m.verantwortlich !== undefined
+                          ? personKurzname(ctx, m.verantwortlich)
+                          : '—'}
                       </td>
                       <td className="text-sm" style={{ whiteSpace: 'nowrap' }}>
                         {fmtDatum(m.frist)}{' '}

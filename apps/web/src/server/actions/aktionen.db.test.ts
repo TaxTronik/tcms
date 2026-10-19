@@ -128,7 +128,9 @@ describe.skipIf(!AKTIV)('Demo-Actions gegen PostgreSQL', () => {
 
   it('§-153: Berufsträger ohne Zuständigkeit und Bearbeitung abgewiesen, zuständige BT entscheidet', async () => {
     const eingabe = form({
+      mandantId: DEMO_IDS.talwind,
       id: p153Feststellung,
+      bisher: '',
       entscheidung: 'WEITERE_KLAERUNG',
       begruendung: 'Sachverhalt mit dem Mandanten klären, Unterlagen zur Lieferschwelle anfordern.',
       frist: '2026-12-31',
@@ -150,12 +152,9 @@ describe.skipIf(!AKTIV)('Demo-Actions gegen PostgreSQL', () => {
   });
 
   it('TS-04: „keine Auswirkung" setzt nur eine Berufsträgerin; sonst „unklar"', async () => {
-    const programm = await imDemo((tx) =>
-      tx.tcmsProgramm.findFirstOrThrow({ where: { mandantId: DEMO_IDS.talwind } }),
-    );
     const eingabe = (titel: string) =>
       form({
-        programmId: programm.id,
+        mandantId: DEMO_IDS.talwind,
         titel,
         sachverhalt: 'Rundungsdifferenz in der OSS-Meldung, Betrag unter Toleranz.',
         quelle: 'STICHPROBE',

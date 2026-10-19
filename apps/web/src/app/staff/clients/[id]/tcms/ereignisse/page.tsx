@@ -71,9 +71,7 @@ export default async function EreignisseSeite({
     ctx.ereignisse.find((e) => e.status === 'NEU' || e.status === 'IN_TRIAGE') ??
     ctx.ereignisse[0] ??
     null;
-  const detail = gewaehlt
-    ? await ladeEreignisDetail(ctx.programm.id, gewaehlt.id, ctx.stand)
-    : null;
+  const detail = gewaehlt ? await ladeEreignisDetail(id, gewaehlt.id, seite.standIso) : null;
   const fNummer = new Map(ctx.feststellungen.map((f) => [f.id, f.nummer]));
   const sperre = ctx.historisch ? NUR_AKTUELL : !seite.darfBearbeiten ? KEIN_RECHT : null;
 
@@ -88,7 +86,7 @@ export default async function EreignisseSeite({
       titel="Ereignis erfassen (Kanzlei)"
       hinweis="Vorgangsnummer wird automatisch vergeben. Die Folgen des Ereignistyps werden als Vorschläge angelegt."
       action={erfasseEreignis}
-      felder={{ programmId: ctx.programm.id }}
+      felder={{ mandantId: id }}
       bestaetigen="Erfassen"
       breit
       disabled={sperre !== null}
@@ -302,6 +300,7 @@ function TriagePanel({
   sperre: string | null;
 }) {
   const { ctx, basis, mitStand, nutzer } = seite;
+  const mandantId = ctx.mandant.id;
   const t = typInfo(e.typ);
   const kat = ereignistyp(e.typ);
   const melder = e.gemeldetVon ? ctx.personen.get(e.gemeldetVon) : null;
@@ -464,6 +463,7 @@ function TriagePanel({
           <>
             <div className="text-xs font-s text-secondary mt-4 mb-2">Vorgeschlagene Folgen</div>
             <AktionsForm action={legeFolgenAn}>
+              <input type="hidden" name="mandantId" value={mandantId} />
               <input type="hidden" name="ereignisId" value={e.id} />
               <div className="col-s">
                 {vorschlaege.map((f, i) => {
@@ -471,6 +471,8 @@ function TriagePanel({
                   return (
                     <VorschlagZeile
                       key={f.id}
+                      mandantId={mandantId}
+                      ereignisId={e.id}
                       f={f}
                       personen={personen}
                       standardZustaendig={
@@ -516,6 +518,8 @@ function TriagePanel({
               {weitere.map((f) => (
                 <FolgeZeile
                   key={f.id}
+                  mandantId={mandantId}
+                  ereignisId={e.id}
                   f={f}
                   basis={basis}
                   mitStand={mitStand}
@@ -540,7 +544,7 @@ function TriagePanel({
               titel="Weitere Folge vorschlagen"
               hinweis="Eigene Triage-Entscheidung, z. B. Profil- oder Länderprüfung als Aufgabe."
               action={fuegeFolgeHinzu}
-              felder={{ ereignisId: e.id }}
+              felder={{ mandantId, ereignisId: e.id }}
               bestaetigen="Vorschlagen"
               disabled={gesperrt}
               disabledGrund={panelSperre ?? undefined}
@@ -607,6 +611,7 @@ function TriagePanel({
             <div className="text-xs mt-1">{detail.verwerfenAntrag.begruendung}</div>
             <div className="row-s mt-2">
               <AktionsForm action={bestaetigeEreignisVerwerfen}>
+                <input type="hidden" name="mandantId" value={mandantId} />
                 <input type="hidden" name="id" value={e.id} />
                 <Gesperrt
                   blass
@@ -626,6 +631,7 @@ function TriagePanel({
                 </Gesperrt>
               </AktionsForm>
               <AktionsForm action={lehneEreignisVerwerfenAb}>
+                <input type="hidden" name="mandantId" value={mandantId} />
                 <input type="hidden" name="id" value={e.id} />
                 <Gesperrt grund={panelSperre}>
                   <SubmitButton className="btn-secondary btn-tiny" disabled={gesperrt}>
@@ -664,7 +670,7 @@ function TriagePanel({
                 titel={`Ereignis ${e.nummer} verwerfen`}
                 hinweis="Nur ohne angelegte Folgen. Eine zweite Person bestätigt; offene Vorschläge werden dann mit verworfen."
                 action={beantrageEreignisVerwerfen}
-                felder={{ id: e.id }}
+                felder={{ mandantId, id: e.id }}
                 bestaetigen="Verwerfen beantragen"
                 gefahr
                 begruendungMin={30}
@@ -680,6 +686,7 @@ function TriagePanel({
             ) : null}
             {e.status === 'NEU' ? (
               <AktionsForm action={nehmeInPruefung}>
+                <input type="hidden" name="mandantId" value={mandantId} />
                 <input type="hidden" name="id" value={e.id} />
                 <Gesperrt grund={panelSperre}>
                   <SubmitButton className="btn-secondary" disabled={gesperrt}>
@@ -689,6 +696,7 @@ function TriagePanel({
               </AktionsForm>
             ) : null}
             <AktionsForm action={schliesseEreignisAb}>
+              <input type="hidden" name="mandantId" value={mandantId} />
               <input type="hidden" name="id" value={e.id} />
               <Gesperrt
                 grund={

@@ -1,42 +1,65 @@
-import { NextResponse, type NextRequest } from 'next/server';
-import { kannLesen } from '@tcms/service';
-import { akteurFuer, db } from '@/server/demo';
-import { ladeAnlage, leseAnlage } from '@/server/ereignisse-daten';
+import { akteurFuer } from '@/server/demo';
+import { ladeAnlageZumDownload } from '@/server/ereignisse-daten';
 import { aktuellePerson } from '@/server/sitzung';
 
-// Download einer Ereignis-Anlage (Portal-Meldung) für die Kanzlei (nur Demo).
-// Prüft Sitzung, Bezug zum Mandanten (kannLesen), Mandantenzuordnung, dass die
-// Datei zum Meldungs-Audit gehört, und den SHA-256 des Inhalts (TS-09).
-export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+// =============================================================================
+// Download einer Ereignis-Anlage (Portal-Meldung) für die Kanzlei – nur Demo;
+// im Dienst laufen Downloads über die kanzleikonsole (ADR 0001 §6, TS-09).
+// Rechte und Mandantenzuordnung prüft der Service (`ladeEreignisAnlage`: nur
+// Verweise aus dem Meldungs-Audit eines Ereignisses dieses Mandanten); die
+// Ablage prüft den SHA-256 des Inhalts gegen Ablagepfad und Verweis.
+// =============================================================================
+
+export const dynamic = 'force-dynamic';
+
+const KOPF = {
+  'Cache-Control': 'private, no-store',
+  'X-Content-Type-Options': 'nosniff',
+} as const;
+
+/** Typen, die ein Browser ausführen bzw. rendern würde: nur als Download ausliefern. */
+const AKTIVE_TYPEN =
+  /^(text\/html|application\/xhtml\+xml|image\/svg\+xml|text\/xml|application\/xml|application\/javascript|text\/javascript)$/i;
+
+function dispositionsname(name: string): string {
+  const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+export async function GET(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
+): Promise<Response> {
   const person = await aktuellePerson();
   if (!person || person.art !== 'KANZLEI')
-    return new NextResponse('Nicht angemeldet', { status: 401 });
+    return new Response('Nicht angemeldet.', { status: 401, headers: KOPF });
   const { id } = await params;
-  if (!kannLesen(akteurFuer(person, id), id))
-    return new NextResponse('Nicht gefunden', { status: 404 });
-  const e = req.nextUrl.searchParams.get('e') ?? '';
-  const h = req.nextUrl.searchParams.get('h') ?? '';
-  if (!/^[0-9a-f]{64}$/.test(h)) return new NextResponse('Ungültige Anfrage', { status: 400 });
-  const ereignis = await db.ereignis.findUnique({
-    where: { id: e },
-    include: { programm: { select: { mandantId: true } } },
+  const url = new URL(req.url);
+  const ergebnis = await ladeAnlageZumDownload(akteurFuer(person, id), {
+    mandantId: id,
+    ereignisId: url.searchParams.get('e') ?? '',
+    sha256: url.searchParams.get('h') ?? '',
   });
-  if (!ereignis || ereignis.programm.mandantId !== id)
-    return new NextResponse('Nicht gefunden', { status: 404 });
-  const a = await ladeAnlage(ereignis.id, h);
-  if (!a || !a.speicherpfad) return new NextResponse('Nicht gefunden', { status: 404 });
-  let inhalt: Buffer;
-  try {
-    inhalt = await leseAnlage(a.speicherpfad, a.anlage.sha256);
-  } catch {
-    return new NextResponse('Nicht verfügbar', { status: 410 });
-  }
-  return new NextResponse(new Uint8Array(inhalt), {
+  if (ergebnis === 'UNGUELTIG')
+    return new Response('Ungültige Anfrage.', { status: 400, headers: KOPF });
+  // Kein Hinweis auf die Existenz fremder Ereignisse oder Dateien.
+  if (ergebnis === 'NICHT_GEFUNDEN')
+    return new Response('Nicht gefunden.', { status: 404, headers: KOPF });
+  if (ergebnis === 'DEFEKT')
+    return new Response('Datei nicht verfügbar oder Integritätsprüfung fehlgeschlagen.', {
+      status: 410,
+      headers: KOPF,
+    });
+  const { verweis, inhalt } = ergebnis;
+  return new Response(new Uint8Array(inhalt), {
+    status: 200,
     headers: {
-      'Content-Type': a.anlage.mime || 'application/octet-stream',
-      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(a.anlage.dateiname)}`,
-      'X-Content-Type-Options': 'nosniff',
-      'Cache-Control': 'private, no-store',
+      ...KOPF,
+      'Content-Type': AKTIVE_TYPEN.test(verweis.mime) ? 'application/octet-stream' : verweis.mime,
+      'Content-Length': String(inhalt.length),
+      'Content-Disposition': dispositionsname(verweis.dateiname),
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+      'X-Anlage-SHA256': verweis.sha256,
     },
   });
 }

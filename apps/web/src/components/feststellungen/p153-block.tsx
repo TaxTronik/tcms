@@ -28,7 +28,9 @@ const MIN = 30;
  * die Action prüft das Recht zusätzlich serverseitig.
  */
 export function P153Block({
+  mandantId,
   feststellungId,
+  bisher,
   optionen,
   darf,
   sperrGrund,
@@ -37,7 +39,10 @@ export function P153Block({
   offen,
   heuteIso,
 }: {
+  mandantId: string;
   feststellungId: string;
+  /** Bisherige Entscheidung (nach „weitere Klärung"); der Service weist abweichende Stände ab. */
+  bisher: Paragraph153Entscheidung | null;
   optionen: P153Option[];
   darf: boolean;
   /** Tooltip der gesperrten Bedienelemente. */
@@ -128,7 +133,9 @@ export function P153Block({
               </div>
             ) : null}
             <AktionsForm action={entscheideP153}>
+              <input type="hidden" name="mandantId" value={mandantId} />
               <input type="hidden" name="id" value={feststellungId} />
+              <input type="hidden" name="bisher" value={bisher ?? ''} />
               <fieldset
                 disabled={gesperrt}
                 style={{ border: 0, padding: 0, margin: 0 }}

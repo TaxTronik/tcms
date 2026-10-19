@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { EREIGNIS_STATUS_BADGE, fmtDatum, fmtDatumZeit, isoDatum } from '@tcms/domain';
-import { db, demoPersonen, zustaendigkeit } from '@/server/demo';
+import { imDienst, ladePortalMeldungen } from '@tcms/service';
+import { DEMO_PORTS, demoPersonen, zustaendigkeit } from '@/server/demo';
 import { Icon } from '@/components/icon';
 import { Leerzustand } from '@/components/ui/leer';
 import { PortalEreignisFormular } from '@/components/ereignisse/portal-formular';
@@ -22,26 +23,15 @@ export default async function PortalEreignisSeite({ searchParams }: { searchPara
   const sp = await searchParams;
   const gemeldetNr = Array.isArray(sp['gemeldet']) ? sp['gemeldet'][0] : sp['gemeldet'];
 
-  const mandant = await db.mandant.findUnique({ where: { id: nutzer.mandantId } });
-  const programm = await db.tcmsProgramm.findFirst({
-    where: { mandantId: nutzer.mandantId },
-    orderBy: { createdAt: 'desc' },
-  });
-  const bearbeitung = mandant
-    ? demoPersonen.person(zustaendigkeit(mandant.id).bearbeitungId)
-    : null;
-
-  const meldungen = programm
-    ? await db.ereignis.findMany({
-        where: { programmId: programm.id, quelle: 'PORTAL' },
-        orderBy: { gemeldetAm: 'desc' },
-        take: 20,
-      })
-    : [];
-  const melderIds = [
-    ...new Set(meldungen.map((m) => m.gemeldetVon).filter((x): x is string => !!x)),
-  ];
-  const melder = await demoPersonen.namen(melderIds);
+  // Lesen über den Service (Rechte: aktive Rolle beim eigenen Mandanten).
+  const daten = await imDienst(nutzer, DEMO_PORTS, (ctx) =>
+    ladePortalMeldungen(ctx, { mandantId: nutzer.mandantId }),
+  );
+  const programm = daten.programmVorhanden;
+  // Ansprechpartner aus dem Demo-Verzeichnis (im Zielbild: kanzleikonsole).
+  const bearbeitung = demoPersonen.person(zustaendigkeit(nutzer.mandantId).bearbeitungId);
+  const meldungen = daten.meldungen.map((m) => ({ ...m, gemeldetAm: new Date(m.gemeldetAm) }));
+  const melder = new Map(daten.namen.map((n) => [n.id, n.name]));
   const bestaetigt = gemeldetNr ? meldungen.find((m) => m.nummer === gemeldetNr) : undefined;
 
   const darf = darfPortalMelden(nutzer, rollen);

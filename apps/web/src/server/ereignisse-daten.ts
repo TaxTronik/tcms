@@ -1,25 +1,35 @@
 import 'server-only';
-import type { Tx } from '@tcms/db';
+import {
+  DienstFehler,
+  type AnlageVerweis,
+  type EreignisDetail as DienstDetail,
+} from '@tcms/contract';
+import {
+  darfEreignisMelden,
+  imDienst,
+  ladeEreignis,
+  ladeEreignisAnlage,
+  type KontaktRolle,
+  type NachweisVerweis,
+} from '@tcms/service';
 import type { Akteur } from '@tcms/contract';
-import { kannPortalLesen, type KontaktRolle, type NachweisVerweis } from '@tcms/service';
 import {
   EREIGNISTYPEN,
   ereignistyp,
   FOLGE_LABEL,
   PORTAL_SONSTIGES,
-  statusAm,
   type AnzeigeStatus,
   type EreignisStatus,
   type FolgeArt,
 } from '@tcms/domain';
-import { db, demoAblage } from './demo';
-import { naechsteEreignisnummer } from './nummern';
-import { auditGrenze, tagesende } from './zeit';
+import { DEMO_PORTS, demoAblage } from './demo';
+import { demoAkteur } from './sitzung';
 
 // =============================================================================
-// Detaildaten für S11 (Ereigniseingang) und P3 (Portal-Meldung): verknüpfte
-// Objekte der Folgen, Begründungen und Anlagen aus dem Audit-Log, Nummernkreis
-// der Ereignisse und das gemeinsame Anlegen eines Ereignisses.
+// Demo-Anbindung S11 (Ereigniseingang) und P3 (Portal-Meldung) an
+// @tcms/service: Detail-Lader im Dienstkontext der angemeldeten Person,
+// Umrechnung der JSON-Antwort in die Anzeigeform, Anzeigekonstanten und die
+// lokale Ablage der Demo für Anlagen (im Zielbild: kanzleikonsole).
 // =============================================================================
 
 export const FOLGE_STATUS_LABEL: Record<
@@ -86,57 +96,17 @@ export const PORTAL_KACHELN: { code: string; label: string; icon: string; ton: T
     },
   ];
 
-/** Ereignis melden im Portal: gesetzliche Vertreter und Tax-Compliance-Beauftragte (Fachkonzept §13). */
+/**
+ * Darf die Person melden? Regel aus @tcms/service (GV, TCB); hier nur zur
+ * Anzeige und damit die Demo – wie die kanzleikonsole – keine Dateien
+ * Unberechtigter annimmt. Die Meldung prüft der Service erneut.
+ */
 export function darfPortalMelden(a: Akteur, rollen: readonly KontaktRolle[]): boolean {
-  // Gesetzliche Vertretung und Tax-Compliance-Beauftragte (aktive Rolle, eigener Mandant).
-  return a.art === 'MANDANT' && kannPortalLesen(a, a.mandantId, rollen);
+  return a.art === 'MANDANT' && darfEreignisMelden(a, a.mandantId, rollen);
 }
 
 // ----------------------------------------------------------------------------
-// Anlegen
-// ----------------------------------------------------------------------------
-
-export { naechsteEreignisnummer };
-
-/** Legt ein Ereignis mit den Katalogfolgen als Vorschläge an (Triage folgt in S11). */
-export async function legeEreignisAn(
-  tx: Tx,
-  a: {
-    programmId: string;
-    typ: string;
-    titel: string;
-    beschreibung: string;
-    quelle: 'PORTAL' | 'KONTROLLE' | 'STAMMDATEN' | 'RSS' | 'MANUELL';
-    gemeldetVon: string;
-    ereignisDatum: Date;
-    zeitpunkt: Date;
-  },
-): Promise<{ id: string; nummer: string; folgen: number }> {
-  const nummer = await naechsteEreignisnummer(tx, a.zeitpunkt.getUTCFullYear());
-  const kat = ereignistyp(a.typ);
-  const folgen: { art: FolgeArt; ziel: string | null; text: string }[] = kat
-    ? kat.folgen.map((f) => ({ art: f.art, ziel: f.ziel ?? null, text: f.text }))
-    : [{ art: 'HINWEIS', ziel: null, text: 'Meldung sichten und Folgen festlegen' }];
-  const e = await tx.ereignis.create({
-    data: {
-      programmId: a.programmId,
-      nummer,
-      typ: a.typ,
-      titel: a.titel,
-      beschreibung: a.beschreibung,
-      quelle: a.quelle,
-      gemeldetVon: a.gemeldetVon,
-      gemeldetAm: a.zeitpunkt,
-      ereignisDatum: a.ereignisDatum,
-      status: 'NEU',
-      folgen: { create: folgen },
-    },
-  });
-  return { id: e.id, nummer, folgen: folgen.length };
-}
-
-// ----------------------------------------------------------------------------
-// Detail
+// Detail (Anzeigeform mit Date und Namen)
 // ----------------------------------------------------------------------------
 
 export interface Anlage {
@@ -173,268 +143,94 @@ export interface EreignisDetail {
   id: string;
   folgen: FolgeDetail[];
   anlagen: Anlage[];
-  meldung: { aktion: string; at: Date; hash: string; actorName: string } | null;
+  meldung: { aktion: string; at: Date; hash: string } | null;
   verwerfenAntrag: { vonId: string | null; von: string; am: Date; begruendung: string } | null;
   verwerfen: { begruendung: string; von: string; am: Date } | null;
   verlauf: { id: number; at: Date; actorName: string; text: string }[];
 }
 
-function s(v: unknown): string {
-  return typeof v === 'string' ? v : v == null ? '' : String(v);
-}
+const datum = (iso: string) => new Date(iso.length === 10 ? `${iso}T00:00:00Z` : iso);
 
-function verlaufText(aktion: string, d: Record<string, unknown>): string {
-  switch (aktion) {
-    case 'tcms.ereignis.gemeldet':
-      return d['quelle'] === 'PORTAL' || !d['quelle']
-        ? 'Ereignis gemeldet'
-        : `Ereignis erfasst (${s(d['quelle']).toLowerCase()})`;
-    case 'tcms.ereignis.erfasst':
-      return 'Ereignis manuell erfasst';
-    case 'tcms.ereignis.in_triage':
-      return 'in Prüfung genommen';
-    case 'tcms.ereignis.folge_angelegt':
-      return `Folge angelegt: ${s(d['label'])}${d['ziel'] ? ` ${s(d['ziel'])}` : ''}`;
-    case 'tcms.ereignis.folge_hinzugefuegt':
-      return `Folge vorgeschlagen: ${s(d['label'])}`;
-    case 'tcms.ereignis.folge_erledigt':
-      return `Folge erledigt: ${s(d['label'])}`;
-    case 'tcms.ereignis.folge_verworfen':
-      return `Folge verworfen: ${s(d['label'])}`;
-    case 'tcms.ereignis.verwerfen_beantragt':
-      return 'Verwerfen des Ereignisses beantragt';
-    case 'tcms.ereignis.verwerfen_bestaetigt':
-      return 'Ereignis verworfen (zweite Person)';
-    case 'tcms.ereignis.verwerfen_abgelehnt':
-      return 'Antrag auf Verwerfen abgelehnt';
-    case 'tcms.ereignis.abgeschlossen':
-      return 'Ereignis abgeschlossen – alle Folgen erledigt oder verworfen';
-    default:
-      return aktion;
-  }
-}
-
+/**
+ * Detail eines Ereignisses zum Stichtag über den Service-Lader. Ohne Sitzung,
+ * ohne Leserecht oder unbekannt: null.
+ */
 export async function ladeEreignisDetail(
-  programmId: string,
+  mandantId: string,
   ereignisId: string,
-  stand: Date,
+  standIso: string,
 ): Promise<EreignisDetail | null> {
-  const ende = tagesende(stand);
-  const e = await db.ereignis.findFirst({
-    where: { id: ereignisId, programmId },
-    include: { folgen: true },
-  });
-  if (!e) return null;
-  const folgenIds = e.folgen.map((f) => f.id);
-  const audits = await db.auditEvent.findMany({
-    where: {
-      OR: [
-        { objektTyp: 'Ereignis', objektId: e.id },
-        { objektTyp: 'EreignisFolge', objektId: { in: folgenIds } },
-      ],
-    },
-    orderBy: { seq: 'asc' },
-  });
-  const det = (a: (typeof audits)[number]) => (a.detail ?? {}) as Record<string, unknown>;
-
-  const dIds = e.folgen
-    .filter((f) => f.art === 'KONTROLLE_AUSSERPLANMAESSIG' && f.objektId)
-    .map((f) => f.objektId!);
-  const fIds = e.folgen
-    .filter((f) => f.art === 'FESTSTELLUNG_ANLEGEN' && f.objektId)
-    .map((f) => f.objektId!);
-  const [durchf, festst] = await Promise.all([
-    dIds.length
-      ? db.durchfuehrung.findMany({
-          where: { id: { in: dIds } },
-          include: { kontrolle: { select: { code: true } } },
-        })
-      : [],
-    fIds.length
-      ? db.feststellung.findMany({
-          where: { id: { in: fIds } },
-          select: { id: true, nummer: true },
-        })
-      : [],
-  ]);
-  const dJe = new Map(durchf.map((d) => [d.id, d]));
-  const fJe = new Map(festst.map((f) => [f.id, f]));
-
-  // Audit-Zeitstempel sind echte Zeit (auditGrenze, zeit.ts).
-  const auditEnde = auditGrenze(stand);
-  const bisEnde = (a: { at: Date }) => a.at.getTime() <= auditEnde.getTime();
-  const folgen: FolgeDetail[] = e.folgen
-    .filter((f) => {
-      // Später hinzugefügte Folgen gehören nicht zum Stand.
-      const neu = audits.find(
-        (a) => a.objektId === f.id && a.aktion === 'tcms.ereignis.folge_hinzugefuegt',
-      );
-      return !neu || bisEnde(neu);
-    })
-    .map((f) => {
-      const verwRoh = audits
-        .filter((a) => a.objektId === f.id && a.aktion === 'tcms.ereignis.folge_verworfen')
-        .at(-1);
-      const angelegtRoh = audits
-        .filter((a) => a.objektId === f.id && a.aktion === 'tcms.ereignis.folge_angelegt')
-        .at(-1);
-      const verw = verwRoh && bisEnde(verwRoh) ? verwRoh : undefined;
-      const angelegt = angelegtRoh && bisEnde(angelegtRoh) ? angelegtRoh : undefined;
-      // Status zum Stichtag aus den protokollierten Schritten zurückrechnen.
-      let status = f.status;
-      if (status === 'VERWORFEN' && verwRoh && !verw)
-        status = (det(verwRoh)['vorher'] as typeof status) ?? 'VORGESCHLAGEN';
-      if (status === 'ERLEDIGT' && f.erledigtAm && f.erledigtAm.getTime() > ende.getTime())
-        status = 'ANGELEGT';
-      if (status === 'ANGELEGT' && angelegtRoh && !angelegt) status = 'VORGESCHLAGEN';
-      if (status === 'ERLEDIGT' && angelegtRoh && !angelegt) status = 'VORGESCHLAGEN';
-      const sichtbarObjekt = status !== 'VORGESCHLAGEN';
-      const d = sichtbarObjekt && f.objektId ? dJe.get(f.objektId) : undefined;
-      return {
-        id: f.id,
-        art: f.art,
-        artLabel: FOLGE_LABEL[f.art],
-        ziel: f.ziel,
-        text: f.text,
-        zustaendig: f.zustaendig,
-        frist: f.frist,
-        status,
-        erledigtAm: status === 'ERLEDIGT' ? f.erledigtAm : null,
-        objektId: sichtbarObjekt ? f.objektId : null,
-        durchfuehrung: d
-          ? {
-              id: d.id,
-              code: d.kontrolle.code,
-              periodeLabel: d.periodeLabel,
-              faelligAm: d.faelligAm,
-              anzeige: statusAm(
-                {
-                  status: d.status,
-                  periodeBis: d.periodeBis,
-                  faelligAm: d.faelligAm,
-                  begonnenAm: d.begonnenAm,
-                  eingereichtAm: d.eingereichtAm,
-                  abgeschlossenAm: d.abgeschlossenAm,
-                  entfallenAm: d.entfallenAm,
-                },
-                stand,
-              ),
-            }
-          : null,
-        feststellung: sichtbarObjekt && f.objektId ? (fJe.get(f.objektId) ?? null) : null,
-        verwerfen: verw
-          ? { begruendung: s(det(verw)['begruendung']), von: verw.actorName, am: verw.at }
-          : null,
-        angelegt: angelegt ? { von: angelegt.actorName, am: angelegt.at } : null,
-      };
-    })
-    .sort((a, b) => ORDNUNG[a.status] - ORDNUNG[b.status]);
-
-  const meldungRoh = audits.find(
-    (a) =>
-      a.objektTyp === 'Ereignis' &&
-      (a.aktion === 'tcms.ereignis.gemeldet' || a.aktion === 'tcms.ereignis.erfasst'),
-  );
-  const anlagenRoh = meldungRoh ? det(meldungRoh)['anlagen'] : null;
-  const anlagen: Anlage[] = Array.isArray(anlagenRoh)
-    ? (anlagenRoh as Record<string, unknown>[]).map((x) => ({
-        dateiname: s(x['dateiname']),
-        mime: s(x['mime']),
-        groesse: Number(x['groesse']) || 0,
-        sha256: s(x['sha256']),
-      }))
-    : [];
-
-  const antrag = audits
-    .filter((a) => a.objektTyp === 'Ereignis' && a.aktion === 'tcms.ereignis.verwerfen_beantragt')
-    .at(-1);
-  const bestaetigt = audits
-    .filter((a) => a.objektTyp === 'Ereignis' && a.aktion === 'tcms.ereignis.verwerfen_bestaetigt')
-    .at(-1);
-
+  const akteur = await demoAkteur(mandantId);
+  if (!akteur) return null;
+  let d: DienstDetail;
+  try {
+    d = await imDienst(akteur, DEMO_PORTS, (ctx) =>
+      ladeEreignis(ctx, { mandantId, ereignisId, stand: standIso }),
+    );
+  } catch (e) {
+    if (e instanceof DienstFehler && (e.code === 'NICHT_GEFUNDEN' || e.code === 'UNGUELTIG'))
+      return null;
+    throw e;
+  }
+  const namen = new Map(d.namen.map((n) => [n.id, n.name]));
+  const name = (id: string | null | undefined) => (id && namen.get(id)) || '—';
   return {
-    id: e.id,
-    folgen,
-    anlagen,
-    meldung: meldungRoh
+    id: d.id,
+    folgen: d.folgen.map((f) => ({
+      id: f.id,
+      art: f.art,
+      artLabel: FOLGE_LABEL[f.art],
+      ziel: f.ziel,
+      text: f.text,
+      zustaendig: f.zustaendig,
+      frist: f.frist ? datum(f.frist) : null,
+      status: f.status,
+      erledigtAm: f.erledigtAm ? datum(f.erledigtAm) : null,
+      objektId: f.objektId,
+      durchfuehrung: f.durchfuehrung
+        ? { ...f.durchfuehrung, faelligAm: datum(f.durchfuehrung.faelligAm) }
+        : null,
+      feststellung: f.feststellung,
+      verwerfen: f.verwerfen
+        ? {
+            begruendung: f.verwerfen.begruendung,
+            von: name(f.verwerfen.vonId),
+            am: datum(f.verwerfen.am),
+          }
+        : null,
+      angelegt: f.angelegt ? { von: name(f.angelegt.vonId), am: datum(f.angelegt.am) } : null,
+    })),
+    anlagen: d.anlagen,
+    meldung: d.meldung ? { ...d.meldung, at: datum(d.meldung.at) } : null,
+    verwerfenAntrag: d.verwerfenAntrag
       ? {
-          aktion: meldungRoh.aktion,
-          at: meldungRoh.at,
-          hash: meldungRoh.hash,
-          actorName: meldungRoh.actorName,
+          vonId: d.verwerfenAntrag.vonId,
+          von: name(d.verwerfenAntrag.vonId),
+          am: datum(d.verwerfenAntrag.am),
+          begruendung: d.verwerfenAntrag.begruendung,
         }
       : null,
-    verwerfenAntrag:
-      e.verwerfenBegruendung && e.status !== 'VERWORFEN'
-        ? {
-            vonId: antrag?.actorId ?? null,
-            von: antrag?.actorName ?? '—',
-            am: antrag?.at ?? e.gemeldetAm,
-            begruendung: e.verwerfenBegruendung,
-          }
-        : null,
-    verwerfen:
-      e.status === 'VERWORFEN' && e.verwerfenBegruendung
-        ? {
-            begruendung: e.verwerfenBegruendung,
-            von: bestaetigt?.actorName ?? '—',
-            am: bestaetigt?.at ?? e.gemeldetAm,
-          }
-        : null,
-    verlauf: audits
-      .filter((a) => a.at.getTime() <= auditEnde.getTime())
-      .map((a) => ({
-        id: a.seq,
-        at: a.at,
-        actorName: a.actorName,
-        text: verlaufText(a.aktion, det(a)),
-      }))
-      .reverse(),
-  };
-}
-
-const ORDNUNG: Record<FolgeDetail['status'], number> = {
-  VORGESCHLAGEN: 0,
-  ANGELEGT: 1,
-  ERLEDIGT: 2,
-  VERWORFEN: 3,
-};
-
-/** Anlagen eines Ereignisses (für den Download): nur aus dem Meldungs-Audit. */
-export async function ladeAnlage(
-  ereignisId: string,
-  sha256: string,
-): Promise<{ anlage: Anlage; speicherpfad: string; programmId: string | null } | null> {
-  const meldung = await db.auditEvent.findFirst({
-    where: {
-      objektTyp: 'Ereignis',
-      objektId: ereignisId,
-      aktion: { in: ['tcms.ereignis.gemeldet', 'tcms.ereignis.erfasst'] },
-    },
-    orderBy: { seq: 'asc' },
-  });
-  if (!meldung) return null;
-  const liste = ((meldung.detail ?? {}) as Record<string, unknown>)['anlagen'];
-  if (!Array.isArray(liste)) return null;
-  const x = (liste as Record<string, unknown>[]).find((a) => a['sha256'] === sha256);
-  if (!x) return null;
-  return {
-    anlage: {
-      dateiname: s(x['dateiname']),
-      mime: s(x['mime']),
-      groesse: Number(x['groesse']) || 0,
-      sha256: s(x['sha256']),
-    },
-    speicherpfad: s(x['speicherpfad']),
-    programmId: meldung.programmId,
+    verwerfen: d.verwerfen
+      ? {
+          begruendung: d.verwerfen.begruendung,
+          von: name(d.verwerfen.vonId),
+          am: datum(d.verwerfen.am),
+        }
+      : null,
+    verlauf: d.verlauf.map((v) => ({
+      id: v.seq,
+      at: datum(v.at),
+      actorName: name(v.actorId),
+      text: v.text,
+    })),
   };
 }
 
 // ----------------------------------------------------------------------------
-// Ablage der Anlagen (gemeinsame Ablage aus @tcms/db)
+// Anlagen (Demo-Ablage; im Zielbild nimmt die kanzleikonsole Dateien an)
 // ----------------------------------------------------------------------------
 
-/** Demo: legt eine Anlage über den Ablage-Port ab (Dienst: nur Verweise, ADR 0001 §6). */
+/** Demo: legt eine Anlage über den Ablage-Port ab und liefert den Verweis. */
 export function legeAnlageAb(
   inhalt: Buffer,
   dateiname: string,
@@ -443,7 +239,26 @@ export function legeAnlageAb(
   return demoAblage.annehmen({ art: 'DATEI', dateiname, mime, inhalt });
 }
 
-/** Demo: liest eine Anlage und prüft den SHA-256 (TS-09). */
-export function leseAnlage(speicherpfad: string, sha256: string): Promise<Buffer> {
-  return demoAblage.lese({ dokumentId: speicherpfad, sha256 });
+/**
+ * Demo-Download (TS-09): Der Service prüft Rechte und Mandantenzuordnung und
+ * liefert den Verweis aus dem Meldungs-Audit; die Ablage prüft beim Lesen den
+ * SHA-256 des Inhalts gegen Ablagepfad und Verweis.
+ */
+export async function ladeAnlageZumDownload(
+  akteur: Akteur,
+  eingabe: { mandantId: string; ereignisId: string; sha256: string },
+): Promise<{ verweis: AnlageVerweis; inhalt: Buffer } | 'NICHT_GEFUNDEN' | 'UNGUELTIG' | 'DEFEKT'> {
+  let verweis: AnlageVerweis;
+  try {
+    verweis = await imDienst(akteur, DEMO_PORTS, (ctx) => ladeEreignisAnlage(ctx, eingabe));
+  } catch (e) {
+    if (e instanceof DienstFehler && e.code === 'UNGUELTIG') return 'UNGUELTIG';
+    if (e instanceof DienstFehler) return 'NICHT_GEFUNDEN';
+    throw e;
+  }
+  try {
+    return { verweis, inhalt: await demoAblage.lese(verweis) };
+  } catch {
+    return 'DEFEKT';
+  }
 }
