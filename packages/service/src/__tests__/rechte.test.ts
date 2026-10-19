@@ -454,3 +454,42 @@ describe('Verwerfen einer Feststellung bestätigen (Regeln 4 und 5)', () => {
     expect(kannVerwerfenBestaetigen(HB, M1, BT_ZUST.id, 'NEIN').erlaubt).toBe(true);
   });
 });
+
+describe('Systemakteur (Stufe 4): keine Personenrechte, auch nicht mit Personen-IDs', () => {
+  // Fachoperationen sehen nie einen Systemakteur (`DienstKontext`, `personAkteur`);
+  // die Rechte weisen ihn trotzdem selbst ab (fail closed), auch wenn seine ID
+  // zufällig der einer zugewiesenen Person gliche.
+  const sys = (sid: string): Akteur => ({
+    art: 'SYSTEM',
+    tenantId: T,
+    id: sid,
+    name: 'Zustellung',
+  });
+  const ROLLEN: KontaktRolle[] = [
+    { mandantId: M1, kontaktId: id(50), rolle: 'GESETZLICHER_VERTRETER', aktiv: true },
+  ];
+
+  it('jede Rechtefunktion verweigert', () => {
+    for (const a of [
+      sys(id(50)),
+      sys(K_KANZLEI.durchfuehrendId!),
+      sys(K_MANDANT.durchfuehrendId!),
+    ]) {
+      expect(kannLesen(a, M1, ROLLEN)).toBe(false);
+      expect(kannPortalLesen(a, M1, ROLLEN)).toBe(false);
+      expect(istGesetzlicherVertreter(a, M1, ROLLEN)).toBe(false);
+      expect(aktiveRollen(a, M1, ROLLEN).size).toBe(0);
+      expect(kannBearbeiten(a, M1)).toBe(false);
+      expect(kannWuerdigen(a, M1)).toBe(false);
+      expect(kannVerwalten(a)).toBe(false);
+      expect(kannVertraulichLesen(a, M1, [a.id])).toBe(false);
+      expect(kannDurchfuehren(a, K_KANZLEI, M1, ROLLEN)).toBe(false);
+      expect(kannDurchfuehren(a, K_MANDANT, M1, ROLLEN)).toBe(false);
+      for (const k of [K_KANZLEI, K_MANDANT, { ...K_KANZLEI, gegenzeichnerId: a.id }]) {
+        expect(kannGegenzeichnen(a, k, M1, id(99), true, ROLLEN).erlaubt).toBe(false);
+      }
+      expect(kannVerwerfenBestaetigen(a, M1, id(99), 'JA').erlaubt).toBe(false);
+      expect(auswirkungBeimAnlegen(a, M1, 'NEIN')).toBe('UNKLAR');
+    }
+  });
+});
