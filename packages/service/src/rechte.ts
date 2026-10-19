@@ -221,3 +221,30 @@ export function kannGegenzeichnen(
 export function zweitePerson(a: Akteur, beantragtVon: string | null | undefined): boolean {
   return !!beantragtVon && !gleicheId(a.id, beantragtVon);
 }
+
+/**
+ * Verwerfen einer Feststellung bestätigen (AGENTS.md Regeln 4 und 5, TS-04):
+ * immer eine zweite Person. Ist eine steuerliche Auswirkung nicht
+ * ausgeschlossen (Auswirkung nicht „NEIN"), beendet das Verwerfen den
+ * §-153-Pfad und ist damit eine Würdigungsentscheidung: zusätzlich
+ * `kannWuerdigen` (Entscheidung des Produktverantwortlichen). Das
+ * Bearbeitungsrecht prüft der Aufrufer.
+ */
+export function kannVerwerfenBestaetigen(
+  a: Akteur,
+  mandantId: string,
+  beantragtVon: string | null | undefined,
+  auswirkung: Auswirkung,
+): Entscheidung {
+  if (!zweitePerson(a, beantragtVon)) {
+    return { erlaubt: false, grund: 'Die Bestätigung muss durch eine zweite Person erfolgen.' };
+  }
+  if (auswirkung !== 'NEIN' && !kannWuerdigen(a, mandantId)) {
+    return {
+      erlaubt: false,
+      grund:
+        'Bei möglicher steuerlicher Auswirkung bestätigt nur die zuständige Berufsträgerin bzw. der zuständige Berufsträger das Verwerfen (§ 153).',
+    };
+  }
+  return { erlaubt: true, grund: null };
+}

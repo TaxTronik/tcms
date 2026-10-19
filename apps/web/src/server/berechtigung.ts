@@ -30,6 +30,16 @@ export function kannWuerdigen(a: Akteur, m: MandantRef): boolean {
   return R.kannWuerdigen(mitBezug(a, m.id), m.id);
 }
 
+/** Verwerfen bestätigen: zweite Person, bei möglicher Steuerwirkung mit Würdigungsrecht. */
+export function kannVerwerfenBestaetigen(
+  a: Akteur,
+  m: MandantRef,
+  beantragtVon: string | null,
+  auswirkung: R.Auswirkung,
+): R.Entscheidung {
+  return R.kannVerwerfenBestaetigen(mitBezug(a, m.id), m.id, beantragtVon, auswirkung);
+}
+
 /** TS-04: „NEIN" beim Anlegen nur mit Würdigungsrecht, sonst „UNKLAR". */
 export function auswirkungBeimAnlegen(
   a: Akteur,

@@ -52,8 +52,8 @@ import {
   gleicheId,
   kannBearbeiten,
   kannVertraulichLesen,
+  kannVerwerfenBestaetigen,
   kannWuerdigen,
-  zweitePerson,
 } from '../../rechte';
 import {
   alsTag,
@@ -71,7 +71,6 @@ import {
   sperreFeststellung,
   sperreMassnahme,
   VERTRAULICH,
-  ZWEITE_PERSON,
   aendere,
 } from './gemeinsam';
 
@@ -638,8 +637,10 @@ export async function beantrageFeststellungVerwerfen(
 }
 
 /**
- * Bestätigt das Verwerfen. Antragsteller:in wird aus der gesperrten Zeile
- * gelesen; bestätigen darf nur eine zweite Person (AGENTS.md Regel 4).
+ * Bestätigt das Verwerfen. Antragsteller:in und Auswirkung werden aus der
+ * gesperrten Zeile gelesen; bestätigen darf nur eine zweite Person (AGENTS.md
+ * Regel 4), bei Auswirkung „JA" oder „UNKLAR" nur mit `kannWuerdigen`
+ * (Regel 5, `kannVerwerfenBestaetigen`).
  */
 export async function bestaetigeFeststellungVerwerfen(
   ctx: DienstKontext,
@@ -653,9 +654,15 @@ export async function bestaetigeFeststellungVerwerfen(
     if (!f.verwerfenBeantragtVon || f.verwerfenBestaetigtVon) {
       throw new DienstFehler('KONFLIKT', KEIN_ANTRAG);
     }
-    if (!zweitePerson(ctx.akteur, f.verwerfenBeantragtVon)) {
-      throw new DienstFehler('NICHT_BERECHTIGT', ZWEITE_PERSON);
-    }
+    // Vier-Augen und – bei nicht ausgeschlossener Steuerwirkung – Würdigungsrecht,
+    // beides aus der gesperrten Zeile (Antrag, Auswirkung).
+    const recht = kannVerwerfenBestaetigen(
+      ctx.akteur,
+      mandantId,
+      f.verwerfenBeantragtVon,
+      f.auswirkung,
+    );
+    if (!recht.erlaubt) throw new DienstFehler('NICHT_BERECHTIGT', recht.grund ?? KEIN_RECHT);
     await tx.feststellung.update({
       where: { id: f.id },
       data: { status: 'VERWORFEN', verwerfenBestaetigtVon: ctx.akteur.id },

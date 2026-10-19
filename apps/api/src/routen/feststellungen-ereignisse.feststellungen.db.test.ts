@@ -254,4 +254,24 @@ describe.skipIf(!AKTIV)('API Feststellungen gegen PostgreSQL', () => {
     });
     expect(ohne.status).toBe(400);
   });
+
+  it('Verwerfen bei möglicher Steuerwirkung über die API: Bearbeitung → 403 mit Grund, BT → 200', async () => {
+    const f = await feststellung({
+      verwerfenBeantragtVon: P.zbt,
+      verwerfenBegruendung: BEGRUENDUNG,
+    });
+    const ziel = `${B}/feststellungen/${f.id}/verwerfen/bestaetigen`;
+    const hb = await rufe(HB, 'POST', ziel);
+    expect(hb.status).toBe(403);
+    expect(hb.json).toMatchObject({ ok: false, fehler: { code: 'NICHT_BERECHTIGT' } });
+    expect(String((hb.json['fehler'] as { meldung?: string }).meldung)).toMatch(/§ 153/);
+    const nein = await feststellung({
+      auswirkung: 'NEIN',
+      verwerfenBeantragtVon: P.zbt,
+      verwerfenBegruendung: BEGRUENDUNG,
+    });
+    expect(
+      (await rufe(HB, 'POST', `${B}/feststellungen/${nein.id}/verwerfen/bestaetigen`)).status,
+    ).toBe(200);
+  });
 });

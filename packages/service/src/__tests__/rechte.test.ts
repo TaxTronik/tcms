@@ -11,6 +11,7 @@ import {
   kannPortalLesen,
   kannVertraulichLesen,
   kannVerwalten,
+  kannVerwerfenBestaetigen,
   kannWuerdigen,
   zweitePerson,
   type KontaktRolle,
@@ -421,5 +422,35 @@ describe('Gegenzeichnen (Vier-Augen)', () => {
     expect(zweitePerson(ADMIN_BT, ADMIN_BT.id.toUpperCase())).toBe(false);
     expect(zweitePerson(ADMIN_BT, null)).toBe(false);
     expect(zweitePerson(ADMIN_BT, '')).toBe(false);
+  });
+});
+
+describe('Verwerfen einer Feststellung bestätigen (Regeln 4 und 5)', () => {
+  it('immer eine zweite Person', () => {
+    for (const a of ['NEIN', 'JA', 'UNKLAR'] as const) {
+      const r = kannVerwerfenBestaetigen(BT_ZUST, M1, BT_ZUST.id.toUpperCase(), a);
+      expect(r.erlaubt, a).toBe(false);
+      expect(r.grund).toMatch(/zweite Person/);
+      expect(kannVerwerfenBestaetigen(BT_ZUST, M1, null, a).erlaubt).toBe(false);
+    }
+  });
+
+  it('mögliche Steuerwirkung („JA"/„UNKLAR"): nur mit Würdigungsrecht', () => {
+    for (const a of ['JA', 'UNKLAR'] as const) {
+      for (const ohne of [HB, ADMIN_OHNE_BT, BT_OHNE_ZUST, KANZLEI_OHNE, ADMIN_FREMD, GV]) {
+        const r = kannVerwerfenBestaetigen(ohne, M1, BT_ZUST.id, a);
+        expect(r.erlaubt, `${a} ${ohne.id}`).toBe(false);
+        expect(r.grund).toMatch(/§ 153/);
+      }
+      expect(kannVerwerfenBestaetigen(ADMIN_BT, M1, BT_ZUST.id, a)).toEqual({
+        erlaubt: true,
+        grund: null,
+      });
+      expect(kannVerwerfenBestaetigen(BT_ZUST, M1, HB.id, a).erlaubt).toBe(true);
+    }
+  });
+
+  it('Steuerwirkung ausgeschlossen („NEIN"): die zweite Person genügt', () => {
+    expect(kannVerwerfenBestaetigen(HB, M1, BT_ZUST.id, 'NEIN').erlaubt).toBe(true);
   });
 });

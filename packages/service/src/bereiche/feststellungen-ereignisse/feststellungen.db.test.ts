@@ -779,6 +779,40 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
     expect(await auditZahl(w, f.id, 'tcms.feststellung.verwerfen_bestaetigt')).toBe(1);
   });
 
+  it('Verwerfen mit möglicher Steuerwirkung („JA"/„UNKLAR"): Bestätigung nur mit Würdigungsrecht (Regel 5)', async () => {
+    for (const auswirkung of ['JA', 'UNKLAR'] as const) {
+      const f = await neueFeststellung(w, { auswirkung, verwerfenBeantragtVon: w.p.zbt });
+      // Zweite Person mit Bearbeitungsrecht, aber ohne Würdigungsrecht: abgewiesen, unverändert.
+      for (const a of [A.hb, A.adminOhneBt]) {
+        const e = await fehlerVon(
+          im(a, (ctx) =>
+            bestaetigeFeststellungVerwerfen(ctx, { mandantId: w.mandant, feststellungId: f.id }),
+          ),
+        );
+        expect(e.code, `${auswirkung} als ${a.id}`).toBe('NICHT_BERECHTIGT');
+        expect(e.message).toMatch(/Berufsträger.*§ 153/);
+      }
+      const x = await inTenant(w, (tx) =>
+        tx.feststellung.findUniqueOrThrow({ where: { id: f.id } }),
+      );
+      expect(x).toMatchObject({ status: 'ERFASST', verwerfenBestaetigtVon: null });
+      expect(await auditZahl(w, f.id)).toBe(0);
+      // Zuständige Berufsträgerin als zweite Person darf.
+      await expect(
+        im(A.admin, (ctx) =>
+          bestaetigeFeststellungVerwerfen(ctx, { mandantId: w.mandant, feststellungId: f.id }),
+        ),
+      ).resolves.toMatchObject({ status: 'VERWORFEN' });
+    }
+    // Steuerwirkung ausgeschlossen („NEIN"): die zweite Person genügt.
+    const nein = await neueFeststellung(w, { auswirkung: 'NEIN', verwerfenBeantragtVon: w.p.zbt });
+    await expect(
+      im(A.hb, (ctx) =>
+        bestaetigeFeststellungVerwerfen(ctx, { mandantId: w.mandant, feststellungId: nein.id }),
+      ),
+    ).resolves.toMatchObject({ status: 'VERWORFEN' });
+  });
+
   it('TS-05 Verwerfen: zwei zweite Personen gleichzeitig → genau eine Bestätigung', async () => {
     const f = await neueFeststellung(w, { verwerfenBeantragtVon: w.p.hb });
     const best = (a: Akteur) => () =>

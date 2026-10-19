@@ -35,6 +35,7 @@ export {
   kannPortalLesen,
   kannVertraulichLesen,
   kannVerwalten,
+  kannVerwerfenBestaetigen,
   kannWuerdigen,
   mandantBezug,
   zweitePerson,

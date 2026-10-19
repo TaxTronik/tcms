@@ -41,6 +41,7 @@ import {
   schalteFeststellungWeiter,
 } from '@/server/actions/feststellungen';
 import { KEIN_RECHT, NUR_BERUFSTRAEGER } from '@/server/aktion';
+import { kannVerwerfenBestaetigen } from '@/server/berechtigung';
 import {
   kontrollCode,
   ladeFeststellungDetail,
@@ -180,6 +181,12 @@ export default async function FeststellungDetailSeite({
       : null;
 
   const verwerfenOffen = f.verwerfen && f.status !== 'VERWORFEN';
+  // Regel aus dem Service: zweite Person, bei möglicher Steuerwirkung mit Würdigungsrecht.
+  const verwerfenRecht = f.verwerfen
+    ? kannVerwerfenBestaetigen(nutzer, { id }, f.verwerfen.beantragtVon, f.auswirkung)
+    : null;
+  const verwerfenSperre =
+    sperre ?? (verwerfenRecht && !verwerfenRecht.erlaubt ? verwerfenRecht.grund : null);
 
   return (
     <>
@@ -969,24 +976,11 @@ export default async function FeststellungDetailSeite({
                     <AktionsForm action={bestaetigeVerwerfen}>
                       <input type="hidden" name="mandantId" value={id} />
                       <input type="hidden" name="id" value={f.id} />
-                      <Gesperrt
-                        blass
-                        grund={
-                          sperre ??
-                          (nutzer.id === f.verwerfen.beantragtVon
-                            ? 'Die Bestätigung muss durch eine zweite Person erfolgen'
-                            : null)
-                        }
-                      >
+                      <Gesperrt blass grund={verwerfenSperre}>
                         <SubmitButton
                           className="btn-danger-outline btn-tiny"
-                          disabled={!kannAendern || nutzer.id === f.verwerfen.beantragtVon}
-                          title={
-                            sperre ??
-                            (nutzer.id === f.verwerfen.beantragtVon
-                              ? 'Die Bestätigung muss durch eine zweite Person erfolgen'
-                              : undefined)
-                          }
+                          disabled={verwerfenSperre !== null}
+                          title={verwerfenSperre ?? undefined}
                         >
                           Verwerfen bestätigen
                         </SubmitButton>

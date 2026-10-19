@@ -94,6 +94,9 @@ für KI-Werkzeuge.
    Feststellung über `legeFeststellungAn` (manuell, Ereignisfolge,
    Gegenzeichnung), das diese Regel anwendet; die §-153-Entscheidung hat keinen
    Standardwert und nennt die bisher gesehene Entscheidung (`bisher`).
+   Ebenso beendet das Verwerfen einer Feststellung, deren steuerliche
+   Auswirkung nicht „NEIN" ist, den §-153-Pfad: Die Bestätigung braucht neben
+   der zweiten Person `kannWuerdigen` (`kannVerwerfenBestaetigen`).
 6. Historische Stichtage (`?stand=YYYY-MM-DD`) sind schreibgeschützt.
    Mutationen sind dort deaktiviert.
 7. Keine KI-Entscheidungen. Vorschläge (z. B. Risikovorschlag aus dem
