@@ -493,7 +493,10 @@ const PROGRAMM_INHALT = {
     include: {
       staende: true,
       risiken: true,
+      // Feste Reihenfolge: Ohne ORDER BY hinge sie vom Abfrageplan ab (Einzel- und
+      // Blockabfrage lieferten dann verschiedene Reihenfolgen).
       durchfuehrungen: {
+        orderBy: [{ periodeVon: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
         include: { _count: { select: { nachweise: { where: { entferntAm: null } } } } },
       },
     },
