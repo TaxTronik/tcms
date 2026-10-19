@@ -4,7 +4,8 @@
 // Die kanzleikonsole signiert je Anfrage ein kurzlebiges Ed25519-Token; der
 // Dienst prüft es und leitet daraus den Akteur ab. Dieses Modul ist der
 // gemeinsame Vertrag beider Seiten: Claims-Schema (strikt) und Akteurstyp.
-// Kryptografie liegt nicht hier, sondern im Dienst bzw. in der kanzleikonsole.
+// Signieren und Prüfen (node:crypto) liegen in `signatur.ts`, damit beide
+// Seiten denselben Code nutzen.
 // =============================================================================
 
 import { z } from 'zod';
