@@ -443,7 +443,8 @@ Variable `REGISTRY`, Secrets `REGISTRY_USER` und `REGISTRY_TOKEN`.
 (ohne Tests) im Format von `packages/tcms-contract/VENDOR.json` der kanzleikonsole aus;
 `pnpm vertrag:export --paket domain` dasselbe für `packages/domain/src` ohne Tests und ohne
 `audit.ts` (`packages/tcms-domain/VENDOR.json`, Oberflächen der kanzleikonsole ab Stufe 3). Alle
-Dateien eines vendorten Pakets müssen normale Dateien sein (Modus 100644).
+Dateien eines vendorten Pakets müssen normale Dateien sein (Modus 100644). Das gilt im ganzen
+Repository außer für die drei direkt gestarteten Shell-Skripte (`repo-dateimodus.test.ts`, AGENTS.md).
 
 ## Grenzen dieses Stands
 

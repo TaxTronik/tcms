@@ -260,6 +260,13 @@ vorhandenen Tokens aufsetzen.
   Quelltext nur als Escape; alle Dateien UTF-8 ohne BOM. Der statische Test
   `packages/contract/src/__tests__/repo-zeichen.test.ts` prüft Index und
   Arbeitsbaum; Ausnahmen nur je Datei und Zeichen mit Begründung.
+- Versionierte Dateien sind normale Dateien (Modus 100644), keine Symlinks oder
+  Submodule. Ausführbar (100755) sind nur die direkt gestarteten Skripte
+  `packages/db/betrieb/migrate.sh`, `scripts/pruefe-lieferkette.sh` und
+  `scripts/simuliere-image.sh`; `.mjs`-Skripte laufen über `node …`. Die
+  Positivliste mit Begründung steht in
+  `packages/contract/src/__tests__/repo-dateimodus.test.ts` (prüft
+  `git ls-files -s`).
 
 ## Prüfen vor Abschluss
 
