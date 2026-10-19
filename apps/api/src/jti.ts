@@ -3,10 +3,13 @@
 //
 // Der Dienst trägt jede `jti` nach erfolgreicher Prüfung ein, bevor die Route
 // läuft, und zwar außerhalb der Tenant-Transaktion: Auch eine Anfrage, deren
-// Route später scheitert, verbraucht ihre `jti`. Die Prüfung muss atomar sein,
-// damit zwei gleichzeitige Anfragen mit derselben `jti` nicht beide
-// durchkommen.
+// Route später scheitert, verbraucht ihre `jti`. Die Prüfung ist atomar
+// (`INSERT … ON CONFLICT DO NOTHING RETURNING`), damit zwei gleichzeitige
+// Anfragen mit derselben `jti` nicht beide durchkommen.
 // =============================================================================
+
+import type pg from 'pg';
+import type { Logger } from './log';
 
 export interface JtiSpeicher {
   /** `true` genau dann, wenn diese `jti` zum ersten Mal eingetragen wurde. */
@@ -47,4 +50,89 @@ export class SpeicherJti implements JtiSpeicher {
     }
     return n;
   }
+}
+
+/**
+ * Tabelle `akteur_jti (jti text PRIMARY KEY, exp timestamptz NOT NULL)` aus
+ * dem Schema von `packages/db` (nicht mandantengebunden, ohne RLS; die
+ * Laufzeitrolle braucht INSERT, SELECT für RETURNING und DELETE).
+ */
+export class PgJti implements JtiSpeicher {
+  readonly #pool: Pick<pg.Pool, 'query'>;
+  readonly #stapel: number;
+  readonly #maxStapelJeLauf: number;
+
+  constructor(pool: Pick<pg.Pool, 'query'>, stapel = 1000, maxStapelJeLauf = 100) {
+    this.#pool = pool;
+    this.#stapel = stapel;
+    this.#maxStapelJeLauf = maxStapelJeLauf;
+  }
+
+  async einmalig(jti: string, exp: Date): Promise<boolean> {
+    pruefeEingabe(jti, exp);
+    const r = await this.#pool.query(
+      'INSERT INTO akteur_jti (jti, exp) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING jti',
+      [jti, exp],
+    );
+    return r.rowCount === 1;
+  }
+
+  /**
+   * Löscht abgelaufene Einträge in Stapeln (kurze Sperren, begrenzte Arbeit je
+   * Lauf). Ein abgelaufener, noch nicht gelöschter Eintrag weist dieselbe
+   * `jti` weiter ab; das ist gewollt (fail closed), die Bestätigung ist dann
+   * ohnehin abgelaufen. Ohne `FOR UPDATE`: Das bräuchte das UPDATE-Recht, das
+   * die Laufzeitrolle auf `akteur_jti` nicht hat; parallele Läufe löschen
+   * schlimmstenfalls dieselben Zeilen (dann 0 Zeilen).
+   */
+  async aufraeumen(): Promise<number> {
+    let gesamt = 0;
+    for (let i = 0; i < this.#maxStapelJeLauf; i++) {
+      const r = await this.#pool.query(
+        `DELETE FROM akteur_jti WHERE jti IN (
+           SELECT jti FROM akteur_jti WHERE exp < now() LIMIT $1
+         )`,
+        [this.#stapel],
+      );
+      gesamt += r.rowCount ?? 0;
+      if ((r.rowCount ?? 0) < this.#stapel) break;
+    }
+    return gesamt;
+  }
+}
+
+/**
+ * Räumt in einem Intervall mit Streuung auf (Basis plus bis zu 50 %), damit
+ * mehrere Instanzen nicht im Gleichtakt löschen. Liefert eine Stopp-Funktion.
+ */
+export function starteJtiAufraeumen(
+  speicher: { aufraeumen(): Promise<number> },
+  opts: { log: Logger; intervallMs?: number; zufall?: () => number },
+): () => void {
+  const basis = opts.intervallMs ?? 60_000;
+  const zufall = opts.zufall ?? Math.random;
+  let timer: NodeJS.Timeout | undefined;
+  let gestoppt = false;
+  const plane = () => {
+    if (gestoppt) return;
+    timer = setTimeout(lauf, basis + Math.floor(zufall() * basis * 0.5));
+    timer.unref();
+  };
+  const lauf = async () => {
+    try {
+      const geloescht = await speicher.aufraeumen();
+      if (geloescht > 0) opts.log.schreibe('info', 'jti_aufgeraeumt', { anzahl: geloescht });
+    } catch (e) {
+      opts.log.schreibe('warn', 'jti_aufraeumen_fehlgeschlagen', {
+        fehler: e instanceof Error ? e.name : 'unbekannt',
+      });
+    } finally {
+      plane();
+    }
+  };
+  plane();
+  return () => {
+    gestoppt = true;
+    if (timer) clearTimeout(timer);
+  };
 }
