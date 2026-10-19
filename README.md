@@ -23,13 +23,22 @@ Freigabe per E-Mail-Code und ein Mandantenportal.
 ```powershell
 cd C:\Users\Rey\Documents\GitHub\tcms
 docker compose up -d                 # PostgreSQL auf 127.0.0.1:5433, legt Rollen tcms_owner/tcms_app an
-Copy-Item .env.example .env          # danach SESSION_SECRET setzen (openssl rand -hex 32)
 pnpm install
+pnpm env:lokal                       # .env aus .env.example, Geheimnisse zufällig (siehe unten)
 pnpm db:generate                     # Prisma-Client erzeugen
 pnpm db:deploy                       # Migration einspielen (als tcms_owner, DATABASE_OWNER_URL)
 pnpm db:seed                         # Demodaten im Demo-Tenant (Stichtag 16.10.2026)
 pnpm dev                             # http://localhost:3100
 ```
+
+`pnpm env:lokal` legt die `.env` im Repo-Root aus `.env.example` an (bzw. ergänzt eine vorhandene)
+und erzeugt `SESSION_SECRET` und `TCMS_CODE_SCHLUESSEL` mit `node:crypto`, wo der Wert fehlt, leer
+oder ein Platzhalter ist. Vorhandene gültige Werte bleiben unverändert (ein neuer Code-Schlüssel ließe
+offene Codes ablaufen); die Datei hat danach Modus 0600, und die Ausgabe nennt nur Namen, nie Werte.
+Das Skript bricht ab mit `NODE_ENV=production`, wenn `.env` ein Symlink ist, wenn git sie versioniert
+oder nicht ignoriert, oder wenn ein eigener Wert ungültig ist (nichts wird überschrieben). Für
+`pnpm api` bleiben `TCMS_SERVICE_TOKENS` und `TCMS_ACTOR_PUBLIC_KEYS` von Hand zu setzen (siehe
+„Dienst (headless)“).
 
 `pnpm db:seed` setzt die Datenbank jedes Mal vollständig zurück (alle Tenants) und bricht mit
 `NODE_ENV=production` ab. Bestehende Volumes aus der Zeit vor dem Umbau einmal löschen
@@ -43,7 +52,7 @@ Anfrage einen `Akteur` wie aus der Akteursbestätigung der kanzleikonsole: Kanzl
 den Bezug (`cli`) zum Mandanten, um den es geht, mit Zuständigkeit (BT, Hauptbearbeitung) aus dem
 Verzeichnis; Rollen der Mandantenseite kommen aus `MandantKontaktRolle`. Mit `NODE_ENV=production`
 ist die Demo-Anmeldung immer verweigert (TS-01); `SESSION_SECRET` muss ein eigener Zufallswert
-sein, bekannte Platzhalter weist die Demo ab (TS-02).
+sein (`pnpm env:lokal` erzeugt ihn), bekannte Platzhalter weist die Demo ab (TS-02).
 
 | Person            | Rolle                                                | gut für                                                                |
 | ----------------- | ---------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -77,6 +86,7 @@ schreibgeschützt ansehen.
 
 | Befehl                | Zweck                                                                     |
 | --------------------- | ------------------------------------------------------------------------- |
+| `pnpm env:lokal`      | lokale `.env` anlegen bzw. ergänzen (Geheimnisse zufällig, Modus 0600)    |
 | `pnpm dev`            | Entwicklungsserver der Demo auf Port 3100                                 |
 | `pnpm build`          | Builds von `apps/web` (Next.js) und `apps/api` (Bundle `dist/server.mjs`) |
 | `pnpm start`          | Produktionsserver der Demo                                                |

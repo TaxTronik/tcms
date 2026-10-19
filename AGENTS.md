@@ -306,6 +306,10 @@ vorhandenen Tokens aufsetzen.
   die Positivliste `.dockerignore`; `pnpm image:pruefen` prüft beides.
 - Passwörter und Tokens nie als Kommandozeilenargument, nie in Logs oder
   Ausgaben (auch nicht in Skripten, Tests und CI).
+- Lokale Geheimnisse der Entwicklung (`SESSION_SECRET`, `TCMS_CODE_SCHLUESSEL`) erzeugt nur
+  `pnpm env:lokal` (`scripts/lokale-env.mjs`): `.env` im Repo-Root, Modus 0600, atomar
+  geschrieben, Werte nie ausgegeben, vorhandene gültige Werte unverändert, Abbruch bei
+  Symlink, `NODE_ENV=production` oder wenn git `.env` versioniert bzw. nicht ignoriert.
 - Neue Abhängigkeiten nur mit exakter Version; `pnpm-workspace.yaml` bleibt so
   streng, wie `scripts/pruefe-lieferkette.sh` verlangt.
 - Keine rohen unsichtbaren oder bidirektionalen Zeichen in versionierten Dateien

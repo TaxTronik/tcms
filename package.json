@@ -13,6 +13,7 @@
     "start": "pnpm --filter @tcms/web start",
     "api": "pnpm --filter @tcms/api start",
     "akteur:schluessel": "node scripts/akteur-schluessel.mjs",
+    "env:lokal": "node scripts/lokale-env.mjs",
     "vertrag:export": "node scripts/vertrag-export.mjs",
     "image:pruefen": "node scripts/pruefe-dockerfile.mjs",
     "typecheck": "pnpm -r --parallel run typecheck",
