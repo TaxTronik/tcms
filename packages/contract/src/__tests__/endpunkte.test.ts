@@ -10,6 +10,7 @@ import {
   ENDPUNKT_METHODEN,
   ENDPUNKTE,
   pruefeAkteure,
+  pruefePortal,
   type Endpunkt,
 } from '../endpunkte';
 
@@ -137,6 +138,40 @@ describe('Endpunktregister', () => {
     }
     expect(ENDPUNKTE.ich.akteure).toEqual(['KANZLEI', 'MANDANT']);
     expect(ENDPUNKTE.kontextLesen.akteure).toEqual(['KANZLEI']);
+  });
+
+  it('Portal-Endpunkte nur für Mandantenkontakte; beide Personenarten nur an /v1/ich (Stufe 5)', () => {
+    const portal = ENDPUNKT_LISTE.filter((e) => e.pfad.startsWith(`${MANDANT}/portal/`));
+    expect(portal.length).toBe(16);
+    for (const e of portal) expect(e.akteure, e.name).toEqual(['MANDANT']);
+    const mitKanzleiUndMandant = ENDPUNKT_LISTE.filter(
+      (e) => e.akteure.includes('KANZLEI') && e.akteure.includes('MANDANT'),
+    );
+    expect(mitKanzleiUndMandant.map((e) => e.name)).toEqual(['ich']);
+    for (const e of ENDPUNKT_LISTE) {
+      if (e.akteure.includes('MANDANT'))
+        expect(portal.includes(e) || e.name === 'ich', e.name).toBe(true);
+    }
+  });
+
+  it('weist Portal-Pfade für Kanzleipersonen und Mandantenkontakte außerhalb des Portals ab (fail closed)', () => {
+    const P = `${MANDANT}/portal/x`;
+    const fehler: [string, readonly ('KANZLEI' | 'MANDANT' | 'SYSTEM')[], RegExp][] = [
+      [P, ['KANZLEI', 'MANDANT'], /Portal-Pfade nur für MANDANT/],
+      [P, ['KANZLEI'], /Portal-Pfade nur für MANDANT/],
+      [`${MANDANT}/portal`, ['MANDANT'], /MANDANT nur auf Portal-Pfaden/],
+      [`${MANDANT}/kontakte`, ['KANZLEI', 'MANDANT'], /MANDANT nur auf Portal-Pfaden/],
+      ['/v1/portfolio', ['MANDANT'], /MANDANT nur auf Portal-Pfaden/],
+      ['/v1/ich/x', ['MANDANT'], /MANDANT nur auf Portal-Pfaden/],
+    ];
+    for (const [pfad, akteure, meldung] of fehler) {
+      expect(() => pruefePortal('test', pfad, akteure), `${pfad} ${akteure.join('+')}`).toThrow(
+        meldung,
+      );
+    }
+    expect(() => pruefePortal('test', P, ['MANDANT'])).not.toThrow();
+    expect(() => pruefePortal('test', '/v1/ich', ['KANZLEI', 'MANDANT'])).not.toThrow();
+    expect(() => pruefePortal('test', `${MANDANT}/kontakte`, ['KANZLEI'])).not.toThrow();
   });
 
   it('lässt den Systemakteur genau an die zwei Nachrichten-Endpunkte, an keinen anderen', () => {

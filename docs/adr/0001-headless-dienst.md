@@ -92,7 +92,8 @@ Mandantenbindung (3.3, 3.4). Erst danach wird der Body geparst.
   (`akteure`, Abschnitt 7). Jede andere Art erhält `404` wie ein unbekannter
   Pfad – vor jeder Auswertung der Eingaben.
 - `MANDANT`-Personen erreichen nur Pfade ihres eigenen Mandanten und nur die
-  Portal-Endpunkte (und `/v1/ich`).
+  Portal-Endpunkte (und `/v1/ich`); die Portal-Endpunkte erreichen nur sie
+  (Stufe 5).
 - Mandantenübergreifende Lesepfade (Portfolio, Arbeitskorb) bekommen die Liste
   der zugänglichen Mandanten-IDs im Body (gebunden über `req.b`, höchstens
   5 000 IDs) und liefern nur diese.
@@ -235,11 +236,15 @@ beim Start, dass Routentabelle und Register genau übereinstimmen (auch die
 Akteursarten); sonst startet er nicht.
 
 `akteure` ist die einzige Quelle der Zulassung: Standard `['KANZLEI']`,
-`['KANZLEI', 'MANDANT']` für `/v1/ich` und alle Portal-Endpunkte
-(`…/portal/…`), `['SYSTEM']` nur für die zwei Nachrichten-Endpunkte, leer nur
-bei `health`. `pruefeAkteure` weist beim Laden des Vertrags unbekannte oder
+`['KANZLEI', 'MANDANT']` nur für `/v1/ich`, `['MANDANT']` für alle
+Portal-Endpunkte (`…/portal/…`, seit Stufe 5: Kanzleipersonen lesen und
+schreiben über ihre eigenen Endpunkte, ein Portal-Endpunkt antwortet ihnen
+`404`), `['SYSTEM']` nur für die zwei Nachrichten-Endpunkte, leer nur bei
+`health`. `pruefeAkteure` weist beim Laden des Vertrags unbekannte oder
 doppelte Arten ab, ebenso `SYSTEM` neben einer Person oder auf einem
-Mandantenpfad. `portal` ist abgeleitet (`akteure` enthält `MANDANT`) und bleibt
+Mandantenpfad; `pruefePortal` weist jeden Registereintrag ab, der einen
+Portal-Pfad nicht genau `MANDANT` öffnet oder `MANDANT` außerhalb des Portals
+und `/v1/ich` zulässt. `portal` ist abgeleitet (`akteure` enthält `MANDANT`) und bleibt
 nur für bestehende Aufrufer (Client der kanzleikonsole); entschieden wurde
 gegen zwei Felder mit eigener Bedeutung, damit eine Definition sich nicht
 widersprechen kann.

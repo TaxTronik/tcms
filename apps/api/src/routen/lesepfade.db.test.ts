@@ -172,12 +172,10 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
       expect(r.status).toBe(404);
     });
 
-    it('Kanzleiperson: 403 (nur Mandantenkontakte)', async () => {
+    it('Kanzleiperson: 404 wie ein unbekannter Pfad (Portal nur für Mandantenkontakte)', async () => {
       const r = await bestaetigtSenden(app(), { ziel: pfad, claims: anna() });
-      expect(r.status).toBe(403);
-      expect(await r.json()).toMatchObject({
-        fehler: { code: 'NICHT_BERECHTIGT', grund: 'PARTEI' },
-      });
+      expect(r.status).toBe(404);
+      expect(await r.json()).toEqual({ ok: false, fehler: { code: 'NICHT_GEFUNDEN' } });
     });
 
     it('Query: 400', async () => {

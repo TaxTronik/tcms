@@ -207,7 +207,8 @@ keine Verbindungen mehr an, lässt laufende Anfragen höchstens 20 s zu Ende lau
 **Endpunktregister.** Jeder Endpunkt steht genau einmal in `packages/contract/src/endpunkte.ts`
 (`ENDPUNKTE`: Methode, Pfadmuster, zugelassene Akteursarten `akteure`, `mandantenbezogen`, Schemas für
 Pfadparameter, Query, Body und Antwort, Erfolgsstatus; `portal` ist aus `akteure` abgeleitet). Jede nicht
-zugelassene Akteursart erhält `404` (ADR 0001 §3.4). Die Routen in `apps/api/src/routen/*` liefern nur Handler
+zugelassene Akteursart erhält `404` (ADR 0001 §3.4); Portal-Endpunkte (`…/portal/…`) lassen nur
+Mandantenkontakte zu, `/v1/ich` beide Personenarten. Die Routen in `apps/api/src/routen/*` liefern nur Handler
 (`r.endpunkt(ENDPUNKTE.risikoLesen, …)`); beim Start vergleicht der Dienst seine Routentabelle mit dem
 Register und startet bei jeder Abweichung nicht. Die API-Tests prüfen jede Antwort gegen den Vertrag
 (`apps/api/src/__tests__/vertrag.ts`). Die kanzleikonsole kann ihren Client direkt aus einem Eintrag

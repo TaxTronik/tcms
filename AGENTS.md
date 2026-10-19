@@ -213,7 +213,8 @@ für KI-Werkzeuge.
   dort; weichen Routentabelle und Register ab, startet der Dienst nicht. Jede
   Fachroute verlangt Token und Bestätigung. Jede Route lässt nur die
   Akteursarten aus `akteure` zu (sonst 404): `MANDANT`-Personen nur `/v1/ich`
-  und `…/portal/…`, der Systemakteur (`knd: SYSTEM`, ohne `rol`/`cli`) nur die
+  und `…/portal/…`, die Portal-Endpunkte nur `MANDANT`-Personen
+  (`NUR_MANDANT`, beim Laden von `pruefePortal` erzwungen), der Systemakteur (`knd: SYSTEM`, ohne `rol`/`cli`) nur die
   zwei Nachrichten-Endpunkte, nie neben einer Person und nie auf
   Mandantenpfaden. Pfade unter `/v1/mandanten/:mandantId/…` sind an `cli.id`
   gebunden. Pfadparameter werden nach Body und Query eingesetzt.

@@ -110,7 +110,7 @@ describe('Routentabelle und Endpunktregister', () => {
     for (const [name, akteure] of [
       ['kontakteLesen', ['KANZLEI', 'MANDANT']],
       ['nachrichtenOffenLesen', ['SYSTEM', 'KANZLEI']],
-      ['portalFreigabenLesen', ['MANDANT']],
+      ['portalFreigabenLesen', ['KANZLEI', 'MANDANT']],
       ['auditLesen', ['SYSTEM']],
     ] as const) {
       const geaendert = eintraege.map((r) => (r.endpunkt?.name === name ? { ...r, akteure } : r));
