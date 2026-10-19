@@ -1,7 +1,8 @@
 // =============================================================================
 // Start des Dienstes: Konfiguration prüfen (fail closed), Laufzeitverbindung
 // prüfen (`pruefeLaufzeitverbindung` aus @tcms/db), jti-Aufräumen starten,
-// Node-Server auf HOST:PORT (Standard 0.0.0.0:3200).
+// Node-Server auf HOST:PORT (Standard 0.0.0.0:3200), geordnetes Beenden auf
+// SIGTERM/SIGINT (laufende Anfragen höchstens 20 s, `beenden.ts`).
 //
 // Mandantenkontext: ausschließlich `mitTenant` aus @tcms/db (eine einzige
 // Implementierung). Der `pg`-Pool derselben Laufzeitverbindung dient nur dem
@@ -12,15 +13,15 @@
 // =============================================================================
 
 import { readFileSync } from 'node:fs';
+import type { Server } from 'node:http';
 import { createAdaptorServer } from '@hono/node-server';
-import { mitTenant, pruefeLaufzeitverbindung } from '@tcms/db';
+import { mitTenant, pruefeLaufzeitverbindung, TenantFehler } from '@tcms/db';
 import pg from 'pg';
+import { geordnetBeenden } from './beenden';
 import { erzeugeDienst } from './dienst';
 import { PgJti, starteJtiAufraeumen } from './jti';
 import { KonfigurationsFehler, ladeKonfiguration } from './konfiguration';
-import { jsonLogger } from './log';
-
-const log = jsonLogger();
+import { jsonLogger, type Logger } from './log';
 
 /** Beim Bündeln gesetzt (TCMS-Version = Image-Tag); in der Entwicklung aus package.json. */
 declare const __TCMS_VERSION__: string | undefined;
@@ -33,8 +34,11 @@ function dienstVersion(): string {
   return paket.version;
 }
 
+let log: Logger = jsonLogger();
+
 async function starte() {
   const konfiguration = ladeKonfiguration(process.env);
+  log = jsonLogger(undefined, undefined, konfiguration.logStufe);
   const version = dienstVersion();
 
   // Fail closed: Superuser, BYPASSRLS oder Tabelleneigentum der Laufzeitrolle
@@ -51,7 +55,6 @@ async function starte() {
 
   const jti = new PgJti(pool);
   const stoppeAufraeumen = starteJtiAufraeumen(jti, { log });
-  // Alle Fachrouten aus dem Endpunktregister, beim Aufbau dagegen geprüft.
   const app = erzeugeDienst({
     konfiguration: {
       dienstTokens: konfiguration.dienstTokens,
@@ -86,25 +89,33 @@ async function starte() {
     });
   });
 
-  const beende = (signal: string) => {
-    log.schreibe('info', 'beende', { signal });
-    stoppeAufraeumen();
-    server.close(() => {
-      void pool.end().finally(() => process.exit(0));
-    });
-    setTimeout(() => process.exit(1), 10_000).unref();
-  };
+  const beende = geordnetBeenden({
+    // createAdaptorServer ohne eigenes createServer liefert einen http.Server.
+    server: server as Server,
+    log,
+    aufraeumen: async () => {
+      stoppeAufraeumen();
+      await pool.end();
+    },
+    ende: (code) => process.exit(code),
+  });
   process.once('SIGTERM', () => beende('SIGTERM'));
   process.once('SIGINT', () => beende('SIGINT'));
 }
 
-starte().catch((e: unknown) => {
-  // KonfigurationsFehler nennt nur Variablen und Gründe, nie Werte.
-  const meldung =
-    e instanceof KonfigurationsFehler ? e.message : e instanceof Error ? e.message : '';
-  log.schreibe('error', 'start_fehlgeschlagen', {
+/** Meldung nur für eigene Fehlerklassen (ohne Werte); sonst nur Name und Code. */
+function startFehler(e: unknown): Record<string, string> {
+  if (e instanceof KonfigurationsFehler || e instanceof TenantFehler) {
+    return { fehler: e.name, meldung: e.message };
+  }
+  const code = (e as { code?: unknown } | null)?.code;
+  return {
     fehler: e instanceof Error ? e.name : 'unbekannt',
-    meldung,
-  });
+    ...(typeof code === 'string' && /^[A-Z0-9_]{1,40}$/.test(code) ? { code } : {}),
+  };
+}
+
+starte().catch((e: unknown) => {
+  log.schreibe('error', 'start_fehlgeschlagen', startFehler(e));
   process.exit(1);
 });

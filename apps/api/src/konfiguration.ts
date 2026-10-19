@@ -10,6 +10,7 @@ import type { KeyObject } from 'node:crypto';
 import { parseSchluesselListe } from '@tcms/contract';
 import { z } from 'zod';
 import { B64TOKEN } from './dienst-token';
+import { LOG_STUFEN, type LogStufe } from './log';
 
 export interface Konfiguration {
   dienstTokens: string[];
@@ -17,6 +18,7 @@ export interface Konfiguration {
   datenbankUrl: string;
   host: string;
   port: number;
+  logStufe: LogStufe;
 }
 
 export class KonfigurationsFehler extends Error {
@@ -129,6 +131,9 @@ function schema(produktion: boolean) {
       .transform(Number)
       .refine((p) => p <= 65_535, 'ist keine Portnummer')
       .default(3200),
+    TCMS_LOG_LEVEL: z
+      .enum(LOG_STUFEN, { error: `erlaubt sind ${LOG_STUFEN.join(', ')}` })
+      .default('info'),
   });
 }
 
@@ -157,5 +162,6 @@ export function ladeKonfiguration(
     datenbankUrl: d.DATABASE_URL,
     host: d.HOST,
     port: d.PORT,
+    logStufe: d.TCMS_LOG_LEVEL,
   };
 }

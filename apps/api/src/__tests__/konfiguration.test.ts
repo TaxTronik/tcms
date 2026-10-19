@@ -49,6 +49,16 @@ describe('ladeKonfiguration', () => {
     });
   });
 
+  it('liest TCMS_LOG_LEVEL (Standard info) und weist unbekannte Stufen ab', () => {
+    expect(ladeKonfiguration(GUELTIG).logStufe).toBe('info');
+    expect(ladeKonfiguration({ ...GUELTIG, TCMS_LOG_LEVEL: 'warn' }).logStufe).toBe('warn');
+    for (const stufe of ['debug', 'INFO', '']) {
+      expect(probleme({ ...GUELTIG, TCMS_LOG_LEVEL: stufe }).join(), stufe).toContain(
+        'TCMS_LOG_LEVEL',
+      );
+    }
+  });
+
   it('weist jede fehlende Pflichtvariable ab', () => {
     for (const name of Object.keys(GUELTIG)) {
       const env: Record<string, string> = { ...GUELTIG };
