@@ -225,6 +225,21 @@ Header-Werte und Bodys). Fremde Mandanten und nicht kanonische Pfade ergeben `40
 `GET /v1/health` braucht nur das Dienst-Token, `GET /v1/ich` liefert den abgeleiteten Akteur
 (Vertragstest).
 
+**Endpunkte Lesepfade und Verwaltung** (Rechte prüft `packages/service`; Personen nur als IDs, Namen
+und Zuständigkeit ergänzt die kanzleikonsole):
+
+| Methode | Pfad                                                         | Recht                                                                  |
+| ------- | ------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| GET     | `/v1/mandanten/:mandantId/kontext?stand=`                    | Kanzleiperson mit `cli`; vertrauliche Feststellungen maskiert          |
+| POST    | `/v1/portfolio`                                              | Kanzleiperson; Body `{ mandantIds, bt?, hb? }` (≤ 5 000, ADR §3.3)     |
+| POST    | `/v1/arbeitskorb`                                            | wie Portfolio; Zuständigkeit nur aus `bt`/`hb` der Liste               |
+| GET     | `/v1/mandanten/:mandantId/portal/uebersicht`                 | Mandantenkontakt mit aktiver Rolle (`portal: true`)                    |
+| PUT     | `/v1/mandanten/:mandantId`                                   | `kannBearbeiten`; Anker anlegen/aktualisieren, auditiert               |
+| GET     | `/v1/mandanten/:mandantId/kontakte`                          | Kanzleiperson mit `cli`                                                |
+| PUT     | `/v1/mandanten/:mandantId/kontakte`                          | `kannBearbeiten`; Rollen eines Kontakts setzen/deaktivieren, auditiert |
+| GET     | `/v1/audit?programmId=&mandantId=&aktion=&nach=&vor=&limit=` | Admin/Partner; höchstens 500 je Seite                                  |
+| POST    | `/v1/audit/pruefen`                                          | Admin/Partner; Kette seitenweise, Zeitbudget 20 s, Fortsetzung `ab`    |
+
 Tests: `pnpm --filter @tcms/api test`. Die PostgreSQL-Tests laufen gegen eine Datenbank, die wie in
 Produktion aufgebaut ist (Bootstrap und Migration wie oben unter „Datenbank“), ausschließlich als
 Laufzeitrolle `tcms_app`:

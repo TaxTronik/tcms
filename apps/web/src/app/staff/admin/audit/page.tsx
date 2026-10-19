@@ -1,14 +1,15 @@
 import Link from 'next/link';
-import type { Prisma } from '@tcms/db';
+import { MAX_AUDIT_SEQ } from '@tcms/contract';
+import { DEMO_MANDANTEN } from '@tcms/db/demo';
 import { fmtDatumZeit } from '@tcms/domain';
-import { AdminKopf, NurAdmin, Seiten } from '@/components/admin/teile';
+import { AdminKopf, NurAdmin } from '@/components/admin/teile';
 import { Icon } from '@/components/icon';
 import { Hash } from '@/components/ui/badges';
 import { AktionsForm, SubmitButton } from '@/components/ui/client';
 import { Leerzustand } from '@/components/ui/leer';
 import { pruefeHashkette } from '@/server/actions/admin';
-import { kannVerwalten } from '@tcms/service';
-import { lies } from '@/server/demo';
+import { imDienst, kannVerwalten, ladeAudit } from '@tcms/service';
+import { DEMO_PORTS } from '@/server/demo';
 import { brauchtKanzlei } from '@/server/sitzung';
 
 export const metadata = { title: 'Audit-Log' };
@@ -22,66 +23,49 @@ export default async function AuditLog({ searchParams }: { searchParams: Promise
   const nutzer = await brauchtKanzlei();
   if (!kannVerwalten(nutzer)) return <NurAdmin titel="Audit-Log" />;
   const sp = await searchParams;
-  const mandantId = eins(sp['mandant']);
-  const aktion = eins(sp['aktion']).trim();
-  const seiteRoh = Number.parseInt(eins(sp['seite']) || '1', 10);
+  // Filter nur in gültiger Form an den Service (sonst ignoriert); Mandanten aus dem Verzeichnis.
+  const mandantRoh = eins(sp['mandant']);
+  const mandantId = DEMO_MANDANTEN.some((m) => m.id === mandantRoh) ? mandantRoh : '';
+  const aktionRoh = eins(sp['aktion']).trim();
+  const aktion = /^[a-z0-9._]{1,100}$/.test(aktionRoh) ? aktionRoh : '';
+  const vorRoh = eins(sp['vor']);
+  const vor = /^[0-9]{1,10}$/.test(vorRoh)
+    ? Math.min(Number(vorRoh), MAX_AUDIT_SEQ)
+    : MAX_AUDIT_SEQ;
 
-  // Audit des Tenants (Kette je Kanzlei, ADR 0001 §4); alles in einer Transaktion.
-  const { programme, mandanten, aktionen, gesamt, seiten, seite, eintraege, letzter } = await lies(
-    async (tx) => {
-      const programme = await tx.tcmsProgramm.findMany({
-        select: { id: true, mandant: { select: { id: true, name: true } } },
-      });
-      const mandanten = await tx.mandant.findMany({
-        orderBy: { name: 'asc' },
-        select: { id: true, name: true },
-      });
-      const aktionen = await tx.auditEvent.findMany({
-        distinct: ['aktion'],
-        select: { aktion: true },
-        orderBy: { aktion: 'asc' },
-      });
-      const where: Prisma.AuditEventWhereInput = {};
-      if (mandantId)
-        where.programmId = {
-          in: programme.filter((p) => p.mandant.id === mandantId).map((p) => p.id),
-        };
-      if (aktion) where.aktion = { startsWith: aktion };
-      const gesamt = await tx.auditEvent.count({ where });
-      const seiten = Math.max(1, Math.ceil(gesamt / PRO_SEITE));
-      const seite = Math.min(Math.max(1, Number.isFinite(seiteRoh) ? seiteRoh : 1), seiten);
-      const eintraege = await tx.auditEvent.findMany({
-        where,
-        orderBy: { seq: 'desc' },
-        skip: (seite - 1) * PRO_SEITE,
-        take: PRO_SEITE,
-      });
-      const letzter = await tx.auditEvent.findFirst({
-        orderBy: { seq: 'desc' },
-        select: { seq: true, hash: true, at: true },
-      });
-      return { programme, mandanten, aktionen, gesamt, seiten, seite, eintraege, letzter };
-    },
+  // Audit des Tenants (Kette je Kanzlei, ADR 0001 §4) über @tcms/service, neueste zuerst.
+  const seite = await imDienst(nutzer, DEMO_PORTS, (ctx) =>
+    ladeAudit(ctx, {
+      ...(mandantId ? { mandantId } : {}),
+      ...(aktion ? { aktion } : {}),
+      vor,
+      limit: PRO_SEITE,
+    }),
   );
-  const mandantJeProgramm = new Map(programme.map((p) => [p.id, p.mandant]));
-
+  const eintraege = seite.eintraege;
+  const letzter = seite.kopf;
+  const mandanten = [...DEMO_MANDANTEN]
+    .map((m) => ({ id: m.id, name: m.name }))
+    .sort((x, y) => x.name.localeCompare(y.name, 'de'));
+  const mandantName = new Map(mandanten.map((m) => [m.id, m.name]));
   const praefixe = [
     ...new Set(
-      aktionen.flatMap((a) => {
-        const t = a.aktion.split('.');
-        return [t.slice(0, 2).join('.'), a.aktion];
+      eintraege.flatMap((e) => {
+        const t = e.aktion.split('.');
+        return [t.slice(0, 2).join('.'), e.aktion];
       }),
     ),
   ].sort();
 
-  const href = (s: number) => {
+  const href = (v: number | null) => {
     const p = new URLSearchParams();
     if (mandantId) p.set('mandant', mandantId);
     if (aktion) p.set('aktion', aktion);
-    if (s > 1) p.set('seite', String(s));
+    if (v !== null) p.set('vor', String(v));
     const q = p.toString();
     return q ? `/staff/admin/audit?${q}` : '/staff/admin/audit';
   };
+  const ersteSeite = vor === MAX_AUDIT_SEQ;
 
   return (
     <div className="page">
@@ -212,7 +196,7 @@ export default async function AuditLog({ searchParams }: { searchParams: Promise
               </thead>
               <tbody>
                 {eintraege.map((e) => {
-                  const m = e.programmId ? mandantJeProgramm.get(e.programmId) : undefined;
+                  const m = e.mandantId ? mandantName.get(e.mandantId) : undefined;
                   const detail = JSON.stringify(e.detail ?? {});
                   return (
                     <tr key={e.seq} id={`seq-${e.seq}`}>
@@ -220,7 +204,7 @@ export default async function AuditLog({ searchParams }: { searchParams: Promise
                         {e.seq}
                       </td>
                       <td style={{ ...TD, whiteSpace: 'nowrap' }} className="text-xs mono">
-                        {fmtDatumZeit(e.at)}
+                        {fmtDatumZeit(new Date(e.at))}
                       </td>
                       <td style={{ ...TD, whiteSpace: 'nowrap' }} className="text-sm">
                         {e.actorName}
@@ -249,7 +233,7 @@ export default async function AuditLog({ searchParams }: { searchParams: Promise
                         </div>
                       </td>
                       <td style={{ ...TD, maxWidth: 170 }} className="text-xs text-secondary">
-                        {m ? m.name : <span className="text-muted">–</span>}
+                        {m ?? <span className="text-muted">–</span>}
                       </td>
                       <td style={{ ...TD, whiteSpace: 'nowrap' }}>
                         <span className="badge-gray" title={`prev ${e.prevHash}`}>
@@ -265,10 +249,21 @@ export default async function AuditLog({ searchParams }: { searchParams: Promise
         )}
         <div className="card-footer">
           <span>
-            {gesamt} {gesamt === 1 ? 'Eintrag' : 'Einträge'}
+            {eintraege.length} {eintraege.length === 1 ? 'Eintrag' : 'Einträge'}
             {mandantId || aktion ? ' im Filter' : ''} · neueste zuerst · {PRO_SEITE} je Seite
           </span>
-          <Seiten seite={seite} seiten={seiten} href={href} />
+          <span className="row-s">
+            {!ersteSeite ? (
+              <Link href={href(null)} className="btn-secondary btn-tiny">
+                <Icon name="ArrowLeft" className="tx-icon-xs" /> neueste
+              </Link>
+            ) : null}
+            {seite.weiter !== null ? (
+              <Link href={href(seite.weiter)} className="btn-secondary btn-tiny">
+                ältere <Icon name="ChevronRight" className="tx-icon-xs" />
+              </Link>
+            ) : null}
+          </span>
         </div>
       </div>
     </div>

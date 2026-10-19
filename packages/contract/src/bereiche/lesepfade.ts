@@ -934,3 +934,127 @@ export const KontaktRollenAntwortSchema = kontaktRollenSicht
   .extend({ geaendert: z.boolean() })
   .strict();
 export type KontaktRollenAntwort = z.infer<typeof KontaktRollenAntwortSchema>;
+
+// ---------------------------------------------------------------------------
+// Audit des Tenants (nur Admins/Partner der Kanzlei)
+// ---------------------------------------------------------------------------
+
+/** Höchstzahl Audit-Einträge je Seite. */
+export const MAX_AUDIT_JE_SEITE = 500;
+
+/** Größte Position im Audit (Spalte `seq` ist INTEGER). */
+export const MAX_AUDIT_SEQ = 2_147_483_647;
+
+const seqZahl = z.number().int().min(0).max(MAX_AUDIT_SEQ);
+const seqText = z
+  .string()
+  .regex(/^[0-9]{1,10}$/)
+  .transform(Number)
+  .pipe(seqZahl);
+const programmIdFilter = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9_-]+$/);
+const aktionPraefix = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[a-z0-9._]+$/);
+
+/** Gemeinsame Regeln der Audit-Filter. */
+function auditRegeln(
+  e: { nach?: unknown; vor?: unknown; programmId?: unknown; mandantId?: unknown },
+  ctx: z.RefinementCtx,
+): void {
+  if (e.nach !== undefined && e.vor !== undefined)
+    ctx.addIssue({ code: 'custom', path: ['vor'], message: 'nach und vor schließen sich aus' });
+  if (e.programmId !== undefined && e.mandantId !== undefined)
+    ctx.addIssue({
+      code: 'custom',
+      path: ['mandantId'],
+      message: 'programmId und mandantId schließen sich aus',
+    });
+}
+
+/** Eingabe von `ladeAudit` (Service): `nach` aufsteigend, `vor` absteigend (jeweils ohne). */
+export const AuditListeEingabeSchema = z
+  .object({
+    programmId: programmIdFilter.optional(),
+    mandantId: z.uuid().optional(),
+    aktion: aktionPraefix.optional(),
+    nach: seqZahl.optional(),
+    vor: seqZahl.optional(),
+    limit: z.number().int().min(1).max(MAX_AUDIT_JE_SEITE).optional(),
+  })
+  .strict()
+  .superRefine(auditRegeln);
+export type AuditListeEingabe = z.input<typeof AuditListeEingabeSchema>;
+
+/** Query von `GET /v1/audit` (Zahlen als Text). */
+export const AuditQuerySchema = z
+  .object({
+    programmId: programmIdFilter.optional(),
+    mandantId: z.uuid().optional(),
+    aktion: aktionPraefix.optional(),
+    nach: seqText.optional(),
+    vor: seqText.optional(),
+    limit: seqText.pipe(z.number().int().min(1).max(MAX_AUDIT_JE_SEITE)).optional(),
+  })
+  .strict()
+  .superRefine(auditRegeln);
+
+const auditEintrag = z
+  .object({
+    seq: z.number().int(),
+    at: zeitpunkt,
+    actorId: text(200).nullable(),
+    actorName: text(200),
+    aktion: text(200),
+    objektTyp: text(200),
+    objektId: text(200),
+    programmId: text(200).nullable(),
+    /** Mandant des Programms (Zuordnung für die Anzeige), sonst null. */
+    mandantId: z.uuid().nullable(),
+    detail: z.json(),
+    prevHash: z.string().regex(/^[0-9a-f]{64}$/),
+    hash: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+
+/** Antwort von `GET /v1/audit`: eine Seite und der Cursor für die nächste. */
+export const AuditListeAntwortSchema = z
+  .object({
+    eintraege: z.array(auditEintrag),
+    /** Wert für `nach` bzw. `vor` der nächsten Seite; null = keine weitere. */
+    weiter: z.number().int().nullable(),
+    /** Letzter Eintrag der Kette (unabhängig vom Filter). */
+    kopf: z
+      .object({ seq: z.number().int(), hash: z.string().regex(/^[0-9a-f]{64}$/), at: zeitpunkt })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+export type AuditListeAntwort = z.infer<typeof AuditListeAntwortSchema>;
+
+/**
+ * Body von `POST /v1/audit/pruefen`: ohne `ab` von Beginn der Kette; mit `ab`
+ * Fortsetzung nach einer abgebrochenen Prüfung (Einträge nach dieser
+ * Position, verkettet mit dem gespeicherten Hash an `ab`).
+ */
+export const AuditPruefenEingabeSchema = z.object({ ab: seqZahl.optional() }).strict();
+export type AuditPruefenEingabe = z.input<typeof AuditPruefenEingabeSchema>;
+
+export const AuditPruefenAntwortSchema = z
+  .object({
+    status: z.enum(['INTAKT', 'GEBROCHEN', 'ABGEBROCHEN']),
+    /** Anzahl geprüfter Einträge in diesem Aufruf. */
+    geprueft: z.number().int(),
+    /** Erste Position, an der die Kette bricht. */
+    bruchBei: z.number().int().nullable(),
+    grund: text(200).nullable(),
+    /** Bei ABGEBROCHEN: Wert für `ab` des nächsten Aufrufs. */
+    weiterAb: z.number().int().nullable(),
+  })
+  .strict();
+export type AuditPruefenAntwort = z.infer<typeof AuditPruefenAntwortSchema>;

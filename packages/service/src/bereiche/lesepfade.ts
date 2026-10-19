@@ -36,3 +36,4 @@ export { ladeArbeitskorb } from './lesepfade/arbeitskorb';
 export { ladePortalUebersicht } from './lesepfade/portal';
 export { brauchtBearbeitung, setzeMandantAnker } from './lesepfade/mandant';
 export { ladeKontakte, setzeKontaktRollen } from './lesepfade/kontakte';
+export { ladeAudit, pruefeAudit, PRUEF_SEITE, PRUEF_ZEITBUDGET_MS } from './lesepfade/audit';

@@ -12,6 +12,8 @@ import {
   KontakteAntwortSchema,
   KontaktRollenAntwortSchema,
   KontextAntwortSchema,
+  AuditListeAntwortSchema,
+  AuditPruefenAntwortSchema,
   MandantAnkerAntwortSchema,
   MAX_MANDANTEN_JE_ANFRAGE,
   PortalUebersichtAntwortSchema,
@@ -242,6 +244,65 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
           claims: admin(),
         });
         expect(x.status, b).toBe(400);
+      }
+    });
+  });
+
+  describe('Audit', () => {
+    it('GET /v1/audit: Admin 200, Nicht-Admin 403, Mandantenperson 404, Query 400', async () => {
+      const ok = await bestaetigtSenden(app(), {
+        ziel: '/v1/audit?limit=5&nach=0&aktion=tcms',
+        claims: anna({ cli: undefined }),
+      });
+      expect(ok.status).toBe(200);
+      const daten = AuditListeAntwortSchema.parse((await json(ok))['daten']);
+      expect(daten.eintraege.length).toBeLessThanOrEqual(5);
+      const nichtAdmin = await bestaetigtSenden(app(), {
+        ziel: '/v1/audit',
+        claims: anna({ rol: { adm: false, bt: true } }),
+      });
+      expect(nichtAdmin.status).toBe(403);
+      expect(
+        (await bestaetigtSenden(app(), { ziel: '/v1/audit', roheClaims: jana('/v1/audit') }))
+          .status,
+      ).toBe(404);
+      for (const q of [
+        '?limit=501',
+        '?limit=abc',
+        '?nach=-1',
+        '?nach=1&vor=2',
+        '?x=1',
+        '?nach=99999999999',
+      ]) {
+        const r = await bestaetigtSenden(app(), { ziel: `/v1/audit${q}`, claims: anna() });
+        expect(r.status, q).toBe(400);
+      }
+    });
+
+    it('POST /v1/audit/pruefen: Admin 200, Nicht-Admin 403, Body 400', async () => {
+      const ok = await bestaetigtSenden(app(), {
+        methode: 'POST',
+        ziel: '/v1/audit/pruefen',
+        body: '{}',
+        claims: anna(),
+      });
+      expect(ok.status).toBe(200);
+      expect(AuditPruefenAntwortSchema.parse((await json(ok))['daten']).status).toBe('INTAKT');
+      const nein = await bestaetigtSenden(app(), {
+        methode: 'POST',
+        ziel: '/v1/audit/pruefen',
+        body: '{}',
+        claims: anna({ rol: { adm: false, bt: true } }),
+      });
+      expect(nein.status).toBe(403);
+      for (const body of ['{"ab":"x"}', '{"ab":-1}', '{"von":1}', '']) {
+        const r = await bestaetigtSenden(app(), {
+          methode: 'POST',
+          ziel: '/v1/audit/pruefen',
+          body,
+          claims: anna(),
+        });
+        expect(r.status, body).toBe(400);
       }
     });
   });

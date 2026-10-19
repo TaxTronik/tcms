@@ -4,6 +4,8 @@
 // Die Mandanten-ID kommt immer aus dem (an `cli.id` gebundenen) Pfad und wird
 // zuletzt gesetzt, damit kein Body- oder Query-Feld sie überschreiben kann.
 import {
+  AuditPruefenEingabeSchema,
+  AuditQuerySchema,
   KontaktRollenBodySchema,
   KontextQuerySchema,
   MandantAnkerBodySchema,
@@ -12,10 +14,12 @@ import {
 import type { Tx } from '@tcms/db';
 import {
   ladeArbeitskorb,
+  ladeAudit,
   ladeKontakte,
   ladePortalUebersicht,
   ladePortfolio,
   leseKontext,
+  pruefeAudit,
   setzeKontaktRollen,
   setzeMandantAnker,
 } from '@tcms/service';
@@ -70,5 +74,18 @@ export function registriereLesepfade(r: Routen<Tx>): void {
     pfad: '/v1/arbeitskorb',
     body: MandantenListeSchema,
     handler: (rc) => ladeArbeitskorb(dienstKontext(rc), rc.body),
+  });
+  // Audit des Tenants: nur Admins/Partner (Recht im Service).
+  r.route({
+    methode: 'GET',
+    pfad: '/v1/audit',
+    query: AuditQuerySchema,
+    handler: (rc) => ladeAudit(dienstKontext(rc), rc.query),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: '/v1/audit/pruefen',
+    body: AuditPruefenEingabeSchema,
+    handler: (rc) => pruefeAudit(dienstKontext(rc), rc.body),
   });
 }

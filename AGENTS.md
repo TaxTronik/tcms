@@ -43,7 +43,11 @@ für KI-Werkzeuge.
     plus Personenangaben und Zuständigkeit aus dem Demo-Verzeichnis. Screens im
     Mandantenkontext lesen daraus.
   - `src/server/seite.ts` (`ladeStaffSeite`) liefert Kontext, Rechte und
-    Stichtag für Staff-Seiten.
+    Stichtag für Staff-Seiten (Leserecht und Maskierung im Service).
+  - Portfolio, Arbeitskorb, Portal-Start und Audit der Demo lesen über die
+    Service-Lader (`ladePortfolio`, `ladeArbeitskorb`, `ladePortalUebersicht`,
+    `ladeAudit`/`pruefeAudit`); die Demo ergänzt nur Namen und Zuständigkeit
+    aus ihrem Verzeichnis (`mandantenListe`, `demoAkteur`).
   - `src/server/actions/*.ts` – Server Actions je Bereich.
   - `src/server/aktion.ts` – `mitAudit` der Demo (Dienstkontext aus
     `@tcms/service` im Tenant des Akteurs) und `aktualisiereMandant`.
