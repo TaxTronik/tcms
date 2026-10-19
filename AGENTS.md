@@ -197,7 +197,9 @@ für KI-Werkzeuge.
   Zweck aus `NACHRICHT_ZWECKE`, nie über Namen; jede trägt `mandantId`, die aus dem Zweck folgende
   `empfaengerArt` und Vorlagendaten `daten` (geprüft gegen den Vertrag, ohne Namen und ohne Code).
   Neue Nachrichten nur über `legeNachrichtAn`. Der Code steht nur in der Spalte `code` der offenen
-  Nachricht. „Zugestellt" setzt `zugestelltAm` und leert `code` und Text; „unzustellbar" (Meldung der
+  Nachricht. Der Abruf hält die erste Auslieferung fest (`abgerufenAm`); eine verworfene, nie
+  ausgelieferte Nachricht lässt sich weder als zugestellt noch als unzustellbar melden (`409`, CHECK,
+  H2). „Zugestellt" setzt `zugestelltAm` und leert `code` und Text; „unzustellbar" (Meldung der
   kanzleikonsole mit Grund aus `NACHRICHT_UNZUSTELLBAR_GRUENDE`) setzt `unzustellbarAm` und
   `unzustellbarGrund` und leert ebenso; beide schließen sich aus (`409` unter Zeilensperre, CHECK) und
   sind idempotent (unzustellbar nur mit demselben Grund). Gilt ein Code nicht mehr, verwirft der

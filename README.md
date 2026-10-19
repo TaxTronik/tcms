@@ -428,20 +428,20 @@ ein; `feststellungen` enthält nur nicht vertrauliche (RT-01).
 Rechte prüft `packages/service`, Eingaben und Antworten in
 `packages/contract/src/bereiche/programm-beschreibung.ts`):
 
-| Methode | Pfad                                                   | Recht (sonst `404` bzw. `403` mit Grund)                                    |
-| ------- | ------------------------------------------------------ | --------------------------------------------------------------------------- |
-| GET     | `/v1/nachrichten/offen?limit=`                         | nur Systemakteur (tenantweit); verfallene Codes nicht ausgeliefert, geleert |
-| POST    | `/v1/nachrichten/:nachrichtId/zugestellt`              | nur Systemakteur; idempotent, leert Text und Code; fremde ID `404`          |
-| POST    | `/v1/nachrichten/:nachrichtId/unzustellbar`            | nur Systemakteur; `{ grund }`, idempotent je Grund, leert Text und Code     |
-| GET     | `…/einrichtung?berufstraegerId=&bearbeitungId=&…`      | `kannLesen`                                                                 |
-| POST    | `…/einrichtung/entwurf`, `…/einrichtung/anlegen`       | `kannBearbeiten`; ein Programm je Mandant                                   |
-| GET     | `…/beschreibung?stand=`                                | `kannLesen`                                                                 |
-| POST    | `…/beschreibung/versionen`, `…/versionen/:id/…`        | `kannBearbeiten`; Review-Abschluss: 2. Person                               |
-| POST    | `…/freigaben/:freigabeId/neuadressierung`              | `kannBearbeiten` (TS-06, auditiert)                                         |
-| GET     | `…/kommunikation/freigaben?stand=`                     | `kannLesen`                                                                 |
-| GET     | `…/portal/freigaben`                                   | Mandantenkontakt mit aktiver Rolle                                          |
-| POST    | `…/portal/freigaben/:freigabeId/code` bzw. `freigeben` | adressierte gesetzliche Vertretung; Code höchstens 5-mal je Stunde (`409`)  |
-| POST    | `…/portal/freigaben/:freigabeId/kenntnisnahme`         | adressierte Person                                                          |
+| Methode | Pfad                                                   | Recht (sonst `404` bzw. `403` mit Grund)                                                                 |
+| ------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| GET     | `/v1/nachrichten/offen?limit=`                         | nur Systemakteur (tenantweit); verfallene Codes nicht ausgeliefert, geleert                              |
+| POST    | `/v1/nachrichten/:nachrichtId/zugestellt`              | nur Systemakteur; idempotent, leert Text und Code; fremde ID `404`; nie ausgeliefert und verworfen `409` |
+| POST    | `/v1/nachrichten/:nachrichtId/unzustellbar`            | nur Systemakteur; `{ grund }`, idempotent je Grund, leert Text und Code                                  |
+| GET     | `…/einrichtung?berufstraegerId=&bearbeitungId=&…`      | `kannLesen`                                                                                              |
+| POST    | `…/einrichtung/entwurf`, `…/einrichtung/anlegen`       | `kannBearbeiten`; ein Programm je Mandant                                                                |
+| GET     | `…/beschreibung?stand=`                                | `kannLesen`                                                                                              |
+| POST    | `…/beschreibung/versionen`, `…/versionen/:id/…`        | `kannBearbeiten`; Review-Abschluss: 2. Person                                                            |
+| POST    | `…/freigaben/:freigabeId/neuadressierung`              | `kannBearbeiten` (TS-06, auditiert)                                                                      |
+| GET     | `…/kommunikation/freigaben?stand=`                     | `kannLesen`                                                                                              |
+| GET     | `…/portal/freigaben`                                   | Mandantenkontakt mit aktiver Rolle                                                                       |
+| POST    | `…/portal/freigaben/:freigabeId/code` bzw. `freigeben` | adressierte gesetzliche Vertretung; Code höchstens 5-mal je Stunde (`409`)                               |
+| POST    | `…/portal/freigaben/:freigabeId/kenntnisnahme`         | adressierte Person                                                                                       |
 
 Die lebenden Bausteine der Beschreibung (`bausteine`, Portal `live`) sind streng (`BausteinSatzSchema`:
 jedes Feld Pflicht, keine Zusatzfelder); neue Snapshots friert der Dienst nur in dieser Form ein.

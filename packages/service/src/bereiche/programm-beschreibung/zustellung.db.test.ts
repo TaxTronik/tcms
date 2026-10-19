@@ -226,6 +226,11 @@ describe.skipIf(!AKTIV)('Zustellstatus an Freigaben (Service, PostgreSQL)', () =
         erstelltAm: new Date(Date.now() + 60_000),
       }),
     );
+    // Ein früherer Abruf hatte sie ausgeliefert (H2: nur dann gilt eine spätere Meldung;
+    // verworfen und nie ausgeliefert → 409, siehe nachrichten-lebensdauer.db.test.ts).
+    await inWelt(w, (tx) =>
+      tx.nachricht.update({ where: { id }, data: { abgerufenAm: new Date() } }),
+    );
     await imSystem(system(w), (ctx) => ladeOffeneNachrichten(ctx, {}));
     expect(await zustellungIn(beschreibung)).toEqual({
       status: 'VERWORFEN',

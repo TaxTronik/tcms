@@ -184,14 +184,27 @@ describe.skipIf(!AKTIV)('Unzustellbarkeit melden (Service, PostgreSQL)', () => {
 
   it('eine verworfene Nachricht kann noch als unzustellbar gemeldet werden (vorher abgeholt)', async () => {
     const id = await nachricht();
+    // Vorher ausgeliefert (`abgerufenAm`), danach verworfen (H2).
+    await inWelt(w, (tx) =>
+      tx.nachricht.update({
+        where: { id },
+        data: { abgerufenAm: new Date(), verworfenAm: new Date(), code: null, text: '' },
+      }),
+    );
+    expect(await melde(id, 'ABGELAUFEN')).toMatchObject({ unzustellbar: true });
+    expect(await zeile(id)).toMatchObject({ unzustellbarGrund: 'ABGELAUFEN', zugestelltAm: null });
+  });
+
+  it('H2: eine verworfene, nie ausgelieferte Nachricht ist nicht als unzustellbar meldbar (409)', async () => {
+    const id = await nachricht();
     await inWelt(w, (tx) =>
       tx.nachricht.update({
         where: { id },
         data: { verworfenAm: new Date(), code: null, text: '' },
       }),
     );
-    expect(await melde(id, 'ABGELAUFEN')).toMatchObject({ unzustellbar: true });
-    expect(await zeile(id)).toMatchObject({ unzustellbarGrund: 'ABGELAUFEN', zugestelltAm: null });
+    expect((await fehlerVon(melde(id, 'ABGELAUFEN'))).code).toBe('KONFLIKT');
+    expect(await zeile(id)).toMatchObject({ unzustellbarAm: null, zugestelltAm: null });
   });
 
   it('unbekannte ID und fremder Tenant → NICHT_GEFUNDEN; ungültige Eingabe → UNGUELTIG', async () => {

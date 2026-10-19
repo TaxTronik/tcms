@@ -359,6 +359,14 @@ export async function ladeOffeneNachrichten(
     if (n) nachrichten.push(n);
     else await verwirf({ ...k, grund: 'DATEN_UNGUELTIG' });
   }
+  // 5. Erste Auslieferung festhalten (H2): Nur eine ausgelieferte Nachricht kann die
+  //    kanzleikonsole nach einem späteren Verwerfen noch als zugestellt melden.
+  if (nachrichten.length > 0) {
+    await ctx.tx.nachricht.updateMany({
+      where: { id: { in: nachrichten.map((n) => n.id) }, abgerufenAm: null },
+      data: { abgerufenAm: jetzt },
+    });
+  }
   if (nachrichten.length > 0) {
     protokoll.push({
       aktion: 'tcms.nachricht.abgerufen',
@@ -380,6 +388,8 @@ interface NachrichtZustand {
   zugestelltAm: Date | null;
   unzustellbarAm: Date | null;
   unzustellbarGrund: NachrichtUnzustellbarGrund | null;
+  verworfenAm: Date | null;
+  abgerufenAm: Date | null;
 }
 
 /**
@@ -403,14 +413,25 @@ async function sperreNachricht(tx: Tx, nachrichtId: string): Promise<NachrichtZu
       zugestelltAm: true,
       unzustellbarAm: true,
       unzustellbarGrund: true,
+      verworfenAm: true,
+      abgerufenAm: true,
     },
   });
   if (!z) throw new DienstFehler('NICHT_GEFUNDEN');
   return z;
 }
 
+/**
+ * Verworfen, bevor ein Abruf sie je ausgeliefert hat (H2): Die kanzleikonsole
+ * kann sie weder zugestellt noch als unzustellbar erlebt haben.
+ */
+const nieAusgeliefert = (z: NachrichtZustand) => z.verworfenAm !== null && z.abgerufenAm === null;
+/** Bedingung für Meldungen: nicht verworfen oder vor dem Verwerfen ausgeliefert (wie der CHECK). */
+const MELDBAR = { OR: [{ verworfenAm: null }, { abgerufenAm: { not: null } }] };
+
 const BEREITS_UNZUSTELLBAR = 'Die Nachricht ist bereits als unzustellbar gemeldet.';
 const BEREITS_ZUGESTELLT = 'Die Nachricht ist bereits als zugestellt gemeldet.';
+const NIE_AUSGELIEFERT = 'Die Nachricht wurde verworfen, bevor sie ausgeliefert wurde.';
 /** Unter der Zeilensperre nicht erreichbar; fail closed statt eines Doppelstatus. */
 const ZUSTAND_GEAENDERT = 'Die Nachricht hat ihren Zustand geändert.';
 
@@ -418,8 +439,9 @@ const ZUSTAND_GEAENDERT = 'Die Nachricht hat ihren Zustand geändert.';
  * Zustellung bestätigen: `zugestelltAm` wird gesetzt, Text und Code geleert.
  * Idempotent für Nachrichten des eigenen Tenants (eine bereits bestätigte
  * liefert dasselbe Ergebnis ohne zweites Audit). Eine als unzustellbar
- * gemeldete Nachricht → `KONFLIKT` (schließen sich aus). Unbekannte IDs und
- * Nachrichten anderer Tenants → `NICHT_GEFUNDEN`.
+ * gemeldete Nachricht → `KONFLIKT` (schließen sich aus), ebenso eine
+ * verworfene, die nie ausgeliefert wurde (H2: sie bliebe sonst als ZUGESTELLT
+ * sichtbar). Unbekannte IDs und Nachrichten anderer Tenants → `NICHT_GEFUNDEN`.
  */
 export async function bestaetigeNachrichtZustellung(
   ctx: SystemKontext,
@@ -431,9 +453,10 @@ export async function bestaetigeNachrichtZustellung(
   const zeile = await sperreNachricht(ctx.tx, e.nachrichtId);
   if (zeile.zugestelltAm) return ergebnis;
   if (zeile.unzustellbarAm) throw new DienstFehler('KONFLIKT', BEREITS_UNZUSTELLBAR);
+  if (nieAusgeliefert(zeile)) throw new DienstFehler('KONFLIKT', NIE_AUSGELIEFERT);
   // Bedingt auf den gesperrten Zustand (fail closed, zusätzlich zum CHECK der Datenbank).
   const r = await ctx.tx.nachricht.updateMany({
-    where: { id: zeile.id, zugestelltAm: null, unzustellbarAm: null },
+    where: { id: zeile.id, zugestelltAm: null, unzustellbarAm: null, ...MELDBAR },
     data: { zugestelltAm: ctx.uhr.jetzt(), text: '', code: null },
   });
   if (r.count !== 1) throw new DienstFehler('KONFLIKT', ZUSTAND_GEAENDERT);
@@ -459,7 +482,8 @@ export async function bestaetigeNachrichtZustellung(
  *
  * Idempotent mit demselben Grund (kein zweites Audit). Bereits zugestellt oder
  * mit anderem Grund gemeldet → `KONFLIKT` (zugestellt und unzustellbar
- * schließen sich aus; zusätzlich CHECK in der Datenbank). Unbekannte IDs und
+ * schließen sich aus; zusätzlich CHECK in der Datenbank), ebenso eine
+ * verworfene Nachricht, die nie ausgeliefert wurde (H2). Unbekannte IDs und
  * Nachrichten anderer Tenants → `NICHT_GEFUNDEN`. Das Audit nennt Zweck,
  * Empfänger-ID und Grund, nie Inhalte.
  */
@@ -480,9 +504,10 @@ export async function meldeNachrichtUnzustellbar(
     if (zeile.unzustellbarGrund === e.grund) return ergebnis;
     throw new DienstFehler('KONFLIKT', 'Die Nachricht ist bereits mit anderem Grund gemeldet.');
   }
+  if (nieAusgeliefert(zeile)) throw new DienstFehler('KONFLIKT', NIE_AUSGELIEFERT);
   // Bedingt auf den gesperrten Zustand (fail closed, zusätzlich zum CHECK der Datenbank).
   const r = await ctx.tx.nachricht.updateMany({
-    where: { id: zeile.id, zugestelltAm: null, unzustellbarAm: null },
+    where: { id: zeile.id, zugestelltAm: null, unzustellbarAm: null, ...MELDBAR },
     data: { unzustellbarAm: ctx.uhr.jetzt(), unzustellbarGrund: e.grund, text: '', code: null },
   });
   if (r.count !== 1) throw new DienstFehler('KONFLIKT', ZUSTAND_GEAENDERT);

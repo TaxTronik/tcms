@@ -46,8 +46,10 @@ export interface ZustellZeile {
 /**
  * Zustellstatus einer Nachricht. Eine Meldung der kanzleikonsole (zugestellt
  * bzw. unzustellbar) geht dem Verwerfen vor: Sie hatte die Nachricht vor dem
- * Verwerfen abgeholt. Unzustellbar ohne Grund verletzt den CHECK der
- * Datenbank und ist ein Fehler (fail closed).
+ * Verwerfen abgeholt – das erzwingen Dienst und CHECK über `abgerufenAm`
+ * (H2); eine nie ausgelieferte, verworfene Nachricht bleibt VERWORFEN.
+ * Unzustellbar ohne Grund verletzt den CHECK der Datenbank und ist ein Fehler
+ * (fail closed).
  */
 export function zustellungVon(z: ZustellZeile): FreigabeZustellung {
   const kopf = { zweck: z.zweck, erstelltAm: z.createdAt.toISOString() };

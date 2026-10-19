@@ -874,6 +874,9 @@ model Nachricht {
   createdAt         DateTime                    @default(now())
   zugestelltAm      DateTime?
   verworfenAm       DateTime?
+  /// Erste Auslieferung durch den Abruf (echte Zeit). Zugestellt bzw.
+  /// unzustellbar neben verworfen nur nach einer Auslieferung (CHECK, H2).
+  abgerufenAm       DateTime?
   /// Von der kanzleikonsole als unzustellbar gemeldet (mit Grund); schließt
   /// `zugestelltAm` aus.
   unzustellbarAm    DateTime?

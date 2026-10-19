@@ -12,9 +12,25 @@ import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { MAX_FEHLVERSUCHE } from './code';
 import { adressiereFreigabeNeu, erteileFreigabe, fordereFreigabeCodeAn } from './freigaben';
-import { ladeOffeneNachrichten, legeNachrichtAn, MAX_CODE_PRUEFUNG_JE_ABRUF } from './nachrichten';
+import {
+  bestaetigeNachrichtZustellung,
+  ladeOffeneNachrichten,
+  legeNachrichtAn,
+  MAX_CODE_PRUEFUNG_JE_ABRUF,
+  meldeNachrichtUnzustellbar,
+} from './nachrichten';
 import { richteEin } from './testprogramm';
-import { baueWelt, btA, im, imSystem, inWelt, kontakt, system, type Welt } from './testwelt';
+import {
+  baueWelt,
+  btA,
+  fehlerVon,
+  im,
+  imSystem,
+  inWelt,
+  kontakt,
+  system,
+  type Welt,
+} from './testwelt';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 
@@ -269,6 +285,81 @@ describe.skipIf(!AKTIV)('Lebensdauer der Code-Nachrichten (Service, PostgreSQL)'
     expect(
       await inWelt(w3, (tx) => tx.nachricht.findUniqueOrThrow({ where: { id: alt } })),
     ).toMatchObject({ code: null, text: '' });
+  });
+
+  it('H2: verworfen und nie ausgeliefert → zugestellt bzw. unzustellbar 409, Status bleibt verworfen', async () => {
+    const f = await freigabe();
+    const alt = await codeAnfordern(f);
+    await codeAnfordern(f); // ersetzt den alten Code, bevor ein Abruf ihn ausgeliefert hat
+    await erwarteVerworfen(alt.id, alt.code, 'CODE_UNGUELTIG');
+    expect(await zeile(alt.id)).toMatchObject({ abgerufenAm: null });
+    const zugestellt = await fehlerVon(
+      imSystem(system(w), (ctx) => bestaetigeNachrichtZustellung(ctx, { nachrichtId: alt.id })),
+    );
+    expect(zugestellt.code).toBe('KONFLIKT');
+    const unzustellbar = await fehlerVon(
+      imSystem(system(w), (ctx) =>
+        meldeNachrichtUnzustellbar(ctx, { nachrichtId: alt.id, grund: 'SONSTIGES' }),
+      ),
+    );
+    expect(unzustellbar.code).toBe('KONFLIKT');
+    expect(await zeile(alt.id)).toMatchObject({ zugestelltAm: null, unzustellbarAm: null });
+    const audit = await inWelt(w, (tx) =>
+      tx.auditEvent.count({
+        where: {
+          objektId: alt.id,
+          aktion: { in: ['tcms.nachricht.zugestellt', 'tcms.nachricht.unzustellbar'] },
+        },
+      }),
+    );
+    expect(audit).toBe(0);
+  });
+
+  it('H2: ausgeliefert, danach verworfen → die Zustellung bleibt meldbar (Meldung geht vor)', async () => {
+    const f = await freigabe();
+    const alt = await codeAnfordern(f);
+    const r = await abruf();
+    expect(r.nachrichten.map((n) => n.id)).toContain(alt.id);
+    const erst = (await zeile(alt.id)).abgerufenAm;
+    expect(erst).not.toBeNull();
+    // Ein zweiter Abruf ändert den Zeitpunkt der ersten Auslieferung nicht.
+    await abruf();
+    expect((await zeile(alt.id)).abgerufenAm).toEqual(erst);
+    await codeAnfordern(f);
+    await erwarteVerworfen(alt.id, alt.code, 'CODE_UNGUELTIG', true);
+    const ok = await imSystem(system(w), (ctx) =>
+      bestaetigeNachrichtZustellung(ctx, { nachrichtId: alt.id }),
+    );
+    expect(ok).toEqual({ nachrichtId: alt.id, zugestellt: true });
+  });
+
+  it('H2: die Datenbank lässt zugestellt neben verworfen nur nach einer Auslieferung zu (CHECK)', async () => {
+    const id = await inWelt(w, (tx) =>
+      legeNachrichtAn(tx, {
+        mandantId: w.mandantA,
+        empfaengerId: w.tcb,
+        zweck: 'FREIGABE_ANGEFORDERT',
+        daten: { freigabeId: 'ckfreigabe0000000000000y', art: 'ZIELE', titel: 'Z', version: null },
+        betreff: 'B',
+        text: 'T',
+      }),
+    );
+    const jetzt = new Date();
+    await inWelt(w, (tx) =>
+      tx.nachricht.update({ where: { id }, data: { verworfenAm: jetzt, text: '' } }),
+    );
+    for (const data of [
+      { zugestelltAm: jetzt },
+      { unzustellbarAm: jetzt, unzustellbarGrund: 'SONSTIGES' as const },
+    ]) {
+      const e = await inWelt(w, (tx) => tx.nachricht.update({ where: { id }, data })).catch(
+        (x: unknown) => x as Error,
+      );
+      expect(String((e as Error).message), JSON.stringify(data)).toMatch(/check constraint|23514/i);
+    }
+    await inWelt(w, (tx) =>
+      tx.nachricht.update({ where: { id }, data: { abgerufenAm: jetzt, zugestelltAm: jetzt } }),
+    );
   });
 
   it('Nachrichten ohne Code bleiben unberührt; kein Code in irgendeinem Audit-Detail', async () => {

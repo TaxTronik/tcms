@@ -275,7 +275,9 @@ bestätigter Portalzugang, Frist abgelaufen), meldet er
 setzt `unzustellbarAm`/`unzustellbarGrund`, leert `code` und `text` wie die
 Zustellung, die Nachricht wird nicht mehr ausgeliefert, Audit
 `tcms.nachricht.unzustellbar` (Zweck, Empfänger-ID, Grund, keine Inhalte).
-Idempotent mit demselben Grund; ein anderer Grund → `409`. Zugestellt und
+Idempotent mit demselben Grund; ein anderer Grund → `409`. Eine verworfene
+Nachricht, die nie ausgeliefert wurde (`abgerufenAm` leer), ist weder
+zustellbar noch unzustellbar zu melden (`409`, CHECK; H2). Zugestellt und
 unzustellbar schließen sich aus (`409` in beide Richtungen, unter Zeilensperre
 geprüft, zusätzlich CHECK). Wo die Kanzlei Freigaben sieht
 (Freigabenhistorie, CMS-Beschreibung, Risikoakzeptanz), trägt jede Freigabe
