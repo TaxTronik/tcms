@@ -61,6 +61,7 @@ import { ladeKontext } from '../../kern/tcms-kontext';
 import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { zweitePerson } from '../../rechte';
+import { halteRollenFest } from '../../rollen';
 import { legeNachrichtAn } from '../programm-beschreibung/nachrichten';
 import {
   kanonisch,
@@ -753,6 +754,8 @@ export async function risikoakzeptanzAnfordern(
     mitAudit(ctx, async (tx, zeitpunkt) => {
       const risiko = await risikoUnterSperre(tx, mandantId, e.risikoId);
       pruefeAktiv(risiko, zeitpunkt);
+      // TS-05 (RT4-T-06): Rolle des Empfängers unter derselben Sperre wie die Rollenpflege.
+      await halteRollenFest(tx, mandantId);
       const gv = await tx.mandantKontaktRolle.findFirst({
         where: {
           mandantId,

@@ -39,6 +39,7 @@ import { inhaltGleich, isoDatum, katalogRisiko, KATALOG_KONTROLLEN, PAKET } from
 import { mitAudit, type Protokoll } from '../../audit';
 import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
+import { halteRollenFest } from '../../rollen';
 import { kannBearbeiten } from '../../rechte';
 import {
   aufbauRollen,
@@ -437,6 +438,9 @@ export async function legeProgrammAn(
       'Bitte zuerst die Schritte 1 bis 4 mit „Weiter" abschließen.',
     ]);
   }
+  // TS-05 (RT4-T-06): Rollen (Empfänger der Ziele-Freigabe, Mandantenpersonen) unter
+  // derselben Sperre wie die Rollenpflege lesen und bis zum Commit festhalten.
+  await halteRollenFest(ctx.tx, mandantId);
   const { umfeld, gvIds } = await baueUmfeld(ctx.tx, mandant, e.personen, heute);
   const alt = leseEntwurf(programm.setupEntwurf, heute, aufbauRollen(umfeld).gv);
   const neu: SetupEntwurf = { ...alt, kontrollen: kontrollenKanonisch(e.daten.kontrollen) };

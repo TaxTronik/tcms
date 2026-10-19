@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { erzeugeClient, mitTenant, type PrismaClient } from '@tcms/db';
+import { mitRollenentzugWaehrend } from '../../../__tests__/sperr-hilfen';
 import { imSystemdienst, type DienstKontext } from '../../../kontext';
 import { meldeNachrichtUnzustellbar } from '../../programm-beschreibung/nachrichten';
 import { ladeRisiken, ladeRisiko } from '../lesen';
@@ -708,6 +709,32 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
       expect(ev).toHaveLength(1);
       expect(JSON.stringify(ev[0]!.detail)).not.toContain('Person ');
     });
+
+    it('Empfänger unter der Sperre der Rollenpflege geprüft: eben entzogene GV → UNGUELTIG (RT4-T-06)', async () => {
+      const x = await legeProgrammAn(tenant);
+      const ax = akteureVon(x);
+      const { risiken } = await rufe(ax.bt, (ctx) => ladeRisiken(ctx, { mandantId: x.mandantId }));
+      const id = risiken.find((r) => r.ueberAppetit)!.id;
+      const e = await mitRollenentzugWaehrend({
+        tenantId: tenant,
+        mandantId: x.mandantId,
+        kontaktId: x.personen.gv,
+        client: zweite,
+        operation: () =>
+          rufe(ax.hb, (ctx) =>
+            risikoakzeptanzAnfordern(ctx, {
+              mandantId: x.mandantId,
+              risikoId: id,
+              empfaengerId: x.personen.gv,
+              begruendung: BEGRUENDUNG,
+            }),
+          ),
+      });
+      expect(e.status === 'rejected' && (e.reason as { code?: string }).code).toBe('UNGUELTIG');
+      expect(
+        await lies((tx) => tx.freigabe.count({ where: { art: 'RISIKOAKZEPTANZ', refId: id } })),
+      ).toBe(0);
+    }, 60_000);
 
     it('nicht über dem Appetit → KONFLIKT; Rechte negativ', async () => {
       const x = await legeProgrammAn(tenant, { appetit: 'KRITISCH' });

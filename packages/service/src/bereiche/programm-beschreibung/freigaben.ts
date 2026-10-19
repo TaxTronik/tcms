@@ -653,6 +653,8 @@ export async function adressiereFreigabeNeu(
   if (f.status !== 'OFFEN')
     throw new DienstFehler('KONFLIKT', 'Diese Anforderung ist bereits erledigt.');
   const code = freigabeBrauchtCode(f.art);
+  // TS-05 (RT4-T-06): Rolle des Empfängers unter derselben Sperre wie die Rollenpflege prüfen.
+  await halteRollenFest(ctx.tx, mandantId);
   const kontakte = await aktiveKontakte(ctx.tx, mandantId);
   const passt = kontakte.some(
     (k) => k.kontaktId === empfaengerId && (!code || k.rolle === 'GESETZLICHER_VERTRETER'),

@@ -182,7 +182,10 @@ für KI-Werkzeuge.
   adressiert neu (eigene, auditierte Aktion, setzt Code und Fehlversuche zurück) – TS-06.
 - Rollen der Mandantenseite ändern sich nur unter `sperreRollenZumAendern` (Mandantenzeile FOR
   UPDATE); Freigabe-Operationen lesen und prüfen Rollen erst nach der Zeilensperre ihres Objekts
-  und `halteRollenFest` (dieselbe Zeile FOR KEY SHARE, `src/rollen.ts`) – TS-05, RT4-T-05.
+  und `halteRollenFest` (dieselbe Zeile FOR KEY SHARE, `src/rollen.ts`) – TS-05, RT4-T-05. Das
+  gilt für Erteilen, Code anfordern, Kenntnisnahme, Neuadressieren und jedes Anlegen einer Freigabe
+  (Ziele mit Version 1, Beschreibung, Risikoakzeptanz): Entfernen der letzten GV und Adressieren an
+  sie laufen so nacheinander (kein Write Skew, RT4-T-06).
 - Bestätigungscodes: 6 Ziffern aus `randomInt`, nur ein an die Freigabe gebundener SHA-256 wird
   gespeichert (`codeHash`, CHECK hex), 7 Tage gültig (echte Zeit), höchstens 5 Fehlversuche je
   Freigabe (`codeFehlversuche`, CHECK 0–5, gezählt unter Zeilensperre mit bedingtem Update, nie

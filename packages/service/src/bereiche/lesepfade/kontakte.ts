@@ -9,10 +9,13 @@
 //   - Die letzte aktive GV kann nicht entfernt werden, solange offene
 //     Freigaben an sie adressiert sind (erst neu adressieren oder Ersatz-GV
 //     ernennen) → `KONFLIKT`.
-// TS-05: Die Mandantenzeile wird mit FOR UPDATE gesperrt (parallele
-// Rollenänderungen eines Mandanten nacheinander, Prüfung und Änderung in
-// derselben Transaktion), dazu eine Sperre je Kontakt (paralleles Zuordnen
-// desselben Kontakts zu zwei Mandanten).
+// TS-05: Die Mandantenzeile wird mit FOR UPDATE gesperrt
+// (`sperreRollenZumAendern`: parallele Rollenänderungen eines Mandanten
+// nacheinander, Prüfung und Änderung in derselben Transaktion), dazu eine
+// Sperre je Kontakt (paralleles Zuordnen desselben Kontakts zu zwei
+// Mandanten). Freigabe-Operationen prüfen Rollen unter derselben Zeile
+// (`halteRollenFest`): Das Entfernen der letzten GV und ein gleichzeitiges
+// Anlegen oder Neuadressieren an sie laufen nacheinander (RT4-T-06).
 // =============================================================================
 
 import {

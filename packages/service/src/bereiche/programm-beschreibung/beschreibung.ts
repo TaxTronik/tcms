@@ -44,6 +44,7 @@ import { ladeKontext } from '../../kern/tcms-kontext';
 import { auditGrenze, tagesende } from '../../kern/zeit';
 import { zustellungenDerFreigaben } from '../../kern/zustellung';
 import type { DienstKontext } from '../../kontext';
+import { halteRollenFest } from '../../rollen';
 import { gleicheId, kannBearbeiten } from '../../rechte';
 import {
   baueBausteine,
@@ -512,7 +513,9 @@ export async function fordereBeschreibungsfreigabeAn(
       'Die Freigabe kann erst nach abgeschlossener Kanzlei-Review angefordert werden.',
     );
   }
-  // TS-06: Empfänger über die ID, nur eine aktive gesetzliche Vertretung dieses Mandanten.
+  // TS-06: Empfänger über die ID, nur eine aktive gesetzliche Vertretung dieses Mandanten;
+  // geprüft unter derselben Sperre wie die Rollenpflege (TS-05, RT4-T-06).
+  await halteRollenFest(ctx.tx, mandantId);
   const kontakte = await aktiveKontakte(ctx.tx, mandantId);
   if (!kontakte.some((x) => x.kontaktId === empfaengerId && x.rolle === 'GESETZLICHER_VERTRETER')) {
     fachlichUngueltig('Empfänger ungültig.', 'empfaengerId', [
