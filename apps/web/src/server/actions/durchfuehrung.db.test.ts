@@ -7,11 +7,11 @@
 // Datenbank; legt eine eigene Durchführung an. Next-Module sind Attrappen.
 // =============================================================================
 
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEMO_IDS, DEMO_TENANT_ID } from '@tcms/db/demo';
 import { mitTenant } from '@tcms/db';
 
@@ -36,7 +36,8 @@ vi.mock('next/navigation', () => ({
 }));
 
 process.env['TCMS_DEMO_TODAY'] = '2026-10-16';
-process.env['TCMS_STORAGE_DIR'] = mkdtempSync(join(tmpdir(), 'tcms-durchfuehrung-'));
+const ABLAGE = mkdtempSync(join(tmpdir(), 'tcms-durchfuehrung-'));
+process.env['TCMS_STORAGE_DIR'] = ABLAGE;
 
 const { erzeugeCookie } = await import('../sitzung-regeln');
 const A = await import('./durchfuehrung');
@@ -93,6 +94,10 @@ describe.skipIf(!AKTIV)('Demo der Kontrolldurchführung gegen PostgreSQL', () =>
 
   beforeEach(() => {
     sitzung = '';
+  });
+
+  afterAll(() => {
+    rmSync(ABLAGE, { recursive: true, force: true });
   });
 
   it('Bindung an den Mandanten des Formulars: fremder Mandant → „nicht gefunden"', async () => {
