@@ -455,6 +455,297 @@ export const VerwerfenAbgelehntSchema = z
   .strict();
 
 // ===========================================================================
+// Ereignisse (S11) und Portal-Meldung (P3)
+// ===========================================================================
+
+export const EreignisseLesenSchema = z.object(lesen).strict();
+export const EreignisLesenSchema = z.object({ ...lesen, ereignisId: ObjektIdSchema }).strict();
+
+const ereignis = { ...mandant, ereignisId: ObjektIdSchema };
+const folge = { ...ereignis, folgeId: ObjektIdSchema };
+
+/** Ereignistyp-Code (`T-01` … oder `SONST`); der Dienst prüft gegen den Katalog. */
+export const EreignistypCodeSchema = z.string().regex(/^(T-\d{2}|SONST)$/);
+
+export const EreignisAktionSchema = z.object(ereignis).strict();
+
+// ---- Folgen anlegen (Auswahl der Vorschläge) ----
+export const FolgeAnlegenSchema = z
+  .object({
+    folgeId: ObjektIdSchema,
+    zustaendig: PersonZuweisungSchema.nullable().optional(),
+    /** Pflicht bei außerplanmäßiger Kontrolle (Fälligkeit). */
+    frist: TagSchema.nullable().optional(),
+    /** Pflicht bei „Feststellung anlegen". „NEIN" nur mit Würdigungsrecht (TS-04). */
+    feststellung: z
+      .object({
+        titel: freitext(5, 200),
+        klasse: FeststellungKlasseSchema,
+        schwere: SchwereSchema,
+        auswirkung: AuswirkungSchema,
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export const FolgenAnlegenBodySchema = z
+  .object({
+    folgen: z
+      .array(FolgeAnlegenSchema)
+      .min(1)
+      .max(50)
+      .refine((l) => new Set(l.map((f) => f.folgeId)).size === l.length, 'Folge doppelt gewählt'),
+  })
+  .strict();
+export const FolgenAnlegenSchema = FolgenAnlegenBodySchema.extend(ereignis).strict();
+
+// ---- Weitere Folge vorschlagen ----
+export const FolgeHinzufuegenBodySchema = z
+  .object({
+    art: FolgeArtSchema,
+    /** Risikocode (EC-XXX-nn) bzw. Kontrollcode (K-EC-nn), je nach Art Pflicht. */
+    ziel: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(/^(EC-[A-Z]{3}-\d{2}|K-EC-\d{2})$/)
+      .nullable()
+      .optional(),
+    text: freitext(5, 300),
+  })
+  .strict();
+export const FolgeHinzufuegenSchema = FolgeHinzufuegenBodySchema.extend(ereignis).strict();
+
+// ---- Folge erledigen / verwerfen ----
+export const FolgeAktionSchema = z.object(folge).strict();
+export const FolgeVerwerfenSchema = VerwerfenBeantragenBodySchema.extend(folge).strict();
+
+// ---- Verwerfen des Ereignisses (Vier-Augen) ----
+export const EreignisVerwerfenBeantragenSchema =
+  VerwerfenBeantragenBodySchema.extend(ereignis).strict();
+
+// ---- Ereignis erfassen (Kanzlei) ----
+export const EreignisErfassenBodySchema = z
+  .object({
+    typ: EreignistypCodeSchema,
+    quelle: z.enum(['MANUELL', 'KONTROLLE', 'STAMMDATEN', 'RSS']),
+    titel: freitext(5, 200),
+    beschreibung: freitext(10, 4000),
+    datum: TagSchema,
+  })
+  .strict();
+export const EreignisErfassenSchema = EreignisErfassenBodySchema.extend(mandant).strict();
+
+// ---- Anlage einer Meldung (Verweis, ADR 0001 §6) ----
+/** Im Portal zulässige Dateitypen (PDF, Bild, CSV/Text, Excel, Word, ZIP). */
+export const PORTAL_ANLAGE_MIME =
+  /^(application\/pdf|image\/(png|jpeg|gif|webp)|text\/(csv|plain)|application\/(vnd\.openxmlformats-officedocument\.(spreadsheetml\.sheet|wordprocessingml\.document)|vnd\.ms-excel|msword|zip))$/;
+export const PORTAL_MAX_ANLAGEN = 5;
+export const PORTAL_MAX_ANLAGE_BYTES = 10 * 1024 * 1024;
+const SHA256 = /^[0-9a-f]{64}$/;
+// Wie `pruefeVerweis` (@tcms/service): Steuerzeichen, Pfadtrenner, Richtungszeichen.
+const DATEINAME_VERBOTEN = /[\u0000-\u001f\u007f/\\‪-‮⁦-⁩]/;
+
+export const Sha256Schema = z.string().regex(SHA256, 'Ungültiger SHA-256');
+
+/**
+ * Verweis auf eine Anlage, die die kanzleikonsole angenommen hat (Virenscan,
+ * Journal). `dokumentId` ist für das Tax-CMS undurchsichtig; die Demo legt
+ * dort ihren relativen Ablagepfad `<2 Hex>/<SHA-256>` ab, daher ist `/`
+ * erlaubt, aber weder am Anfang noch als `.`/`..`-Segment.
+ */
+export const AnlageVerweisSchema = z
+  .object({
+    dokumentId: z
+      .string()
+      .min(1)
+      .max(200)
+      .regex(/^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/)
+      .refine((s) => !s.split('/').some((t) => t === '.' || t === '..'), 'Ungültige Dokument-ID'),
+    dateiname: z
+      .string()
+      .min(1)
+      .max(255)
+      .refine((s) => s.trim().length > 0 && s !== '.' && s !== '..', 'Ungültiger Dateiname')
+      .refine((s) => !DATEINAME_VERBOTEN.test(s), 'Ungültiger Dateiname'),
+    mime: z.string().max(127).regex(PORTAL_ANLAGE_MIME, 'Dateityp nicht zulässig'),
+    groesse: z.number().int().min(1).max(PORTAL_MAX_ANLAGE_BYTES),
+    sha256: Sha256Schema,
+  })
+  .strict();
+
+// ---- Portal: Ereignis melden ----
+export const PortalMeldungBodySchema = z
+  .object({
+    typ: EreignistypCodeSchema,
+    titel: freitext(5, 200),
+    beschreibung: freitext(10, 4000),
+    datum: TagSchema,
+    anlagen: z
+      .array(AnlageVerweisSchema)
+      .max(PORTAL_MAX_ANLAGEN)
+      .refine((l) => new Set(l.map((a) => a.sha256)).size === l.length, 'Anlage doppelt'),
+    /** Zusage, Änderungen künftig zu melden (Kontrollkästchen P3). */
+    zusageAenderungen: z.boolean(),
+    /**
+     * Wen die Kanzlei benachrichtigen soll (Zuständigkeit der kanzleikonsole,
+     * nur für den Postausgang; begründet kein Recht).
+     */
+    benachrichtigen: z
+      .object({ id: z.uuid(), name: freitext(1, 200) })
+      .strict()
+      .nullable()
+      .optional(),
+  })
+  .strict();
+export const PortalMeldungSchema = PortalMeldungBodySchema.extend(mandant).strict();
+export const PortalMeldungenLesenSchema = z.object(mandant).strict();
+
+export const EreignisAnlageLesenSchema = z.object({ ...ereignis, sha256: Sha256Schema }).strict();
+
+// ---- Antworten ----
+export const EreignisListenEintragSchema = z
+  .object({
+    id: z.string(),
+    nummer: z.string(),
+    typ: z.string(),
+    titel: z.string(),
+    beschreibung: z.string(),
+    quelle: EreignisQuelleSchema,
+    gemeldetVon: z.string().nullable(),
+    gemeldetAm: iso,
+    ereignisDatum: TagSchema,
+    /** Status zum Stichtag. */
+    status: EreignisStatusSchema,
+    verwerfenBeantragt: z.boolean(),
+    triagiertVon: z.string().nullable(),
+    triagiertAm: iso.nullable(),
+    folgen: z.array(
+      z
+        .object({
+          id: z.string(),
+          art: FolgeArtSchema,
+          ziel: z.string().nullable(),
+          status: FolgeStatusSchema,
+          objektId: z.string().nullable(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export const EreignisListeSchema = z
+  .object({
+    stand: TagSchema,
+    historisch: z.boolean(),
+    programmId: z.string().nullable(),
+    ereignisse: z.array(EreignisListenEintragSchema),
+    namen: NamenSchema,
+  })
+  .strict();
+
+export const AnlageSchema = AnlageVerweisSchema.omit({ dokumentId: true }).strict();
+
+export const FolgeDetailSchema = z
+  .object({
+    id: z.string(),
+    art: FolgeArtSchema,
+    ziel: z.string().nullable(),
+    text: z.string(),
+    zustaendig: z.string().nullable(),
+    frist: TagSchema.nullable(),
+    /** Status zum Stichtag. */
+    status: FolgeStatusSchema,
+    erledigtAm: iso.nullable(),
+    objektId: z.string().nullable(),
+    durchfuehrung: z
+      .object({
+        id: z.string(),
+        code: z.string(),
+        periodeLabel: z.string(),
+        faelligAm: TagSchema,
+        anzeige: AnzeigeStatusSchema,
+      })
+      .strict()
+      .nullable(),
+    feststellung: z.object({ id: z.string(), nummer: z.string() }).strict().nullable(),
+    verwerfen: z
+      .object({ begruendung: z.string(), vonId: z.string().nullable(), am: iso })
+      .strict()
+      .nullable(),
+    angelegt: z.object({ vonId: z.string().nullable(), am: iso }).strict().nullable(),
+  })
+  .strict();
+
+export const EreignisDetailSchema = EreignisListenEintragSchema.omit({ folgen: true })
+  .extend({
+    stand: TagSchema,
+    historisch: z.boolean(),
+    folgen: z.array(FolgeDetailSchema),
+    anlagen: z.array(AnlageSchema),
+    meldung: z.object({ aktion: z.string(), at: iso, hash: z.string() }).strict().nullable(),
+    verwerfenAntrag: z
+      .object({ vonId: z.string().nullable(), am: iso, begruendung: z.string() })
+      .strict()
+      .nullable(),
+    verwerfen: z
+      .object({ vonId: z.string().nullable(), am: iso, begruendung: z.string() })
+      .strict()
+      .nullable(),
+    verlauf: z.array(VerlaufEintragSchema),
+    namen: NamenSchema,
+  })
+  .strict();
+
+export const EreignisErgebnisSchema = z
+  .object({ id: z.string(), nummer: z.string(), status: EreignisStatusSchema })
+  .strict();
+export const EreignisErfasstSchema = z
+  .object({ id: z.string(), nummer: z.string(), folgen: z.number().int() })
+  .strict();
+export const FolgenAngelegtSchema = z
+  .object({
+    ereignisId: z.string(),
+    folgen: z.array(
+      z
+        .object({
+          folgeId: z.string(),
+          status: FolgeStatusSchema,
+          objektId: z.string().nullable(),
+          /** Nummer der Feststellung bzw. Code der Kontrolle, sofern angelegt. */
+          objekt: z.string().nullable(),
+          auswirkungHerabgestuft: z.boolean(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export const FolgeErgebnisSchema = z.object({ id: z.string(), status: FolgeStatusSchema }).strict();
+export const AnlageVerweisErgebnisSchema = AnlageVerweisSchema;
+export const PortalMeldungErgebnisSchema = z
+  .object({ id: z.string(), nummer: z.string() })
+  .strict();
+export const PortalMeldungenSchema = z
+  .object({
+    programmVorhanden: z.boolean(),
+    meldungen: z.array(
+      z
+        .object({
+          id: z.string(),
+          nummer: z.string(),
+          typ: z.string(),
+          titel: z.string(),
+          status: EreignisStatusSchema,
+          gemeldetAm: iso,
+          gemeldetVon: z.string().nullable(),
+        })
+        .strict(),
+    ),
+    namen: NamenSchema,
+  })
+  .strict();
+
+// ===========================================================================
 // Typen
 // ===========================================================================
 
@@ -486,3 +777,28 @@ export type NachkontrolleErgebnis = z.infer<typeof NachkontrolleErgebnisSchema>;
 export type VertraulichErgebnis = z.infer<typeof VertraulichErgebnisSchema>;
 export type VerwerfenAbgelehnt = z.infer<typeof VerwerfenAbgelehntSchema>;
 export type VerlaufEintrag = z.infer<typeof VerlaufEintragSchema>;
+
+export type EreignisseLesen = z.infer<typeof EreignisseLesenSchema>;
+export type EreignisLesen = z.infer<typeof EreignisLesenSchema>;
+export type EreignisAktion = z.infer<typeof EreignisAktionSchema>;
+export type FolgenAnlegen = z.infer<typeof FolgenAnlegenSchema>;
+export type FolgeHinzufuegen = z.infer<typeof FolgeHinzufuegenSchema>;
+export type FolgeAktion = z.infer<typeof FolgeAktionSchema>;
+export type FolgeVerwerfen = z.infer<typeof FolgeVerwerfenSchema>;
+export type EreignisVerwerfenBeantragen = z.infer<typeof EreignisVerwerfenBeantragenSchema>;
+export type EreignisErfassen = z.infer<typeof EreignisErfassenSchema>;
+export type AnlageVerweis = z.infer<typeof AnlageVerweisSchema>;
+export type PortalMeldung = z.infer<typeof PortalMeldungSchema>;
+export type PortalMeldungenLesen = z.infer<typeof PortalMeldungenLesenSchema>;
+export type EreignisAnlageLesen = z.infer<typeof EreignisAnlageLesenSchema>;
+export type EreignisListenEintrag = z.infer<typeof EreignisListenEintragSchema>;
+export type EreignisListe = z.infer<typeof EreignisListeSchema>;
+export type FolgeDetail = z.infer<typeof FolgeDetailSchema>;
+export type EreignisDetail = z.infer<typeof EreignisDetailSchema>;
+export type Anlage = z.infer<typeof AnlageSchema>;
+export type EreignisErgebnis = z.infer<typeof EreignisErgebnisSchema>;
+export type EreignisErfasst = z.infer<typeof EreignisErfasstSchema>;
+export type FolgenAngelegt = z.infer<typeof FolgenAngelegtSchema>;
+export type FolgeErgebnis = z.infer<typeof FolgeErgebnisSchema>;
+export type PortalMeldungErgebnis = z.infer<typeof PortalMeldungErgebnisSchema>;
+export type PortalMeldungen = z.infer<typeof PortalMeldungenSchema>;

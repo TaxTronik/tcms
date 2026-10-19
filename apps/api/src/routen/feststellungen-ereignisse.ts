@@ -12,12 +12,16 @@
 
 import {
   ErklaerungBodySchema,
+  EreignisErfassenBodySchema,
   FeststellungErfassenBodySchema,
   FeststellungWeiterBodySchema,
+  FolgeHinzufuegenBodySchema,
+  FolgenAnlegenBodySchema,
   MassnahmeBodySchema,
   MassnahmeErledigenBodySchema,
   NachkontrolleBodySchema,
   P153BodySchema,
+  PortalMeldungBodySchema,
   StandQuerySchema,
   VertraulichBodySchema,
   VerwerfenBeantragenBodySchema,
@@ -26,19 +30,34 @@ import {
 import type { Tx } from '@tcms/db';
 import {
   aktualisiereWuerdigung,
+  beantrageEreignisVerwerfen,
   beantrageFeststellungVerwerfen,
+  bestaetigeEreignisVerwerfen,
   bestaetigeFeststellungVerwerfen,
   entscheideP153,
+  erfasseEreignis,
   erfasseFeststellung,
+  erledigeFolge,
   erledigeMassnahme,
   fuegeErklaerungHinzu,
+  fuegeFolgeHinzu,
+  ladeEreignis,
+  ladeEreignisAnlage,
+  ladeEreignisse,
   ladeFeststellung,
   ladeFeststellungen,
+  ladePortalMeldungen,
+  legeFolgenAn,
   legeMassnahmeAn,
   legeNachkontrolleAn,
+  lehneEreignisVerwerfenAb,
   lehneFeststellungVerwerfenAb,
+  meldeEreignis,
+  nehmeEreignisInPruefung,
   schalteFeststellungWeiter,
+  schliesseEreignisAb,
   setzeVertraulich,
+  verwerfeFolge,
 } from '@tcms/service';
 import type { Routen, RoutenKontext } from '../routen';
 import { dienstKontext } from './kontext';
@@ -163,5 +182,99 @@ export function registriereFeststellungenEreignisse(r: Routen<Tx>): void {
         ...mandant(c),
         massnahmeId: p(c, 'massnahmeId'),
       }),
+  });
+
+  // ---------------------------------------------------------------- S11 Lesen
+  r.route({
+    methode: 'GET',
+    pfad: `${M}/ereignisse`,
+    query: StandQuerySchema,
+    handler: (c) => ladeEreignisse(dienstKontext(c), { ...c.query, ...mandant(c) }),
+  });
+  r.route({
+    methode: 'GET',
+    pfad: E,
+    query: StandQuerySchema,
+    handler: (c) => ladeEreignis(dienstKontext(c), { ...c.query, ...erg(c) }),
+  });
+  r.route({
+    methode: 'GET',
+    pfad: `${E}/anlagen/:sha256`,
+    handler: (c) => ladeEreignisAnlage(dienstKontext(c), { ...erg(c), sha256: p(c, 'sha256') }),
+  });
+
+  // ------------------------------------------------------------ S11 Schreiben
+  r.route({
+    methode: 'POST',
+    pfad: `${M}/ereignisse`,
+    body: EreignisErfassenBodySchema,
+    status: 201,
+    handler: (c) => erfasseEreignis(dienstKontext(c), { ...c.body, ...mandant(c) }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${E}/in-pruefung`,
+    handler: (c) => nehmeEreignisInPruefung(dienstKontext(c), erg(c)),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${E}/folgen`,
+    body: FolgeHinzufuegenBodySchema,
+    status: 201,
+    handler: (c) => fuegeFolgeHinzu(dienstKontext(c), { ...c.body, ...erg(c) }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${E}/folgen/anlegen`,
+    body: FolgenAnlegenBodySchema,
+    handler: (c) => legeFolgenAn(dienstKontext(c), { ...c.body, ...erg(c) }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${E}/folgen/:folgeId/erledigen`,
+    handler: (c) => erledigeFolge(dienstKontext(c), folge(c)),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${E}/folgen/:folgeId/verwerfen`,
+    body: VerwerfenBeantragenBodySchema,
+    handler: (c) => verwerfeFolge(dienstKontext(c), { ...c.body, ...folge(c) }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${E}/abschliessen`,
+    handler: (c) => schliesseEreignisAb(dienstKontext(c), erg(c)),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${E}/verwerfen/beantragen`,
+    body: VerwerfenBeantragenBodySchema,
+    handler: (c) => beantrageEreignisVerwerfen(dienstKontext(c), { ...c.body, ...erg(c) }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${E}/verwerfen/bestaetigen`,
+    handler: (c) => bestaetigeEreignisVerwerfen(dienstKontext(c), erg(c)),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${E}/verwerfen/ablehnen`,
+    handler: (c) => lehneEreignisVerwerfenAb(dienstKontext(c), erg(c)),
+  });
+
+  // ------------------------------------------------------------------ P3 Portal
+  r.route({
+    methode: 'GET',
+    pfad: `${M}/portal/ereignisse`,
+    portal: true,
+    handler: (c) => ladePortalMeldungen(dienstKontext(c), mandant(c)),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${M}/portal/ereignisse`,
+    portal: true,
+    body: PortalMeldungBodySchema,
+    status: 201,
+    handler: (c) => meldeEreignis(dienstKontext(c), { ...c.body, ...mandant(c) }),
   });
 }

@@ -26,6 +26,31 @@ export {
   verlaufText as feststellungVerlaufText,
 } from './feststellungen-ereignisse/feststellungen-lesen';
 export {
+  beantrageEreignisVerwerfen,
+  bestaetigeEreignisVerwerfen,
+  erfasseEreignis,
+  erledigeFolge,
+  fuegeFolgeHinzu,
+  legeEreignisAn,
+  legeFolgenAn,
+  lehneEreignisVerwerfenAb,
+  nehmeEreignisInPruefung,
+  schliesseEreignisAb,
+  verwerfeFolge,
+} from './feststellungen-ereignisse/ereignisse';
+export {
+  ladeEreignis,
+  ladeEreignisAnlage,
+  ladeEreignisse,
+} from './feststellungen-ereignisse/ereignisse-lesen';
+export {
+  darfEreignisMelden,
+  ladePortalMeldungen,
+  meldeEreignis,
+  NUR_GV_TCB,
+  PORTAL_TYPEN,
+} from './feststellungen-ereignisse/portal';
+export {
   EINGABE_UNGUELTIG,
   legeAusserplanmaessigeDurchfuehrungAn,
   legeFeststellungAn,
