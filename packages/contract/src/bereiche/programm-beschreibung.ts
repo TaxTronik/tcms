@@ -491,6 +491,13 @@ export type PlanView = z.infer<typeof PlanViewSchema>;
 
 export const EinrichtungViewSchema = z
   .object({
+    /**
+     * „Heute" der Uhr des Dienstes (Kalendertag Europe/Berlin, ADR 0001 §7) –
+     * in beiden Zuständen (eingerichtet oder nicht). Die Oberfläche belegt
+     * damit Datumsfelder vor und zeigt Fristen; die Prüfung beim Speichern
+     * rechnet mit derselben Uhr.
+     */
+    heute: StandSchema,
     programm: z
       .object({
         id: z.string(),

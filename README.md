@@ -388,6 +388,9 @@ Rechte prüft `packages/service`, Eingaben und Antworten in
 | POST    | `…/portal/freigaben/:freigabeId/code` bzw. `freigeben` | adressierte gesetzliche Vertretung                                          |
 | POST    | `…/portal/freigaben/:freigabeId/kenntnisnahme`         | adressierte Person                                                          |
 
+`GET …/einrichtung` liefert in beiden Zuständen (Assistent offen oder eingerichtet) `heute`: den
+Kalendertag der Uhr des Dienstes (Europe/Berlin), mit dem auch die Prüfung beim Speichern rechnet.
+
 Bestätigungscodes erreichen die Empfänger nur über den Postausgang (Adresse = Personen-ID); keine
 andere Antwort, kein Log und kein Audit enthält einen Code. Eine offene Nachricht ist nach `zweck`
 diskriminiert (`OffeneNachrichtSchema`) und trägt `mandantId`, `empfaengerArt` (`KONTAKT` bzw. `KANZLEI`

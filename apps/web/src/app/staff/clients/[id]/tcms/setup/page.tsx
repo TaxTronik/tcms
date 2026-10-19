@@ -189,7 +189,7 @@ export default async function Einrichtungsassistent({
         {...formBasis}
         start={entwurf.profil}
         personen={personen}
-        heuteIso={seite.heuteIso}
+        heuteIso={einrichtung.heute}
       />
     );
   } else if (schritt === 3) {

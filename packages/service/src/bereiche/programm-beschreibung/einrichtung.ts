@@ -254,8 +254,11 @@ export async function ladeEinrichtung(
         createdAt: programm.createdAt.toISOString(),
       }
     : null;
+  // Kalendertag der Uhr des Kontexts (Dienst: echte Uhr, Demo: Demo-Uhr), wie `heute` oben.
+  const heuteIso = isoDatum(heute);
   if (eingerichtet(programm)) {
     return {
+      heute: heuteIso,
       programm: programmView,
       eingerichtet: true,
       entwurf: null,
@@ -267,6 +270,7 @@ export async function ladeEinrichtung(
   }
   const entwurf = leseEntwurf(programm?.setupEntwurf, heute, aufbauRollen(umfeld).gv);
   return {
+    heute: heuteIso,
     programm: programmView,
     eingerichtet: false,
     entwurf,

@@ -1,5 +1,6 @@
 // Einrichtungsassistent über die App (DB_TESTS=1): Erfolg je Endpunkt und
 // Negativfälle (falscher Mandant, Mandantenperson, ungültige Eingabe).
+import { kalendertag } from '@tcms/service';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   akteure,
@@ -25,6 +26,7 @@ describe.skipIf(!AKTIV)('Endpunkte Einrichtungsassistent (App + PostgreSQL)', ()
   });
 
   it('lesen, Schritte speichern, Version 1 anlegen (Erfolg)', async () => {
+    const vorher = kalendertag(new Date());
     const lesen = await ok(
       await senden(
         w,
@@ -37,6 +39,10 @@ describe.skipIf(!AKTIV)('Endpunkte Einrichtungsassistent (App + PostgreSQL)', ()
     await richteEinUeberHttp(w);
     const danach = await ok(await senden(w, 'GET', `${m(w.A)}/einrichtung`, a.bt()));
     expect(danach).toMatchObject({ eingerichtet: true, entwurf: null });
+    // „Heute" der echten Uhr des Dienstes (Kalendertag Europe/Berlin) in beiden Zuständen;
+    // über Mitternacht darf es der folgende Tag sein.
+    const nachher = kalendertag(new Date());
+    for (const v of [lesen, danach]) expect([vorher, nachher]).toContain(v['heute']);
     const nochmal = await senden(w, 'POST', `${m(w.A)}/einrichtung/anlegen`, a.bt(), {
       daten: { kontrollen: {} },
       personen: personen(w),

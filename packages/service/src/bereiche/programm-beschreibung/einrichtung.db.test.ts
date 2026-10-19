@@ -25,9 +25,12 @@ import {
   neuerMandant,
   nurEinErfolg,
   ohneRechtA,
+  TEST_PORTS,
+  TEST_UHR,
   zweiteVerbindung,
   type Welt,
 } from './testwelt';
+import { imDienst } from '../../kontext';
 import { bereiteVor, personen, SCHRITT1, schritt3, testProfil } from './testprogramm';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
@@ -75,6 +78,8 @@ describe.skipIf(!AKTIV)('Einrichtungsassistent (Service, PostgreSQL)', () => {
     expect(EinrichtungViewSchema.parse(v)).toEqual(v);
     expect(v.programm).toBeNull();
     expect(v.eingerichtet).toBe(false);
+    // „Heute" kommt aus der Uhr des Kontexts, nicht aus der Systemzeit.
+    expect(v.heute).toBe(TEST_UHR.heute());
     expect(v.entwurf?.abgeschlossen).toBe(0);
     // Vorbelegung der Freigabe: erste aktive gesetzliche Vertretung (keine inaktive Rolle).
     expect(v.entwurf?.freigabe.empfaengerId).toBe(w.gv);
@@ -299,6 +304,19 @@ describe.skipIf(!AKTIV)('Einrichtungsassistent (Service, PostgreSQL)', () => {
     // Eingerichtet: Lesen zeigt keinen Entwurf mehr, Ändern ist ein Konflikt.
     const v = await lies(btFuer(w, m.mandantId), m.mandantId);
     expect(v).toMatchObject({ eingerichtet: true, entwurf: null, plan: null });
+    // Auch eingerichtet trägt die Antwort „heute" der Uhr (Vertrag streng geprüft).
+    expect(EinrichtungViewSchema.parse(v)).toEqual(v);
+    expect(v.heute).toBe(TEST_UHR.heute());
+    const andereUhr = {
+      jetzt: () => new Date('2027-03-05T07:00:00.000Z'),
+      heute: () => '2027-03-05',
+    };
+    const spaeter = await imDienst(
+      btFuer(w, m.mandantId),
+      { ...TEST_PORTS, uhr: andereUhr },
+      (ctx) => ladeEinrichtung(ctx, { mandantId: m.mandantId }),
+    );
+    expect(spaeter.heute).toBe('2027-03-05');
     const f = await fehlerVon(
       speichere(btFuer(w, m.mandantId), 1, SCHRITT1, 'speichern', m.mandantId),
     );
