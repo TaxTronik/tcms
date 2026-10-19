@@ -1,6 +1,5 @@
 import 'server-only';
-import { antragDerAbweichung } from './kontrollen-daten';
-import { prisma } from '@tcms/db';
+import { MAX_MANDANTEN_JE_ANFRAGE } from '@tcms/contract';
 import {
   frequenzLabel,
   isoDatum,
@@ -9,15 +8,16 @@ import {
   type AnzeigeStatus,
   type Klasse,
 } from '@tcms/domain';
-import { ladeKontext, personName, type TcmsKontext } from './kontext';
 import {
   istBerufstraeger,
   kannBearbeiten,
   kannGegenzeichnen,
   kannWuerdigen,
   zweitePerson,
-} from './rechte';
-import type { Nutzer } from './sitzung';
+} from '@tcms/service';
+import { fuerMandant, lies, type KanzleiAkteur } from './demo';
+import { ladeKontext, personName, type TcmsKontext } from './kontext';
+import { antragDerAbweichung } from './kontrollen-daten';
 import { heute as heuteFn } from './zeit';
 
 // =============================================================================
@@ -120,14 +120,25 @@ const OFFEN_ODER_FAELLIG: readonly AnzeigeStatus[] = [
   'UEBERFAELLIG',
 ];
 
-export async function ladeArbeitskorb(nutzer: Nutzer): Promise<Arbeitskorb> {
+/**
+ * Arbeitskorb über die zugänglichen Mandanten (ADR 0001 §3.3: Liste kommt von
+ * der kanzleikonsole, höchstens 5 000). Rechte je Mandant über den Akteur mit
+ * Bezug auf genau diesen Mandanten.
+ */
+export async function ladeArbeitskorb(
+  person: KanzleiAkteur,
+  zugaenglich: readonly string[],
+): Promise<Arbeitskorb> {
+  if (zugaenglich.length > MAX_MANDANTEN_JE_ANFRAGE) throw new Error('Zu viele Mandanten');
   const heute = heuteFn();
   const iso = isoDatum(heute);
-  const mandanten = await prisma.mandant.findMany({
-    where: { aktiv: true },
-    orderBy: { name: 'asc' },
-    select: { id: true },
-  });
+  const mandanten = await lies((tx) =>
+    tx.mandant.findMany({
+      where: { aktiv: true, id: { in: [...zugaenglich] } },
+      orderBy: { name: 'asc' },
+      select: { id: true },
+    }),
+  );
   const kontexte = (await Promise.all(mandanten.map((m) => ladeKontext(m.id, iso, false)))).filter(
     (c): c is TcmsKontext => !!c && !!c.programm,
   );
@@ -136,33 +147,35 @@ export async function ladeArbeitskorb(nutzer: Nutzer): Promise<Arbeitskorb> {
   const abweichungsKontrollIds = kontexte.flatMap((c) =>
     c.kontrollen.filter((k) => k.abweichung && !k.abweichung.freigegebenVon).map((k) => k.id),
   );
-  const [abweichungsStaende, verwerfen] = await Promise.all([
-    abweichungsKontrollIds.length
-      ? prisma.kontrolleStand.findMany({
-          where: { kontrolleId: { in: abweichungsKontrollIds } },
-          orderBy: { gueltigAb: 'asc' },
-        })
-      : Promise.resolve([]),
-    programmIds.length
-      ? prisma.feststellung.findMany({
-          where: {
-            programmId: { in: programmIds },
-            verwerfenBeantragtVon: { not: null },
-            verwerfenBestaetigtVon: null,
-            status: { not: 'VERWORFEN' },
-          },
-          select: {
-            id: true,
-            programmId: true,
-            nummer: true,
-            titel: true,
-            verwerfenBegruendung: true,
-            verwerfenBeantragtVon: true,
-            vertraulich: true,
-          },
-        })
-      : Promise.resolve([]),
-  ]);
+  const [abweichungsStaende, verwerfen] = await lies((tx) =>
+    Promise.all([
+      abweichungsKontrollIds.length
+        ? tx.kontrolleStand.findMany({
+            where: { kontrolleId: { in: abweichungsKontrollIds } },
+            orderBy: { gueltigAb: 'asc' },
+          })
+        : Promise.resolve([]),
+      programmIds.length
+        ? tx.feststellung.findMany({
+            where: {
+              programmId: { in: programmIds },
+              verwerfenBeantragtVon: { not: null },
+              verwerfenBestaetigtVon: null,
+              status: { not: 'VERWORFEN' },
+            },
+            select: {
+              id: true,
+              programmId: true,
+              nummer: true,
+              titel: true,
+              verwerfenBegruendung: true,
+              verwerfenBeantragtVon: true,
+              vertraulich: true,
+            },
+          })
+        : Promise.resolve([]),
+    ]),
+  );
   // Antragsteller:in = Person, die den Stand mit der (unveränderten) offenen Abweichung zuerst angelegt hat.
   const staendeJe = new Map<string, typeof abweichungsStaende>();
   for (const st of abweichungsStaende)
@@ -185,8 +198,11 @@ export async function ladeArbeitskorb(nutzer: Nutzer): Promise<Arbeitskorb> {
     const m = ctx.mandant;
     const mandant: MandantRef = { id: m.id, name: m.name };
     const basis = `/staff/clients/${m.id}/tcms`;
-    const zustaendig = nutzer.id === m.berufstraegerId || nutzer.id === m.bearbeitungId;
-    const darfBearbeiten = kannBearbeiten(nutzer, m);
+    const nutzer = fuerMandant(person, m.id);
+    const zustaendig =
+      !!nutzer.mandant &&
+      (nutzer.mandant.zustaendigBerufstraeger || nutzer.mandant.hauptbearbeitung);
+    const darfBearbeiten = kannBearbeiten(nutzer, m.id);
     if (zustaendig) korb.mandantenZustaendig++;
     const kontrolleJe = new Map(ctx.kontrollen.map((k) => [k.id, k]));
 
@@ -219,7 +235,13 @@ export async function ladeArbeitskorb(nutzer: Nutzer): Promise<Arbeitskorb> {
       if (d.anzeige !== 'ZUR_GEGENZEICHNUNG') continue;
       const k = kontrolleJe.get(d.kontrolleId);
       if (!k) continue;
-      const recht = kannGegenzeichnen(nutzer, k, m, d.durchgefuehrtVon, !!d.mandantBestaetigtVon);
+      const recht = kannGegenzeichnen(
+        nutzer,
+        k,
+        m.id,
+        d.durchgefuehrtVon,
+        !!d.mandantBestaetigtVon,
+      );
       if (!recht.erlaubt) continue;
       if (k.gegenzeichnerId !== nutzer.id && !(istBerufstraeger(nutzer) && zustaendig)) continue;
       korb.gegenzeichnungen.push({
@@ -316,7 +338,7 @@ export async function ladeArbeitskorb(nutzer: Nutzer): Promise<Arbeitskorb> {
     // ---- §-153-Würdigungen ----
     const p153 = ctx.feststellungen.filter((f) => f.p153Offen);
     if (p153.length > 0) {
-      if (kannWuerdigen(nutzer, m) && (zustaendig || nutzer.id === m.berufstraegerId)) {
+      if (kannWuerdigen(nutzer, m.id) && (zustaendig || nutzer.id === m.berufstraegerId)) {
         for (const f of p153) {
           korb.p153.push({
             mandant,

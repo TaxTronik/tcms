@@ -1,24 +1,12 @@
 import 'server-only';
 import { addTage, isoDatum, MONATE, monatSchluessel } from '@tcms/domain';
 import type { DurchfuehrungView, PersonKurz, TcmsKontext } from './kontext';
-import type { Nutzer } from './sitzung';
 
 // =============================================================================
 // Portal P1: mandantenbezogene Sicht ohne Kanzlei-Interna (keine Nettoklassen,
 // keine §-153-Details, keine Feststellungen). Lesen dürfen gesetzliche
 // Vertreter und Tax-Compliance-Beauftragte; Mitarbeitende sehen nur Eigenes.
 // =============================================================================
-
-export type PortalRolle = 'GESETZLICHER_VERTRETER' | 'TAX_COMPLIANCE_BEAUFTRAGTER' | 'MITARBEITER';
-
-export function portalRolle(n: Pick<Nutzer, 'mandantRolle'>): PortalRolle {
-  return n.mandantRolle ?? 'MITARBEITER';
-}
-
-export function darfLesen(n: Pick<Nutzer, 'mandantRolle'>): boolean {
-  const r = portalRolle(n);
-  return r === 'GESETZLICHER_VERTRETER' || r === 'TAX_COMPLIANCE_BEAUFTRAGTER';
-}
 
 export const PHASE_EINFACH: Record<number, string> = {
   1: 'Wir richten das Compliance-Programm für Ihren Onlinehandel gemeinsam ein.',
@@ -42,7 +30,7 @@ export interface PortalAufgabe {
 const OFFEN = new Set(['FAELLIG', 'UEBERFAELLIG', 'IN_DURCHFUEHRUNG', 'ZURUECKGEWIESEN']);
 
 /** Offene Mandantenaufgaben: Durchführungen der Partei Mandant und Bestätigungen durch eine zweite Person. */
-export function portalAufgaben(ctx: TcmsKontext, nutzer: Pick<Nutzer, 'id'>): PortalAufgabe[] {
+export function portalAufgaben(ctx: TcmsKontext, nutzer: { id: string }): PortalAufgabe[] {
   const kontrolle = new Map(ctx.kontrollen.map((k) => [k.id, k]));
   const horizont = addTage(ctx.heute, 30);
   const liste: PortalAufgabe[] = [];

@@ -1,6 +1,8 @@
 'use server';
 
-import { prisma, pruefeAuditKette } from '@tcms/db';
+import { pruefeAuditKette } from '@tcms/db';
+import { kannVerwalten } from '@tcms/service';
+import { lies } from '../demo';
 import type { Ergebnis } from '../ergebnis';
 import { brauchtKanzlei } from '../sitzung';
 
@@ -10,9 +12,10 @@ import { brauchtKanzlei } from '../sitzung';
  */
 export async function pruefeHashkette(_prev: Ergebnis, _fd: FormData): Promise<Ergebnis> {
   const nutzer = await brauchtKanzlei();
-  if (!nutzer.istAdmin)
+  if (!kannVerwalten(nutzer))
     return { fehler: 'Die Prüfung der Hashkette ist Admins/Partnern vorbehalten.' };
-  const r = await pruefeAuditKette(prisma);
+  // Kette des Tenants (ADR 0001 §4): nur Einträge dieser Kanzlei, im Tenant-Kontext.
+  const r = await lies((tx) => pruefeAuditKette(tx));
   if (r.gueltig) {
     return {
       ok: `Hashkette intakt: ${r.geprueft} Einträge geprüft, jeder Eintrag bindet seinen Vorgänger.`,

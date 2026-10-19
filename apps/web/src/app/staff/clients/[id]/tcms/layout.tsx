@@ -5,7 +5,8 @@ import { isoDatum } from '@tcms/domain';
 import { Icon } from '@/components/icon';
 import { TcmsTabs } from '@/components/tcms/tabs';
 import { ladeKontext, personName } from '@/server/kontext';
-import { brauchtKanzlei } from '@/server/sitzung';
+import { kannLesen } from '@tcms/service';
+import { brauchtKanzleiFuer } from '@/server/sitzung';
 import { heute } from '@/server/zeit';
 
 export default async function MandantTcmsLayout({
@@ -15,8 +16,10 @@ export default async function MandantTcmsLayout({
   children: ReactNode;
   params: Promise<{ id: string }>;
 }) {
-  await brauchtKanzlei();
   const { id } = await params;
+  // Ohne Bezug zum Mandanten: 404 (keine Existenz, kein Name; ADR 0001 §3.3).
+  const nutzer = await brauchtKanzleiFuer(id);
+  if (!kannLesen(nutzer, id)) notFound();
   const ctx = await ladeKontext(id, isoDatum(heute()), false);
   if (!ctx) notFound();
   const ueberfaellig = ctx.durchfuehrungen.filter((d) => d.anzeige === 'UEBERFAELLIG').length;

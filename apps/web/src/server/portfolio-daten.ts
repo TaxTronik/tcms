@@ -1,5 +1,5 @@
 import 'server-only';
-import { prisma } from '@tcms/db';
+import { MAX_MANDANTEN_JE_ANFRAGE } from '@tcms/contract';
 import {
   isoDatum,
   MONATE,
@@ -9,6 +9,7 @@ import {
   type AnzeigeStatus,
   type Pruflast,
 } from '@tcms/domain';
+import { demoPersonen, lies } from './demo';
 import { ladeKontext, personName, type TcmsKontext } from './kontext';
 import { heute as heuteFn } from './zeit';
 
@@ -215,21 +216,27 @@ function zeile(ctx: TcmsKontext, heute: Date): PortfolioZeile {
   };
 }
 
-export async function ladePortfolio(): Promise<Portfolio> {
+/**
+ * Portfolio über die zugänglichen Mandanten (ADR 0001 §3.3: Liste der
+ * Mandanten-IDs kommt von der kanzleikonsole, höchstens 5 000). Mandanten
+ * außerhalb der Liste werden nie geladen.
+ */
+export async function ladePortfolio(zugaenglich: readonly string[]): Promise<Portfolio> {
+  if (zugaenglich.length > MAX_MANDANTEN_JE_ANFRAGE) throw new Error('Zu viele Mandanten');
   const heute = heuteFn();
   const iso = isoDatum(heute);
-  const [mandanten, bt] = await Promise.all([
-    prisma.mandant.findMany({
-      where: { aktiv: true },
+  const mandanten = await lies((tx) =>
+    tx.mandant.findMany({
+      where: { aktiv: true, id: { in: [...zugaenglich] } },
       orderBy: { name: 'asc' },
       select: { id: true },
     }),
-    prisma.person.findMany({
-      where: { art: 'KANZLEI', kanzleiRolle: 'BERUFSTRAEGER', aktiv: true },
-      orderBy: { name: 'asc' },
-      select: { id: true, name: true },
-    }),
-  ]);
+  );
+  const bt = demoPersonen
+    .alle()
+    .filter((p) => p.art === 'KANZLEI' && p.istBerufstraeger)
+    .map((p) => ({ id: p.id, name: p.name }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'de'));
   const kontexte = await Promise.all(mandanten.map((m) => ladeKontext(m.id, iso, false)));
   const zeilen = kontexte
     .filter((c): c is TcmsKontext => c != null)

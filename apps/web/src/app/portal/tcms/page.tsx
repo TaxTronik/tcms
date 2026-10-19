@@ -7,14 +7,8 @@ import { Leerzustand } from '@/components/ui/leer';
 import { MiniSteps } from '@/components/ui/visual';
 import { brauchtCode, ladeFreigaben } from '@/server/freigaben-daten';
 import { ladeKontext } from '@/server/kontext';
-import {
-  darfLesen,
-  kanzleiTeam,
-  PHASE_EINFACH,
-  portalAufgaben,
-  zeitraumMonate,
-} from '@/server/portal-daten';
-import { istGesetzlicherVertreter } from '@/server/rechte';
+import { istGesetzlicherVertreter, kannPortalLesen } from '@tcms/service';
+import { kanzleiTeam, PHASE_EINFACH, portalAufgaben, zeitraumMonate } from '@/server/portal-daten';
 import { brauchtPortal } from '@/server/sitzung';
 import { heute } from '@/server/zeit';
 
@@ -35,7 +29,7 @@ const TON: Record<string, string> = {
 };
 
 export default async function PortalUebersicht() {
-  const nutzer = await brauchtPortal();
+  const { akteur: nutzer, rollen } = await brauchtPortal();
   const ctx = await ladeKontext(nutzer.mandantId, isoDatum(heute()), false);
   if (!ctx?.programm) {
     return (
@@ -51,8 +45,9 @@ export default async function PortalUebersicht() {
     );
   }
 
-  const lesen = darfLesen(nutzer);
-  const istGv = istGesetzlicherVertreter(nutzer);
+  // Portal-Übersicht: GV und TCB (aktive Rolle); Mitarbeitende sehen nur Eigenes.
+  const lesen = kannPortalLesen(nutzer, nutzer.mandantId, rollen);
+  const istGv = istGesetzlicherVertreter(nutzer, nutzer.mandantId, rollen);
   const darfMelden = lesen;
   const aufgaben = portalAufgaben(ctx, nutzer);
   const meine = aufgaben.filter((a) => a.eigene);
@@ -61,7 +56,7 @@ export default async function PortalUebersicht() {
   const meineUeber = meine.filter((a) => a.d.anzeige === 'UEBERFAELLIG').length;
   const { eintraege } = await ladeFreigaben(nutzer.mandantId);
   const kannF = (f: (typeof eintraege)[number]) =>
-    brauchtCode(f.art) ? istGv : f.empfaengerId === nutzer.id;
+    brauchtCode(f.art) ? istGv && f.empfaengerId === nutzer.id : f.empfaengerId === nutzer.id;
   const offeneF = eintraege
     .filter((f) => f.status === 'OFFEN' && (lesen || f.empfaengerId === nutzer.id))
     .sort((a, b) => Number(kannF(b)) - Number(kannF(a)));
@@ -235,7 +230,10 @@ export default async function PortalUebersicht() {
             <div className="p-4 col" style={{ gap: 12 }}>
               {offeneF.map((f) => {
                 const code = brauchtCode(f.art);
-                const kann = code ? istGv : f.empfaengerId === nutzer.id;
+                // TS-06: nur die adressierte Person handelt.
+                const kann = code
+                  ? istGv && f.empfaengerId === nutzer.id
+                  : f.empfaengerId === nutzer.id;
                 return (
                   <div key={f.id} className="card p-3" style={{ boxShadow: 'none' }}>
                     <div className="row" style={{ alignItems: 'flex-start', gap: 12 }}>

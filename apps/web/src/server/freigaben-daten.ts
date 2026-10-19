@@ -1,9 +1,9 @@
 import 'server-only';
 import { randomInt, timingSafeEqual } from 'node:crypto';
-import { prisma } from '@tcms/db';
 import { fmtDatum } from '@tcms/domain';
 import { sha256 } from '@tcms/domain/audit';
 import type { Snapshot } from '@/components/beschreibung/typen';
+import { db, demoPersonen } from './demo';
 import { normalisiereAbschnitte } from './beschreibung-daten';
 import type { Abschnitt } from '@tcms/domain';
 
@@ -30,7 +30,11 @@ export const FREIGABE_ART_LABEL: Record<string, string> = {
   KENNTNISNAHME: 'Kenntnisnahme',
 };
 
-/** Neuer 6-stelliger Code mit Hash und Ablauf (+7 Tage ab Zeitpunkt). */
+/**
+ * Neuer 6-stelliger Code mit Hash und Ablauf (+7 Tage ab Zeitpunkt). Der
+ * Zeitpunkt ist echte Zeit (Sicherheitsfrist, keine Demo-Uhr); Fehlversuche
+ * werden über Audit-Zeitstempel (ebenfalls echte Zeit) seit Ausstellung gezählt.
+ */
 export function erzeugeCode(zeitpunkt: Date): { code: string; codeHash: string; codeAblauf: Date } {
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
   return {
@@ -115,24 +119,23 @@ export interface FreigabenUebersicht {
 
 /** Alle Freigaben und Kenntnisnahmen eines Mandanten (Portal). */
 export async function ladeFreigaben(mandantId: string): Promise<FreigabenUebersicht> {
-  const programme = await prisma.tcmsProgramm.findMany({
+  const programme = await db.tcmsProgramm.findMany({
     where: { mandantId },
     select: { id: true },
   });
   const ids = programme.map((p) => p.id);
   if (!ids.length) return { eintraege: [], fruehere: [] };
-  const [freigaben, versionen, personen] = await Promise.all([
-    prisma.freigabe.findMany({
+  const [freigaben, versionen] = await Promise.all([
+    db.freigabe.findMany({
       where: { programmId: { in: ids } },
       orderBy: { angefordertAm: 'desc' },
     }),
-    prisma.beschreibungVersion.findMany({
+    db.beschreibungVersion.findMany({
       where: { programmId: { in: ids } },
       orderBy: { createdAt: 'asc' },
     }),
-    prisma.person.findMany({ select: { id: true, name: true } }),
   ]);
-  const name = new Map(personen.map((p) => [p.id, p.name]));
+  const name = new Map(demoPersonen.alle().map((p) => [p.id, p.name]));
   const versionJe = new Map(versionen.map((v) => [v.id, v]));
   const eintraege: FreigabeEintrag[] = freigaben.map((f) => {
     const v = f.art === 'BESCHREIBUNG' ? versionJe.get(f.refId) : undefined;
@@ -187,7 +190,7 @@ export async function ladeFreigaben(mandantId: string): Promise<FreigabenUebersi
 /** Letzte Nachrichten des Entwicklungs-Postausgangs an eine Person. */
 export async function ladePostausgang(nutzer: { name: string; email: string }, anzahl = 3) {
   // Exakt die Adresse der Person (bzw. der reine Name aus Altbeständen) – kein Präfixvergleich.
-  return prisma.nachricht.findMany({
+  return db.nachricht.findMany({
     where: { an: { in: [adresse(nutzer), nutzer.name] } },
     orderBy: { createdAt: 'desc' },
     take: anzahl,

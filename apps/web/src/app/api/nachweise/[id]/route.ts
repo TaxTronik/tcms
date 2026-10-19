@@ -1,15 +1,19 @@
-import { createHash } from 'node:crypto';
+import { kannLesen } from '@tcms/service';
+import { akteurFuer, handelnde, lies } from '@/server/demo';
 import {
   darfPortalLesen,
   ladeNachweisFuerDownload,
   leseNachweisdatei,
 } from '@/server/durchfuehrung-daten';
-import { aktuellerNutzer } from '@/server/sitzung';
+import { aktuellePerson } from '@/server/sitzung';
+import { ladeKontaktRollen } from '@tcms/service';
 
 // =============================================================================
-// Download eines Nachweises. Zugriff: Kanzlei-Personen sowie Portal-Personen
-// desselben Mandanten mit Leserecht auf die Kontrollaufgabe (Partei Mandant).
-// Vor der Auslieferung wird der SHA-256 gegen den gespeicherten Hash geprüft.
+// Download eines Nachweises (nur Demo; im Dienst laufen Downloads über die
+// kanzleikonsole, ADR 0001 §6). Zugriff: Kanzleipersonen mit Bezug zum
+// Mandanten (kannLesen) sowie Portal-Personen desselben Mandanten mit aktiver
+// Rolle und Leserecht auf die Kontrollaufgabe (Partei Mandant). Vor der
+// Auslieferung prüft die Ablage den SHA-256 gegen Ablagepfad und Nachweis (TS-09).
 // =============================================================================
 
 export const dynamic = 'force-dynamic';
@@ -26,41 +30,41 @@ export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  const nutzer = await aktuellerNutzer();
+  const person = await aktuellePerson();
   const kopf = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' };
-  if (!nutzer) return new Response('Nicht angemeldet.', { status: 401, headers: kopf });
+  if (!person) return new Response('Nicht angemeldet.', { status: 401, headers: kopf });
   const { id } = await params;
   const n = await ladeNachweisFuerDownload(id);
   if (!n) return new Response('Nicht gefunden.', { status: 404, headers: kopf });
 
   const ks = n.durchfuehrung.kontrolleStand;
   const mandantId = n.durchfuehrung.kontrolle.programm.mandantId;
+  const akteur = akteurFuer(person, mandantId);
+  const rollen = await lies((tx) => ladeKontaktRollen(tx, akteur));
   const erlaubt =
-    nutzer.art === 'KANZLEI' ||
-    darfPortalLesen(nutzer, {
-      mandantId,
-      kontrolle: {
-        partei: ks.partei,
-        durchfuehrendId: ks.durchfuehrendId,
-        vertretungId: ks.vertretungId,
-        gegenzeichnerId: ks.gegenzeichnerId,
-      },
-    });
+    akteur.art === 'KANZLEI'
+      ? kannLesen(akteur, mandantId)
+      : darfPortalLesen(handelnde(akteur, rollen), {
+          mandantId,
+          kontrolle: {
+            partei: ks.partei,
+            durchfuehrendId: ks.durchfuehrendId,
+            vertretungId: ks.vertretungId,
+            gegenzeichnerId: ks.gegenzeichnerId,
+          },
+        });
   // Kein Hinweis auf die Existenz fremder Dateien.
   if (!erlaubt) return new Response('Nicht gefunden.', { status: 404, headers: kopf });
 
   let inhalt: Buffer;
   try {
-    inhalt = await leseNachweisdatei(n.speicherpfad);
+    // Prüft Ablagepfad, SHA-256 des Inhalts und den Hash des Nachweises.
+    inhalt = await leseNachweisdatei(n);
   } catch {
-    return new Response('Datei nicht in der Ablage gefunden.', { status: 410, headers: kopf });
-  }
-  const ist = createHash('sha256').update(inhalt).digest('hex');
-  if (ist !== n.sha256) {
-    return new Response(
-      'Integritätsprüfung fehlgeschlagen: Der Inhalt weicht vom gespeicherten Hash ab.',
-      { status: 409, headers: kopf },
-    );
+    return new Response('Datei nicht verfügbar oder Integritätsprüfung fehlgeschlagen.', {
+      status: 410,
+      headers: kopf,
+    });
   }
 
   return new Response(new Uint8Array(inhalt), {

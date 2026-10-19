@@ -1,12 +1,5 @@
 import 'server-only';
-import {
-  leseDatei,
-  prisma,
-  speichereDatei,
-  type GespeicherteDatei,
-  type Prisma,
-  type Tx,
-} from '@tcms/db';
+import type { Prisma, Tx } from '@tcms/db';
 import { addTage, fmtDatum, statusAm, type AnzeigeStatus, type Klasse } from '@tcms/domain';
 import {
   fehlendeWerte,
@@ -17,18 +10,26 @@ import {
   type KennzahlDef,
   type Werte,
 } from '@/components/durchfuehrung/werte';
+import { kannPortalLesen, type NachweisVerweis } from '@tcms/service';
+import {
+  db,
+  demoAblage,
+  demoPersonen,
+  zustaendigkeit as mandantZustaendigkeit,
+  type Handelnde,
+} from './demo';
 import { aktualisiereMandant, KEIN_RECHT, mitAudit, type Protokoll } from './aktion';
 import type { Ergebnis } from './ergebnis';
-import {
-  kannBearbeiten,
-  kannDurchfuehren,
-  kannGegenzeichnen,
-  kannWuerdigen,
-  type KontrollZustaendigkeit,
-  type MandantZustaendigkeit,
-} from './rechte';
-import type { Nutzer } from './sitzung';
-import { heute, leseStand, tagesende } from './zeit';
+import { kannBearbeiten, kannDurchfuehren, kannGegenzeichnen, kannWuerdigen } from './berechtigung';
+import { auditGrenze, heute, leseStand, tagesende } from './zeit';
+import type { KontrollZustaendigkeit } from '@tcms/service';
+
+/** Zuständigkeit eines Mandanten zur Anzeige (Demo-Verzeichnis); Rechte laufen über den Akteur. */
+export interface MandantZustaendigkeit {
+  id: string;
+  berufstraegerId: string;
+  bearbeitungId: string;
+}
 
 // =============================================================================
 // Kontrolldurchführung (S8, P2): Laden der Detaildaten, Rechte je Handlung
@@ -180,12 +181,20 @@ export interface DurchfuehrungDetail {
 // Dateiablage (gemeinsame Ablage aus @tcms/db, Layout <sha[0:2]>/<sha256>)
 // ---------------------------------------------------------------------------
 
-export function legeNachweisdateiAb(inhalt: Buffer): Promise<GespeicherteDatei> {
-  return speichereDatei(inhalt);
+/** Demo: legt eine Datei über den Ablage-Port ab (Dienst: nur Verweise, ADR 0001 §6). */
+export function legeNachweisdateiAb(
+  inhalt: Buffer,
+  dateiname: string,
+  mime: string,
+): Promise<NachweisVerweis> {
+  return demoAblage.annehmen({ art: 'DATEI', dateiname, mime, inhalt });
 }
 
-export function leseNachweisdatei(speicherpfad: string): Promise<Buffer> {
-  return leseDatei(speicherpfad);
+/** Demo: liest eine abgelegte Datei und prüft dabei den SHA-256 (TS-09). */
+export function leseNachweisdatei(
+  n: Pick<NachweisVerweis, 'dokumentId' | 'sha256'>,
+): Promise<Buffer> {
+  return demoAblage.lese(n);
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +202,7 @@ export function leseNachweisdatei(speicherpfad: string): Promise<Buffer> {
 // ---------------------------------------------------------------------------
 
 function ladeRoh(id: string) {
-  return prisma.durchfuehrung.findUnique({
+  return db.durchfuehrung.findUnique({
     where: { id },
     include: {
       kontrolleStand: true,
@@ -281,9 +290,11 @@ export async function ladeDurchfuehrungDetail(
   const programm = d.kontrolle.programm;
   const partei = ks.partei;
 
-  const [personenRoh, audit, letzteRoh, nachtraegeRoh, original] = await Promise.all([
-    prisma.person.findMany({ select: { id: true, name: true, art: true, funktion: true } }),
-    prisma.auditEvent.findMany({
+  const personenRoh = demoPersonen
+    .alle()
+    .map((p) => ({ id: p.id, name: p.name, art: p.art, funktion: p.funktion }));
+  const [audit, letzteRoh, nachtraegeRoh, original] = await Promise.all([
+    db.auditEvent.findMany({
       where: {
         OR: [
           { objektTyp: 'Durchfuehrung', objektId: id },
@@ -293,7 +304,7 @@ export async function ladeDurchfuehrungDetail(
       },
       orderBy: { seq: 'desc' },
     }),
-    prisma.durchfuehrung.findMany({
+    db.durchfuehrung.findMany({
       where: {
         kontrolleId: d.kontrolleId,
         id: { not: id },
@@ -303,9 +314,9 @@ export async function ladeDurchfuehrungDetail(
       orderBy: { periodeVon: 'desc' },
       take: 3,
     }),
-    prisma.durchfuehrung.findMany({ where: { nachtragZuId: id }, orderBy: { createdAt: 'asc' } }),
+    db.durchfuehrung.findMany({ where: { nachtragZuId: id }, orderBy: { createdAt: 'asc' } }),
     d.nachtragZuId
-      ? prisma.durchfuehrung.findUnique({
+      ? db.durchfuehrung.findUnique({
           where: { id: d.nachtragZuId },
           select: { id: true, periodeLabel: true },
         })
@@ -320,7 +331,9 @@ export async function ladeDurchfuehrungDetail(
     anzeige: statusAm(x, stand),
   });
 
-  const auditImStand = audit.filter((e) => e.at.getTime() <= ende.getTime());
+  // Audit-Zeitstempel sind echte Zeit (auditGrenze, zeit.ts).
+  const auditGrenzeMs = auditGrenze(stand).getTime();
+  const auditImStand = audit.filter((e) => e.at.getTime() <= auditGrenzeMs);
   const letztesEreignis = (aktion: string) => auditImStand.find((e) => e.aktion === aktion) ?? null;
 
   const verlauf: VerlaufEintrag[] = auditImStand.map((e) => ({
@@ -402,8 +415,8 @@ export async function ladeDurchfuehrungDetail(
     mandantName: programm.mandant.name,
     mandant: {
       id: programm.mandant.id,
-      berufstraegerId: programm.mandant.berufstraegerId,
-      bearbeitungId: programm.mandant.bearbeitungId,
+      berufstraegerId: mandantZustaendigkeit(programm.mandant.id).berufstraegerId ?? '',
+      bearbeitungId: mandantZustaendigkeit(programm.mandant.id).bearbeitungId ?? '',
     },
     programmId: programm.id,
     kontrolle: {
@@ -653,14 +666,13 @@ export interface PortalLeseBezug {
   >;
 }
 
-export function darfPortalLesen(n: Nutzer, d: PortalLeseBezug): boolean {
+export function darfPortalLesen(n: Handelnde, d: PortalLeseBezug): boolean {
   if (n.art !== 'MANDANT' || n.mandantId !== d.mandantId) return false;
   if (d.kontrolle.partei !== 'MANDANT') return false;
-  if (
-    n.mandantRolle === 'GESETZLICHER_VERTRETER' ||
-    n.mandantRolle === 'TAX_COMPLIANCE_BEAUFTRAGTER'
-  )
-    return true;
+  // Ohne aktive Rolle beim Mandanten kein Zugriff (ADR 0001 §5).
+  if (!n.rollen.some((r) => r.aktiv && r.mandantId === d.mandantId && r.kontaktId === n.id))
+    return false;
+  if (kannPortalLesen(n, d.mandantId, n.rollen)) return true;
   return [
     d.kontrolle.durchfuehrendId,
     d.kontrolle.vertretungId,
@@ -668,7 +680,7 @@ export function darfPortalLesen(n: Nutzer, d: PortalLeseBezug): boolean {
   ].includes(n.id);
 }
 
-function durchfuehrenGrund(n: Nutzer, d: DurchfuehrungDetail): string {
+function durchfuehrenGrund(n: Handelnde, d: DurchfuehrungDetail): string {
   if (d.kontrolle.partei === 'MANDANT' && n.art === 'KANZLEI')
     return 'Diese Kontrolle führt der Mandant im Portal durch';
   if (d.kontrolle.partei === 'KANZLEI' && n.art === 'MANDANT')
@@ -677,12 +689,12 @@ function durchfuehrenGrund(n: Nutzer, d: DurchfuehrungDetail): string {
 }
 
 export function rechteFuer(
-  n: Nutzer,
+  n: Handelnde,
   d: DurchfuehrungDetail,
   historisch: boolean,
 ): DurchfuehrungRechte {
   const m = d.mandant;
-  const darfDurchfuehren = kannDurchfuehren(n, d.zustaendigkeit, d.mandantId);
+  const darfDurchfuehren = kannDurchfuehren(n, d.zustaendigkeit, d.mandantId, n.rollen);
   const beteiligt = d.beteiligte.includes(n.id);
   const vierAugen = 'Gegenzeichnung muss durch eine andere Person erfolgen (Vier-Augen-Prinzip)';
 
@@ -716,7 +728,7 @@ export function rechteFuer(
     if (n.art !== 'KANZLEI') return nein('Abschluss durch die Kanzlei');
     if (beteiligt) return nein(vierAugen);
     // Abschluss durch die Kanzlei; die ausstehende Mandanten-Bestätigung prüft `gegenzeichnen` gesondert.
-    const g = kannGegenzeichnen(n, d.zustaendigkeit, m, d.durchgefuehrtVon, true);
+    const g = kannGegenzeichnen(n, d.zustaendigkeit, m, d.durchgefuehrtVon, true, n.rollen);
     return g.erlaubt ? ja : nein(g.grund ?? KEIN_RECHT);
   })();
 
@@ -740,7 +752,7 @@ export function rechteFuer(
       return nein(
         'Die Bestätigung erfolgt durch eine zweite Person, nicht durch die durchführende',
       );
-    const g = kannGegenzeichnen(n, d.zustaendigkeit, m, d.durchgefuehrtVon);
+    const g = kannGegenzeichnen(n, d.zustaendigkeit, m, d.durchgefuehrtVon, false, n.rollen);
     return g.erlaubt ? ja : nein(g.grund ?? KEIN_RECHT);
   })();
 
@@ -866,7 +878,7 @@ function protokoll(
 async function beginneInTx(
   tx: Tx,
   d: DurchfuehrungDetail,
-  nutzer: Nutzer,
+  nutzer: Handelnde,
   zeitpunkt: Date,
 ): Promise<Protokoll> {
   await tx.durchfuehrung.update({
@@ -884,7 +896,7 @@ async function beginneInTx(
   return protokoll(d, 'tcms.durchfuehrung.begonnen');
 }
 
-export async function kernBeginnen(nutzer: Nutzer, fd: FormData): Promise<Ergebnis> {
+export async function kernBeginnen(nutzer: Handelnde, fd: FormData): Promise<Ergebnis> {
   return fuehreAus(async () => {
     if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
     const d = await ladeFuerAktion(text(fd, 'id'));
@@ -901,7 +913,7 @@ export async function kernBeginnen(nutzer: Nutzer, fd: FormData): Promise<Ergebn
 }
 
 /** Schritte, Werte und Ergebnis speichern; mit absicht=einreichen zusätzlich prüfen und einreichen. */
-export async function kernSpeichern(nutzer: Nutzer, fd: FormData): Promise<Ergebnis> {
+export async function kernSpeichern(nutzer: Handelnde, fd: FormData): Promise<Ergebnis> {
   return fuehreAus(async () => {
     if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
     const d = await ladeFuerAktion(text(fd, 'id'));
@@ -1024,7 +1036,7 @@ function mimeBereinigt(typ: string): string {
   return /^[\w.+-]+\/[\w.+-]+$/.test(typ) ? typ.toLowerCase() : 'application/octet-stream';
 }
 
-export async function kernHochladen(nutzer: Nutzer, fd: FormData): Promise<Ergebnis> {
+export async function kernHochladen(nutzer: Handelnde, fd: FormData): Promise<Ergebnis> {
   return fuehreAus(async () => {
     if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
     const dateien = fd
@@ -1044,17 +1056,15 @@ export async function kernHochladen(nutzer: Nutzer, fd: FormData): Promise<Ergeb
     const r = rechteFuer(nutzer, d, false).bearbeiten;
     if (!r.erlaubt) return { fehler: r.grund ?? KEIN_RECHT };
 
-    // Ablage nach SHA-256 (inhaltsadressiert, idempotent) vor der Transaktion.
-    const gespeichert: {
-      name: string;
-      mime: string;
-      sha256: string;
-      speicherpfad: string;
-      groesse: number;
-    }[] = [];
+    // Ablage über den Port (Demo: lokal nach SHA-256, inhaltsadressiert, idempotent) vor der Transaktion.
+    const gespeichert: (NachweisVerweis & { name: string })[] = [];
     for (const f of dateien) {
-      const g = await legeNachweisdateiAb(Buffer.from(await f.arrayBuffer()));
-      gespeichert.push({ name: dateinameBereinigt(f.name), mime: mimeBereinigt(f.type), ...g });
+      const v = await legeNachweisdateiAb(
+        Buffer.from(await f.arrayBuffer()),
+        dateinameBereinigt(f.name),
+        mimeBereinigt(f.type),
+      );
+      gespeichert.push({ ...v, name: v.dateiname });
     }
 
     const { neu, doppelt } = await mitAudit(nutzer, async (tx, zeitpunkt) => {
@@ -1081,7 +1091,7 @@ export async function kernHochladen(nutzer: Nutzer, fd: FormData): Promise<Ergeb
             mime: g.mime,
             groesse: g.groesse,
             sha256: g.sha256,
-            speicherpfad: g.speicherpfad,
+            dokumentId: g.dokumentId,
             gesperrt: false,
             hochgeladenVon: nutzer.id,
             hochgeladenAm: zeitpunkt,
@@ -1108,10 +1118,10 @@ export async function kernHochladen(nutzer: Nutzer, fd: FormData): Promise<Ergeb
   });
 }
 
-export async function kernEntfernen(nutzer: Nutzer, fd: FormData): Promise<Ergebnis> {
+export async function kernEntfernen(nutzer: Handelnde, fd: FormData): Promise<Ergebnis> {
   return fuehreAus(async () => {
     if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
-    const nachweis = await prisma.nachweis.findUnique({ where: { id: text(fd, 'nachweisId') } });
+    const nachweis = await db.nachweis.findUnique({ where: { id: text(fd, 'nachweisId') } });
     if (!nachweis) return { fehler: 'Nachweis nicht gefunden.' };
     if (nachweis.gesperrt) return { fehler: 'Gesperrte Nachweise können nicht entfernt werden.' };
     const d = await ladeFuerAktion(nachweis.durchfuehrungId);
@@ -1138,7 +1148,7 @@ export async function kernEntfernen(nutzer: Nutzer, fd: FormData): Promise<Ergeb
 }
 
 /** Zurückweisen (Kanzlei-Prüfer:in oder zweite Person beim Mandanten); entsperrt die Nachweise. */
-export async function kernZurueckweisen(nutzer: Nutzer, fd: FormData): Promise<Ergebnis> {
+export async function kernZurueckweisen(nutzer: Handelnde, fd: FormData): Promise<Ergebnis> {
   return fuehreAus(async () => {
     if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
     const begruendung = text(fd, 'begruendung').trim();
@@ -1183,7 +1193,7 @@ export async function kernZurueckweisen(nutzer: Nutzer, fd: FormData): Promise<E
 // ---------------------------------------------------------------------------
 
 export async function ladeNachweisFuerDownload(id: string) {
-  return prisma.nachweis.findUnique({
+  return db.nachweis.findUnique({
     where: { id },
     include: {
       durchfuehrung: {

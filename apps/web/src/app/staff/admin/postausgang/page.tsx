@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
-import { prisma } from '@tcms/db';
 import { fmtDatumZeit } from '@tcms/domain';
 import { AdminKopf, NurAdmin } from '@/components/admin/teile';
 import { Icon } from '@/components/icon';
 import { Leerzustand } from '@/components/ui/leer';
+import { kannVerwalten } from '@tcms/service';
+import { lies } from '@/server/demo';
 import { brauchtKanzlei } from '@/server/sitzung';
 
 export const metadata = { title: 'Postausgang (Entwicklung)' };
@@ -25,11 +26,13 @@ function mitCodes(text: string): ReactNode[] {
 
 export default async function Postausgang() {
   const nutzer = await brauchtKanzlei();
-  if (!nutzer.istAdmin) return <NurAdmin titel="Postausgang (Entwicklung)" />;
-  const nachrichten = await prisma.nachricht.findMany({
-    orderBy: { createdAt: 'desc' },
-    take: 200,
-  });
+  if (!kannVerwalten(nutzer)) return <NurAdmin titel="Postausgang (Entwicklung)" />;
+  const nachrichten = await lies((tx) =>
+    tx.nachricht.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    }),
+  );
 
   return (
     <div className="page">

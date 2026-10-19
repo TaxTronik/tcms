@@ -42,7 +42,7 @@ import {
 } from '@/server/actions/risiken';
 import { personName, type RisikoView } from '@/server/kontext';
 import type { AkzeptanzView, NeuBewertenHinweis, RisikoDetail } from '@/server/risiken-daten';
-import { zweitePerson } from '@/server/rechte';
+import { zweitePerson } from '@tcms/service';
 import type { StaffSeite } from '@/server/seite';
 import {
   AKZEPTANZ_STATUS_BADGE,

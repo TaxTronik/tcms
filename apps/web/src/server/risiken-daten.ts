@@ -1,9 +1,9 @@
 import 'server-only';
-import { prisma } from '@tcms/db';
 import { fmtDatum, katalogRisiko, PROFIL_FRAGEN, type Geschaeftsprofil } from '@tcms/domain';
 import { profilFragenAus } from '@/components/risiken/labels';
+import { db } from './demo';
 import type { RisikoView, TcmsKontext } from './kontext';
-import { tagesende } from './zeit';
+import { auditGrenze, tagesende } from './zeit';
 
 // =============================================================================
 // Zusatzdaten für Risikoinventar (S4) und Risikodetail (S5): Hinweise
@@ -24,7 +24,7 @@ interface ProfilAenderung {
 
 /** Welche Profilfragen haben sich zwischen aufeinanderfolgenden Profilständen geändert? */
 async function profilAenderungen(programmId: string, ende: Date): Promise<ProfilAenderung[]> {
-  const staende = await prisma.profilStand.findMany({
+  const staende = await db.profilStand.findMany({
     where: { programmId, gueltigAb: { lte: ende } },
     orderBy: { gueltigAb: 'asc' },
     select: { gueltigAb: true, antworten: true },
@@ -113,7 +113,7 @@ export async function ladeAkzeptanzen(ctx: TcmsKontext): Promise<Map<string, Akz
   const out = new Map<string, AkzeptanzView[]>();
   if (!ctx.programm) return out;
   const ende = tagesende(ctx.stand);
-  const liste = await prisma.freigabe.findMany({
+  const liste = await db.freigabe.findMany({
     where: { programmId: ctx.programm.id, art: 'RISIKOAKZEPTANZ', angefordertAm: { lte: ende } },
     orderBy: { angefordertAm: 'desc' },
   });
@@ -172,13 +172,14 @@ export async function ladeRisikoDetail(
   stand: Date,
 ): Promise<RisikoDetail | null> {
   const ende = tagesende(stand);
-  const r = await prisma.risiko.findUnique({
+  const r = await db.risiko.findUnique({
     where: { id: risiko.id },
     include: { staende: { where: { gueltigAb: { lte: ende } }, orderBy: { gueltigAb: 'desc' } } },
   });
   if (!r) return null;
-  const audit = await prisma.auditEvent.findMany({
-    where: { objektTyp: 'Risiko', objektId: r.id, at: { lte: ende } },
+  const audit = await db.auditEvent.findMany({
+    // Audit-Zeitstempel sind echte Zeit (auditGrenze, zeit.ts).
+    where: { objektTyp: 'Risiko', objektId: r.id, at: { lte: auditGrenze(stand) } },
     orderBy: { seq: 'desc' },
     take: 40,
   });

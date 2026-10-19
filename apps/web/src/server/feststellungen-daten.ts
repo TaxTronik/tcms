@@ -1,5 +1,6 @@
 import 'server-only';
-import { prisma, type Tx } from '@tcms/db';
+import type { Akteur } from '@tcms/contract';
+import type { Tx } from '@tcms/db';
 import {
   FESTSTELLUNG_STATUS_LABEL,
   P153_LABEL,
@@ -8,9 +9,9 @@ import {
   type FeststellungStatus,
   type Paragraph153Entscheidung,
 } from '@tcms/domain';
-import type { MandantZustaendigkeit } from './rechte';
-import type { Nutzer } from './sitzung';
-import { tagesende } from './zeit';
+import { kannVertraulichLesen } from '@tcms/service';
+import { lies } from './demo';
+import { auditGrenze, tagesende } from './zeit';
 
 // =============================================================================
 // Detaildaten für S10 (Feststellungen und Maßnahmen), die der Kontext nicht
@@ -70,21 +71,17 @@ export interface BeteiligteFakten {
 
 /**
  * Beteiligt sind: Admin/Partner, zuständige:r Berufsträger:in, Hauptbearbeitung,
- * die erfassende Person, die würdigende Person und Maßnahmen-Verantwortliche.
+ * die erfassende Person, die würdigende Person und Maßnahmen-Verantwortliche –
+ * jeweils mit Bezug zum Mandanten (`kannVertraulichLesen`, @tcms/service).
  */
-export function istBeteiligt(
-  n: Pick<Nutzer, 'id' | 'art' | 'istAdmin'>,
-  f: BeteiligteFakten,
-  m: MandantZustaendigkeit,
-): boolean {
-  if (n.art !== 'KANZLEI') return false;
-  if (n.istAdmin || n.id === m.berufstraegerId || n.id === m.bearbeitungId) return true;
-  return (
-    n.id === f.erfasstVon ||
-    n.id === f.p153EntschiedenVon ||
-    n.id === f.verwerfenBeantragtVon ||
-    f.massnahmenVerantwortlich.includes(n.id)
-  );
+export function istBeteiligt(a: Akteur, f: BeteiligteFakten, mandantId: string): boolean {
+  const beteiligte = [
+    f.erfasstVon,
+    f.p153EntschiedenVon,
+    f.verwerfenBeantragtVon,
+    ...f.massnahmenVerantwortlich,
+  ].filter((x): x is string => !!x);
+  return kannVertraulichLesen(a, mandantId, beteiligte);
 }
 
 // ----------------------------------------------------------------------------
@@ -155,23 +152,25 @@ export async function ladeFeststellungListe(
   stand: Date,
 ): Promise<Map<string, FeststellungListenZusatz>> {
   const ende = tagesende(stand);
-  const roh = await prisma.feststellung.findMany({
-    where: { programmId },
-    select: {
-      id: true,
-      erfasstVon: true,
-      durchfuehrungId: true,
-      ereignisId: true,
-      p153EntschiedenVon: true,
-      p153EntschiedenAm: true,
-      p153Frist: true,
-      p153Entscheidung: true,
-      verwerfenBeantragtVon: true,
-      verwerfenBestaetigtVon: true,
-      status: true,
-      massnahmen: { orderBy: { wiedervorlageNr: 'asc' } },
-    },
-  });
+  const roh = await lies((tx) =>
+    tx.feststellung.findMany({
+      where: { programmId },
+      select: {
+        id: true,
+        erfasstVon: true,
+        durchfuehrungId: true,
+        ereignisId: true,
+        p153EntschiedenVon: true,
+        p153EntschiedenAm: true,
+        p153Frist: true,
+        p153Entscheidung: true,
+        verwerfenBeantragtVon: true,
+        verwerfenBestaetigtVon: true,
+        status: true,
+        massnahmen: { orderBy: { wiedervorlageNr: 'asc' } },
+      },
+    }),
+  );
   const out = new Map<string, FeststellungListenZusatz>();
   for (const f of roh) {
     const entschieden =
@@ -363,42 +362,47 @@ export async function ladeFeststellungDetail(
   historisch = false,
 ): Promise<FeststellungDetail | null> {
   const ende = tagesende(stand);
-  const f = await prisma.feststellung.findFirst({
-    where: { id: fid, programmId },
-    include: {
-      risiken: { include: { risiko: { select: { id: true, code: true } } } },
-      erklaerungen: true,
-      massnahmen: { orderBy: { wiedervorlageNr: 'asc' } },
-      durchfuehrung: { include: { kontrolle: { select: { code: true } } } },
-      nachkontrolle: {
-        include: {
-          kontrolle: { select: { code: true } },
-          kontrolleStand: { select: { titel: true } },
+  // Audit-Zeitstempel sind echte Zeit; Vergleiche mit Audit-Einträgen über auditGrenze.
+  const auditEnde = auditGrenze(stand);
+  const { f, ereignis, audits } = await lies(async (tx) => {
+    const f = await tx.feststellung.findFirst({
+      where: { id: fid, programmId },
+      include: {
+        risiken: { include: { risiko: { select: { id: true, code: true } } } },
+        erklaerungen: true,
+        massnahmen: { orderBy: { wiedervorlageNr: 'asc' } },
+        durchfuehrung: { include: { kontrolle: { select: { code: true } } } },
+        nachkontrolle: {
+          include: {
+            kontrolle: { select: { code: true } },
+            kontrolleStand: { select: { titel: true } },
+          },
         },
       },
-    },
+    });
+    if (!f) return { f: null, ereignis: null, audits: [] };
+    const ereignis = f.ereignisId
+      ? await tx.ereignis.findUnique({
+          where: { id: f.ereignisId },
+          select: { id: true, nummer: true, typ: true, titel: true },
+        })
+      : null;
+
+    const audits = await tx.auditEvent.findMany({
+      where: {
+        OR: [
+          { objektTyp: 'Feststellung', objektId: f.id },
+          { objektTyp: 'Massnahme', objektId: { in: f.massnahmen.map((m) => m.id) } },
+        ],
+      },
+      orderBy: { seq: 'asc' },
+    });
+    return { f, ereignis, audits };
   });
   if (!f || f.erfasstAm.getTime() > ende.getTime()) return null;
-
-  const ereignis = f.ereignisId
-    ? await prisma.ereignis.findUnique({
-        where: { id: f.ereignisId },
-        select: { id: true, nummer: true, typ: true, titel: true },
-      })
-    : null;
-
-  const audits = await prisma.auditEvent.findMany({
-    where: {
-      OR: [
-        { objektTyp: 'Feststellung', objektId: f.id },
-        { objektTyp: 'Massnahme', objektId: { in: f.massnahmen.map((m) => m.id) } },
-      ],
-    },
-    orderBy: { seq: 'asc' },
-  });
   const detail = (x: (typeof audits)[number]) => (x.detail ?? {}) as Record<string, unknown>;
   const nachStand = audits
-    .filter((a) => a.at.getTime() > ende.getTime())
+    .filter((a) => a.at.getTime() > auditEnde.getTime())
     .map((a) => ({ aktion: a.aktion, detail: detail(a) }));
   const status = statusZumStand(
     f.status,
@@ -408,7 +412,7 @@ export async function ladeFeststellungDetail(
 
   const nachweisJe = new Map<string, string>();
   for (const a of audits) {
-    if (a.aktion === 'tcms.massnahme.erledigt' && a.at.getTime() <= ende.getTime())
+    if (a.aktion === 'tcms.massnahme.erledigt' && a.at.getTime() <= auditEnde.getTime())
       nachweisJe.set(a.objektId, s(detail(a)['nachweis']) || '');
   }
 
@@ -418,8 +422,8 @@ export async function ladeFeststellungDetail(
     f.p153EntschiedenAm.getTime() <= ende.getTime();
   // Vertraulichkeit zum Stichtag aus dem jüngsten Vertraulich-Eintrag bis zum Stand.
   const vertraulichEintraege = audits.filter((a) => a.aktion === 'tcms.feststellung.vertraulich');
-  const bisStand = vertraulichEintraege.filter((a) => a.at.getTime() <= ende.getTime()).at(-1);
-  const ersterNach = vertraulichEintraege.find((a) => a.at.getTime() > ende.getTime());
+  const bisStand = vertraulichEintraege.filter((a) => a.at.getTime() <= auditEnde.getTime()).at(-1);
+  const ersterNach = vertraulichEintraege.find((a) => a.at.getTime() > auditEnde.getTime());
   const vertraulich = bisStand
     ? detail(bisStand)['vertraulich'] === true
     : ersterNach
@@ -436,7 +440,7 @@ export async function ladeFeststellungDetail(
   const verwerfenSichtbar =
     !!f.verwerfenBeantragtVon &&
     !!f.verwerfenBegruendung &&
-    (!letzterAntrag || letzterAntrag.at.getTime() <= ende.getTime());
+    (!letzterAntrag || letzterAntrag.at.getTime() <= auditEnde.getTime());
 
   const massnahmenAmStand = f.massnahmen
     .map((m) => massnahmeAm(m, ende))
@@ -557,7 +561,7 @@ export async function ladeFeststellungDetail(
         nachweis: m.status === 'ERLEDIGT' ? (nachweisJe.get(m.id) ?? null) : null,
       })),
     verlauf: audits
-      .filter((a) => a.at.getTime() <= ende.getTime() && MANUELL_AKTIONEN.includes(a.aktion))
+      .filter((a) => a.at.getTime() <= auditEnde.getTime() && MANUELL_AKTIONEN.includes(a.aktion))
       .map((a) => ({
         id: a.seq,
         at: a.at,

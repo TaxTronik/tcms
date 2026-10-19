@@ -13,7 +13,8 @@ import { KpiKarte } from '@/components/portfolio/teile';
 import { KlasseBadge, StatusBadge } from '@/components/ui/badges';
 import { Leerzustand } from '@/components/ui/leer';
 import { ladeArbeitskorb, type VierAugenArt } from '@/server/arbeitskorb-daten';
-import { istBerufstraeger } from '@/server/rechte';
+import { istBerufstraeger } from '@tcms/service';
+import { zugaenglicheMandanten } from '@/server/demo';
 import { brauchtKanzlei } from '@/server/sitzung';
 
 export const metadata = { title: 'Arbeitskorb' };
@@ -59,7 +60,7 @@ function GruppenKopf({
 
 export default async function ArbeitskorbSeite() {
   const nutzer = await brauchtKanzlei();
-  const korb = await ladeArbeitskorb(nutzer);
+  const korb = await ladeArbeitskorb(nutzer, zugaenglicheMandanten(nutzer));
   const bt = istBerufstraeger(nutzer);
 
   const ueberfaellig = korb.durchfuehrungen.filter((d) => d.anzeige === 'UEBERFAELLIG').length;

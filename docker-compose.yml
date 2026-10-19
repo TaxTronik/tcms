@@ -1,5 +1,9 @@
-# Lokale Entwicklungsdatenbank für das Tax-CMS.
+# Lokale Entwicklungsdatenbank für das Tax-CMS (nur Entwicklung, TS-11).
 # Start: docker compose up -d
+# - Port nur an 127.0.0.1 gebunden (nie auf allen Schnittstellen).
+# - Das Init-Skript legt die Rollen tcms_owner und tcms_app an (Passwörter nur für
+#   Entwicklung, siehe packages/db/prisma/init/01_bootstrap.sql); es läuft nur beim
+#   ersten Start mit leerem Volume.
 services:
   postgres:
     image: postgres:16.10-alpine
@@ -9,8 +13,9 @@ services:
       POSTGRES_PASSWORD: tcms
       POSTGRES_DB: tcms
     ports:
-      - '5433:5432'
+      - '127.0.0.1:5433:5432'
     volumes:
       - tcms-pg:/var/lib/postgresql/data
+      - ./packages/db/prisma/init:/docker-entrypoint-initdb.d:ro
 volumes:
   tcms-pg:

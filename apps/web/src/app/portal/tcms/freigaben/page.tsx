@@ -6,10 +6,10 @@ import { Leerzustand } from '@/components/ui/leer';
 import { baueBausteine } from '@/server/beschreibung-daten';
 import { ladeFreigaben, ladePostausgang } from '@/server/freigaben-daten';
 import { ladeKontext } from '@/server/kontext';
-import { darfLesen } from '@/server/portal-daten';
-import { istGesetzlicherVertreter } from '@/server/rechte';
-import { brauchtPortal, devLoginErlaubt } from '@/server/sitzung';
-import { heute, jetzt } from '@/server/zeit';
+import { istGesetzlicherVertreter, kannPortalLesen } from '@tcms/service';
+import { demoPersonen } from '@/server/demo';
+import { brauchtPortal, demoLoginErlaubt } from '@/server/sitzung';
+import { heute } from '@/server/zeit';
 
 export const metadata = { title: 'Freigaben und Kenntnisnahmen' };
 
@@ -18,19 +18,22 @@ export default async function PortalFreigaben({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const nutzer = await brauchtPortal();
+  const { akteur: nutzer, rollen } = await brauchtPortal();
+  const person = demoPersonen.person(nutzer.id)!;
   const sp = await searchParams;
   const erledigtId = Array.isArray(sp['erledigt']) ? sp['erledigt'][0] : sp['erledigt'];
   const [uebersicht, ctx] = await Promise.all([
     ladeFreigaben(nutzer.mandantId),
     ladeKontext(nutzer.mandantId, isoDatum(heute()), false),
   ]);
-  const istGv = istGesetzlicherVertreter(nutzer);
-  const lesen = darfLesen(nutzer);
+  const istGv = istGesetzlicherVertreter(nutzer, nutzer.mandantId, rollen);
+  const lesen = kannPortalLesen(nutzer, nutzer.mandantId, rollen);
   // Mitarbeitende sehen nur Anforderungen, die an sie gerichtet sind.
   const sichtbar = uebersicht.eintraege.filter((f) => lesen || f.empfaengerId === nutzer.id);
   const kann = (f: (typeof sichtbar)[number]) =>
-    f.art === 'KENNTNISNAHME' ? f.empfaengerId === nutzer.id : istGv;
+    f.art === 'KENNTNISNAHME'
+      ? f.empfaengerId === nutzer.id
+      : istGv && f.empfaengerId === nutzer.id;
   const offen = sichtbar
     .filter((f) => f.status === 'OFFEN')
     .sort((a, b) => Number(kann(b)) - Number(kann(a)));
@@ -43,11 +46,12 @@ export default async function PortalFreigaben({
     ctx?.programm && offen.some((f) => f.version && !f.version.snapshot)
       ? { stand: isoDatum(ctx.stand), satz: baueBausteine(ctx) }
       : null;
-  const zeit = jetzt();
+  // Codefristen laufen auf echter Zeit (actions/freigaben.ts).
+  const zeit = new Date();
   const bestaetigt = erledigtId
     ? erledigt.find((f) => f.id === erledigtId && f.status === 'FREIGEGEBEN')
     : undefined;
-  const post = devLoginErlaubt() ? await ladePostausgang(nutzer) : [];
+  const post = demoLoginErlaubt() ? await ladePostausgang(person) : [];
 
   return (
     <div className="page">
@@ -84,8 +88,8 @@ export default async function PortalFreigaben({
                   <FreigabeKarte
                     key={f.id}
                     f={f}
-                    nutzer={nutzer}
-                    istGv={istGv}
+                    nutzer={{ id: nutzer.id, email: person.email }}
+                    istGv={istGv && f.empfaengerId === nutzer.id}
                     lesen={lesen}
                     gvNamen={gvNamen}
                     live={live}

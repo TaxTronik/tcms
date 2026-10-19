@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { fmtDatum } from '@tcms/domain';
 import { abmelden } from '@/server/actions/sitzung';
-import type { Nutzer } from '@/server/sitzung';
+import type { DemoPerson } from '@/server/demo';
 import { heute, istDemo } from '@/server/zeit';
 import { Icon } from '../icon';
 import { ThemeToggle } from '../ui/client';
@@ -14,7 +14,7 @@ export function AppShell({
   gruppen,
   children,
 }: {
-  nutzer: Nutzer;
+  nutzer: Pick<DemoPerson, 'name' | 'kuerzel' | 'funktion'>;
   titel: string;
   untertitel: string;
   gruppen: NavGruppe[];

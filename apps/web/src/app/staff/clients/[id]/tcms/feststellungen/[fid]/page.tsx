@@ -84,7 +84,7 @@ export default async function FeststellungDetailSeite({
       verwerfenBeantragtVon: f.verwerfen?.beantragtVon ?? null,
       massnahmenVerantwortlich: f.massnahmen.map((m) => m.verantwortlich),
     },
-    ctx.mandant,
+    ctx.mandant.id,
   );
   // Zugriff: vertraulich zum Stichtag ODER heute – sonst ließe sich der aktuelle Inhalt über einen frühen Stichtag lesen.
   if ((f.vertraulich || f.vertraulichAktuell) && !beteiligt) {
@@ -182,7 +182,7 @@ export default async function FeststellungDetailSeite({
       : !offen
         ? 'Feststellung ist geschlossen oder verworfen'
         : null;
-  const rolle = nutzer.kanzleiRolle === 'BERUFSTRAEGER' ? 'Berufsträger:in' : 'Bearbeitung';
+  const rolle = nutzer.istBerufstraeger ? 'Berufsträger:in' : 'Bearbeitung';
   const p153Hinweis = ctx.historisch
     ? `Historischer Stand zum ${fmtDatum(ctx.stand)} – nur Lesen.`
     : !seite.darfWuerdigen

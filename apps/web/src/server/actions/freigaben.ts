@@ -2,8 +2,9 @@
 
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
-import { prisma, type Prisma } from '@tcms/db';
+import { type Prisma } from '@tcms/db';
 import { isoDatum } from '@tcms/domain';
+import { istGesetzlicherVertreter } from '@tcms/service';
 import { aktualisiereMandant, mitAudit, type Protokoll } from '../aktion';
 import { baueSnapshot, normalisiereAbschnitte } from '../beschreibung-daten';
 import type { Ergebnis } from '../ergebnis';
@@ -16,22 +17,28 @@ import {
   erzeugeCode,
   MAX_FEHLVERSUCHE,
 } from '../freigaben-daten';
+import { db, demoPersonen } from '../demo';
 import { ladeKontext } from '../kontext';
-import { istGesetzlicherVertreter } from '../rechte';
 import { brauchtPortal } from '../sitzung';
-import { heute, jetzt } from '../zeit';
+import { heute } from '../zeit';
 
 // =============================================================================
 // Portal P4: Freigaben (nur gesetzliche Vertretung, Bestätigung per E-Mail-Code)
 // und Kenntnisnahmen (einfache Bestätigung durch die adressierte Person).
+//
+// TS-06: Eine Freigabe erteilt nur die adressierte Person (Zuordnung über die
+// Personen-ID); niemand kann eine fremd adressierte Freigabe an sich ziehen.
+// Codefristen und Fehlversuche laufen auf echter Zeit, nicht auf der Demo-Uhr.
 // =============================================================================
 
 class Abbruch extends Error {}
+/** Der geprüfte Code ist inzwischen gesperrt oder erneuert (keine Änderung). */
+class CodeVeraltet extends Error {}
 
 const NUR_GV = 'Freigaben sind der gesetzlichen Vertretung vorbehalten.';
 
 async function ladeFreigabe(id: string) {
-  return prisma.freigabe.findUnique({
+  return db.freigabe.findUnique({
     where: { id },
     include: { programm: { include: { mandant: true } } },
   });
@@ -42,60 +49,65 @@ async function ladeFreigabe(id: string) {
 // ---------------------------------------------------------------------------
 
 export async function codeAnfordern(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtPortal();
+  const { akteur: nutzer, rollen } = await brauchtPortal();
+  const person = demoPersonen.person(nutzer.id)!;
   const id = String(fd.get('freigabeId') ?? '');
   const f = await ladeFreigabe(id);
   if (!f || f.programm.mandantId !== nutzer.mandantId)
     return { fehler: 'Anforderung nicht gefunden.' };
   if (!brauchtCode(f.art)) return { fehler: 'Für eine Kenntnisnahme ist kein Code nötig.' };
-  if (!istGesetzlicherVertreter(nutzer)) return { fehler: NUR_GV };
+  if (!istGesetzlicherVertreter(nutzer, f.programm.mandantId, rollen)) return { fehler: NUR_GV };
   if (f.status !== 'OFFEN') return { fehler: 'Diese Freigabe ist bereits erledigt.' };
+  // TS-06: nur die adressierte Person; eine Neuadressierung ist Sache der Kanzlei.
+  if (f.empfaengerId !== nutzer.id)
+    return { fehler: 'Diese Freigabe ist an eine andere Person gerichtet.' };
 
-  await mitAudit(nutzer, async (tx, zeitpunkt) => {
-    const { code, codeHash, codeAblauf } = erzeugeCode(zeitpunkt);
-    // Der Code geht an die anfordernde gesetzliche Vertretung; sie wird Empfänger:in der Freigabe.
-    await tx.freigabe.update({
-      where: { id: f.id },
-      data: { codeHash, codeAblauf, empfaengerId: nutzer.id },
-    });
-    let hash: string | null = null;
-    if (f.art === 'BESCHREIBUNG') {
-      const v = await tx.beschreibungVersion.findUnique({
-        where: { id: f.refId },
-        select: { snapshotSha256: true },
+  try {
+    await mitAudit(nutzer, async (tx) => {
+      const { code, codeHash, codeAblauf } = erzeugeCode(new Date());
+      // Bedingt: nur solange offen und an genau diese Person adressiert.
+      const r = await tx.freigabe.updateMany({
+        where: { id: f.id, status: 'OFFEN', empfaengerId: nutzer.id },
+        data: { codeHash, codeAblauf },
       });
-      hash = v?.snapshotSha256 ?? null;
-    }
-    const n = codeNachricht({
-      empfaenger: nutzer.name,
-      mandant: f.programm.mandant.name,
-      titel: f.titel,
-      code,
-      codeAblauf,
-      sha256: hash,
-    });
-    await tx.nachricht.create({
-      data: { an: adresse(nutzer), betreff: n.betreff, text: n.text, createdAt: zeitpunkt },
-    });
-    return {
-      wert: null,
-      protokoll: {
-        aktion: 'tcms.freigabe.code_angefordert',
-        objektTyp: 'Freigabe',
-        objektId: f.id,
-        programmId: f.programmId,
-        detail: {
-          art: f.art,
-          titel: f.titel,
-          codeAblauf: codeAblauf.toISOString(),
-          ...(f.empfaengerId !== nutzer.id ? { empfaengerVorher: f.empfaengerId } : {}),
+      if (r.count !== 1) throw new Abbruch('Diese Freigabe ist bereits erledigt.');
+      let hash: string | null = null;
+      if (f.art === 'BESCHREIBUNG') {
+        const v = await tx.beschreibungVersion.findUnique({
+          where: { id: f.refId },
+          select: { snapshotSha256: true },
+        });
+        hash = v?.snapshotSha256 ?? null;
+      }
+      const n = codeNachricht({
+        empfaenger: nutzer.name,
+        mandant: f.programm.mandant.name,
+        titel: f.titel,
+        code,
+        codeAblauf,
+        sha256: hash,
+      });
+      await tx.nachricht.create({
+        data: { an: adresse(person), betreff: n.betreff, text: n.text, createdAt: new Date() },
+      });
+      return {
+        wert: null,
+        protokoll: {
+          aktion: 'tcms.freigabe.code_angefordert',
+          objektTyp: 'Freigabe',
+          objektId: f.id,
+          programmId: f.programmId,
+          detail: { art: f.art, titel: f.titel, codeAblauf: codeAblauf.toISOString() },
         },
-      },
-    };
-  });
+      };
+    });
+  } catch (e) {
+    if (e instanceof Abbruch) return { fehler: e.message };
+    throw e;
+  }
   aktualisiereMandant(f.programm.mandantId);
   return {
-    ok: `Ein neuer Bestätigungscode wurde an ${nutzer.email} gesendet. Er ist ${CODE_GUELTIG_TAGE} Tage gültig.`,
+    ok: `Ein neuer Bestätigungscode wurde an ${person.email} gesendet. Er ist ${CODE_GUELTIG_TAGE} Tage gültig.`,
   };
 }
 
@@ -112,14 +124,14 @@ const FreigebenSchema = z.object({
 });
 
 export async function freigeben(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtPortal();
+  const { akteur: nutzer, rollen } = await brauchtPortal();
   const p = FreigebenSchema.safeParse(Object.fromEntries(fd));
   if (!p.success) return { fehler: 'Bitte den 6-stelligen Code aus der E-Mail eingeben.' };
   const f = await ladeFreigabe(p.data.freigabeId);
   if (!f || f.programm.mandantId !== nutzer.mandantId)
     return { fehler: 'Anforderung nicht gefunden.' };
   if (!brauchtCode(f.art)) return { fehler: 'Diese Anforderung ist eine Kenntnisnahme.' };
-  if (!istGesetzlicherVertreter(nutzer)) return { fehler: NUR_GV };
+  if (!istGesetzlicherVertreter(nutzer, f.programm.mandantId, rollen)) return { fehler: NUR_GV };
   if (f.status !== 'OFFEN') return { fehler: 'Diese Freigabe ist bereits erledigt.' };
   if (f.empfaengerId !== nutzer.id)
     return {
@@ -128,7 +140,7 @@ export async function freigeben(_prev: Ergebnis, fd: FormData): Promise<Ergebnis
     };
   if (!f.codeHash || !f.codeAblauf)
     return { fehler: 'Bitte fordern Sie zuerst einen Bestätigungscode an.' };
-  if (f.codeAblauf.getTime() < jetzt().getTime())
+  if (f.codeAblauf.getTime() < Date.now())
     return { fehler: 'Der Code ist abgelaufen. Bitte fordern Sie einen neuen Code an.' };
 
   if (!codePasst(p.data.code, f.codeHash)) {
@@ -142,7 +154,7 @@ export async function freigeben(_prev: Ergebnis, fd: FormData): Promise<Ergebnis
         select: { codeHash: true, status: true },
       });
       if (!aktuell || aktuell.status !== 'OFFEN' || aktuell.codeHash !== codeHash) {
-        return { wert: { versuch: 0, sperren: false, veraltet: true }, protokoll: [] };
+        throw new CodeVeraltet();
       }
       const bisher = await tx.auditEvent.count({
         where: {
@@ -177,6 +189,9 @@ export async function freigeben(_prev: Ergebnis, fd: FormData): Promise<Ergebnis
           detail: { versuche: versuch },
         });
       return { wert: { versuch, sperren, veraltet: false }, protokoll };
+    }).catch((e: unknown) => {
+      if (e instanceof CodeVeraltet) return { versuch: 0, sperren: false, veraltet: true };
+      throw e;
     });
     aktualisiereMandant(f.programm.mandantId);
     if (ergebnis.veraltet)
@@ -190,10 +205,10 @@ export async function freigeben(_prev: Ergebnis, fd: FormData): Promise<Ergebnis
   }
 
   // Beschreibung: Version muss beim Mandanten liegen; fehlt der Snapshot (Altbestand), wird er jetzt erzeugt.
-  let version: Awaited<ReturnType<typeof prisma.beschreibungVersion.findUnique>> = null;
+  let version: Awaited<ReturnType<typeof db.beschreibungVersion.findUnique>> = null;
   let ctx: Awaited<ReturnType<typeof ladeKontext>> = null;
   if (f.art === 'BESCHREIBUNG') {
-    version = await prisma.beschreibungVersion.findUnique({ where: { id: f.refId } });
+    version = await db.beschreibungVersion.findUnique({ where: { id: f.refId } });
     if (!version || version.programmId !== f.programmId)
       return { fehler: 'Die zugehörige Beschreibungsversion wurde nicht gefunden.' };
     if (version.status !== 'BEIM_MANDANTEN')
@@ -203,9 +218,16 @@ export async function freigeben(_prev: Ergebnis, fd: FormData): Promise<Ergebnis
 
   try {
     await mitAudit(nutzer, async (tx, zeitpunkt) => {
-      // Bedingung bindet den geprüften Code: ein inzwischen gesperrter oder erneuerter Code greift nicht.
+      // Bedingung bindet den geprüften Code und die Person: ein inzwischen gesperrter oder
+      // erneuerter Code greift nicht (Frist auf echter Zeit).
       const r = await tx.freigabe.updateMany({
-        where: { id: f.id, status: 'OFFEN', codeHash: f.codeHash, codeAblauf: { gte: zeitpunkt } },
+        where: {
+          id: f.id,
+          status: 'OFFEN',
+          empfaengerId: nutzer.id,
+          codeHash: f.codeHash,
+          codeAblauf: { gte: new Date() },
+        },
         data: { status: 'FREIGEGEBEN', erledigtAm: zeitpunkt, codeHash: null },
       });
       if (r.count !== 1)
@@ -335,7 +357,7 @@ export async function freigeben(_prev: Ergebnis, fd: FormData): Promise<Ergebnis
 const KenntnisSchema = z.object({ freigabeId: z.string().min(1), gelesen: z.literal('on') });
 
 export async function kenntnisnehmen(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtPortal();
+  const { akteur: nutzer } = await brauchtPortal();
   const p = KenntnisSchema.safeParse(Object.fromEntries(fd));
   if (!p.success) return { fehler: 'Bitte bestätigen Sie, dass Sie das Dokument gelesen haben.' };
   const f = await ladeFreigabe(p.data.freigabeId);
@@ -349,7 +371,7 @@ export async function kenntnisnehmen(_prev: Ergebnis, fd: FormData): Promise<Erg
   try {
     await mitAudit(nutzer, async (tx, zeitpunkt) => {
       const r = await tx.freigabe.updateMany({
-        where: { id: f.id, status: 'OFFEN' },
+        where: { id: f.id, status: 'OFFEN', empfaengerId: nutzer.id },
         data: { status: 'FREIGEGEBEN', erledigtAm: zeitpunkt },
       });
       if (r.count !== 1) throw new Abbruch('Diese Kenntnisnahme ist bereits bestätigt.');

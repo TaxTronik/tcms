@@ -1,6 +1,6 @@
 import 'server-only';
-import { prisma } from '@tcms/db';
 import { fmtMonatJahr, istEuAusland, LAND_NAME } from '@tcms/domain';
+import { db } from './demo';
 import type { EreignisView, KontrolleView, LandView, RisikoView, TcmsKontext } from './kontext';
 
 // =============================================================================
@@ -56,11 +56,11 @@ export interface LaenderDetail {
 export async function ladeLaenderDetail(ctx: TcmsKontext, ende: Date): Promise<LaenderDetail> {
   const programmId = ctx.programm!.id;
   const [staende, feststellungen] = await Promise.all([
-    prisma.landStand.findMany({
+    db.landStand.findMany({
       where: { programmId },
       orderBy: [{ stand: 'desc' }, { createdAt: 'desc' }],
     }),
-    prisma.feststellung.findMany({
+    db.feststellung.findMany({
       where: { programmId, vertraulich: false },
       include: { erklaerungen: { select: { land: true } } },
     }),

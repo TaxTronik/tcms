@@ -1,10 +1,23 @@
 // =============================================================================
-// Tax-CMS — Prisma-Schema (Stufe 1)
+// Tax-CMS — Prisma-Schema (headless Dienst, ADR 0001)
+//
+// Mandantentrennung (ADR 0001 §4): Jede Tabelle trägt `tenant_id` (Kanzlei der
+// kanzleikonsole). PostgreSQL-RLS erzwingt die Trennung für die Laufzeitrolle
+// `tcms_app`; die Policies stehen in der Init-Migration, nicht hier. Der
+// Spaltenstandard übernimmt den Tenant aus dem Transaktionskontext
+// (`mitTenant`), Anwendungscode setzt `tenantId` deshalb nicht selbst.
+// Fremdschlüssel zwischen Fachtabellen laufen über (tenant_id, id): ein Verweis
+// auf ein Objekt eines anderen Tenants ist damit schon in der Datenbank
+// unmöglich (FK-Prüfungen umgehen RLS, die zusammengesetzten Schlüssel nicht).
 //
 // Versionierte Objekte führen ihre fachlichen Attribute in *Stand-Tabellen mit
-// gueltigAb/gueltigBis. Der Stand zu einem Stichtag ist damit rekonstruierbar;
-// Änderungen schließen den aktuellen Stand und legen einen neuen an.
+// gueltigAb/gueltigBis und einer Versionsnummer. Höchstens ein Stand je Objekt
+// ist offen (gueltigBis NULL); das sichern Teilindizes in der Migration (TS-05).
 // Abgeschlossene Durchführungen und Audit-Einträge werden nie geändert.
+//
+// Personenfelder (`durchfuehrendId`, `erfasstVon`, …) enthalten IDs der
+// kanzleikonsole (Mitarbeiter oder Mandantenkontakt), ADR 0001 §5. Eine
+// Personentabelle gibt es im Tax-CMS nicht.
 // =============================================================================
 
 generator client {
@@ -16,18 +29,8 @@ datasource db {
 }
 
 // ---------------------------------------------------------------------------
-// Personen und Mandanten
+// Mandanten (Anker der kanzleikonsole) und Rollen der Mandantenseite
 // ---------------------------------------------------------------------------
-
-enum PersonArt {
-  KANZLEI
-  MANDANT
-}
-
-enum KanzleiRolle {
-  BERUFSTRAEGER
-  BEARBEITUNG
-}
 
 enum MandantRolle {
   GESETZLICHER_VERTRETER
@@ -35,36 +38,39 @@ enum MandantRolle {
   MITARBEITER
 }
 
-model Person {
-  id           String        @id @default(cuid())
-  name         String
-  kuerzel      String
-  email        String        @unique
-  art          PersonArt
-  kanzleiRolle KanzleiRolle?
-  istAdmin     Boolean       @default(false)
-  mandantId    String?
-  mandant      Mandant?      @relation("MandantPersonen", fields: [mandantId], references: [id])
-  mandantRolle MandantRolle?
-  funktion     String?
-  telefon      String?
-  aktiv        Boolean       @default(true)
-  createdAt    DateTime      @default(now())
+/// Mandant der kanzleikonsole. `id` ist deren Mandanten-ID (kein Standardwert).
+model Mandant {
+  id         String                @id @db.Uuid
+  tenantId   String                @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  name       String
+  rechtsform String
+  datevNr    String?
+  aktiv      Boolean               @default(true)
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @default(now()) @updatedAt
+  programme  TcmsProgramm[]
+  kontakte   MandantKontaktRolle[]
 
-  @@index([mandantId])
+  @@unique([tenantId, id])
+  @@index([tenantId, name])
 }
 
-model Mandant {
-  id              String         @id @default(cuid())
-  name            String
-  rechtsform      String
-  datevNr         String?
-  aktiv           Boolean        @default(true)
-  berufstraegerId String
-  bearbeitungId   String
-  personen        Person[]       @relation("MandantPersonen")
-  programme       TcmsProgramm[]
-  createdAt       DateTime       @default(now())
+/// Rolle eines Mandantenkontakts (ID der kanzleikonsole) beim Mandanten
+/// (ADR 0001 §5). Ohne aktive Rolle hat ein Mandantenkontakt keinen Zugriff.
+model MandantKontaktRolle {
+  id        String       @id @default(cuid())
+  tenantId  String       @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  mandantId String       @db.Uuid
+  mandant   Mandant      @relation(fields: [tenantId, mandantId], references: [tenantId, id])
+  kontaktId String       @db.Uuid
+  rolle     MandantRolle
+  funktion  String?
+  aktiv     Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @default(now()) @updatedAt
+
+  @@unique([tenantId, mandantId, kontaktId, rolle])
+  @@index([tenantId, kontaktId])
 }
 
 // ---------------------------------------------------------------------------
@@ -83,22 +89,24 @@ enum ProgrammStatus {
   AKTIV
 }
 
+/// Höchstens ein Programm je Mandant (TS-05): eindeutig über (tenant_id, mandantId).
 model TcmsProgramm {
-  id                     String             @id @default(cuid())
-  mandantId              String
-  mandant                Mandant            @relation(fields: [mandantId], references: [id])
+  id                     String                @id @default(cuid())
+  tenantId               String                @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  mandantId              String                @db.Uuid
+  mandant                Mandant               @relation(fields: [tenantId, mandantId], references: [tenantId, id])
   paketId                String
   paketVersion           String
-  status                 ProgrammStatus     @default(ENTWURF)
+  status                 ProgrammStatus        @default(ENTWURF)
   /// Erklärungsturnus für „jede Periode" (FP) der Häufigkeitsmatrix.
-  erklaerungsTurnus      Turnus             @default(MONATLICH)
-  angemessenheitStichtag DateTime?          @db.Date
-  wirksamAb              DateTime?          @db.Date
-  wirksamBis             DateTime?          @db.Date
+  erklaerungsTurnus      Turnus                @default(MONATLICH)
+  angemessenheitStichtag DateTime?             @db.Date
+  wirksamAb              DateTime?             @db.Date
+  wirksamBis             DateTime?             @db.Date
   /// Entwurfsstand des Einrichtungsassistenten (Schritte 1–5).
   setupEntwurf           Json?
   version1Am             DateTime?
-  createdAt              DateTime           @default(now())
+  createdAt              DateTime              @default(now())
   teilbereiche           Teilbereich[]
   profile                ProfilStand[]
   risiken                Risiko[]
@@ -109,34 +117,41 @@ model TcmsProgramm {
   beschreibungen         BeschreibungVersion[]
   freigaben              Freigabe[]
 
-  @@index([mandantId])
+  @@unique([tenantId, id])
+  @@unique([tenantId, mandantId])
 }
 
 model Teilbereich {
-  id           String          @id @default(cuid())
+  id           String           @id @default(cuid())
+  tenantId     String           @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId   String
-  programm     TcmsProgramm    @relation(fields: [programmId], references: [id])
+  programm     TcmsProgramm     @relation(fields: [tenantId, programmId], references: [tenantId, id])
   name         String
   abgrenzung   String
   einschluesse String[]
   ausschluesse String[]
-  createdAt    DateTime        @default(now())
+  createdAt    DateTime         @default(now())
   ziele        ComplianceZiel[]
 
-  @@index([programmId])
+  @@unique([tenantId, id])
+  @@index([tenantId, programmId])
 }
 
 model ProfilStand {
   id          String       @id @default(cuid())
+  tenantId    String       @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId  String
-  programm    TcmsProgramm @relation(fields: [programmId], references: [id])
+  programm    TcmsProgramm @relation(fields: [tenantId, programmId], references: [tenantId, id])
+  /// Laufende Nummer je Programm (TS-05: eindeutig, kein Gabeln).
+  version     Int
   antworten   Json
   gueltigAb   DateTime
   gueltigBis  DateTime?
   erstelltVon String?
   createdAt   DateTime     @default(now())
 
-  @@index([programmId, gueltigAb])
+  @@unique([tenantId, programmId, version])
+  @@index([tenantId, programmId, gueltigAb])
 }
 
 enum Klasse {
@@ -154,8 +169,9 @@ enum FreigabeStand {
 
 model ComplianceZiel {
   id                String        @id @default(cuid())
+  tenantId          String        @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   teilbereichId     String
-  teilbereich       Teilbereich   @relation(fields: [teilbereichId], references: [id])
+  teilbereich       Teilbereich   @relation(fields: [tenantId, teilbereichId], references: [tenantId, id])
   text              String
   wesentlichkeitEur Int
   risikoappetit     Klasse        @default(MITTEL)
@@ -164,7 +180,7 @@ model ComplianceZiel {
   freigegebenVon    String?
   createdAt         DateTime      @default(now())
 
-  @@index([teilbereichId])
+  @@index([tenantId, teilbereichId])
 }
 
 // ---------------------------------------------------------------------------
@@ -209,37 +225,42 @@ enum GovernanceTyp {
 }
 
 model Risiko {
-  id                   String             @id @default(cuid())
-  programmId           String
-  programm             TcmsProgramm       @relation(fields: [programmId], references: [id])
-  code                 String
-  herkunft             Herkunft           @default(KATALOG)
-  kern                 Boolean            @default(false)
-  entscheidung         RisikoEntscheidung @default(VORGESCHLAGEN)
-  vorschlagsgrund      String?
-  ablehnungsgrund      String?
-  freigabe             RisikoFreigabe     @default(IDENTIFIZIERT)
+  id                     String               @id @default(cuid())
+  tenantId               String               @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  programmId             String
+  programm               TcmsProgramm         @relation(fields: [tenantId, programmId], references: [tenantId, id])
+  code                   String
+  herkunft               Herkunft             @default(KATALOG)
+  kern                   Boolean              @default(false)
+  entscheidung           RisikoEntscheidung   @default(VORGESCHLAGEN)
+  vorschlagsgrund        String?
+  ablehnungsgrund        String?
+  freigabe               RisikoFreigabe       @default(IDENTIFIZIERT)
   freigabeEingereichtVon String?
-  freigegebenVon       String?
-  freigegebenAm        DateTime?
-  ownerId              String?
+  freigegebenVon         String?
+  freigegebenAm          DateTime?
+  ownerId                String?
   /// Durch Ereignis-Triage zur Neubewertung markiert.
-  neuBewerten          Boolean            @default(false)
-  aktivAb              DateTime
-  inaktivAb            DateTime?
-  createdAt            DateTime           @default(now())
-  staende              RisikoStand[]
-  kontrollen           RisikoKontrolle[]
-  uebersteuerungen     Uebersteuerung[]
-  feststellungen       FeststellungRisiko[]
+  neuBewerten            Boolean              @default(false)
+  aktivAb                DateTime
+  inaktivAb              DateTime?
+  createdAt              DateTime             @default(now())
+  staende                RisikoStand[]
+  kontrollen             RisikoKontrolle[]
+  uebersteuerungen       Uebersteuerung[]
+  feststellungen         FeststellungRisiko[]
 
-  @@unique([programmId, code])
+  @@unique([tenantId, id])
+  @@unique([tenantId, programmId, code])
 }
 
 model RisikoStand {
   id           String             @id @default(cuid())
+  tenantId     String             @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   risikoId     String
-  risiko       Risiko             @relation(fields: [risikoId], references: [id])
+  risiko       Risiko             @relation(fields: [tenantId, risikoId], references: [tenantId, id])
+  /// Laufende Nummer je Risiko (TS-05: eindeutig, kein Gabeln).
+  version      Int
   titel        String
   fehlerquelle String
   folge        String
@@ -254,7 +275,8 @@ model RisikoStand {
   erstelltVon  String?
   createdAt    DateTime           @default(now())
 
-  @@index([risikoId, gueltigAb])
+  @@unique([tenantId, risikoId, version])
+  @@index([tenantId, risikoId, gueltigAb])
 }
 
 enum UebersteuerungSicht {
@@ -271,8 +293,9 @@ enum UebersteuerungStatus {
 
 model Uebersteuerung {
   id             String               @id @default(cuid())
+  tenantId       String               @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   risikoId       String
-  risiko         Risiko               @relation(fields: [risikoId], references: [id])
+  risiko         Risiko               @relation(fields: [tenantId, risikoId], references: [tenantId, id])
   sicht          UebersteuerungSicht
   klasse         Klasse
   berechnet      Klasse
@@ -283,7 +306,7 @@ model Uebersteuerung {
   entschiedenVon String?
   entschiedenAm  DateTime?
 
-  @@index([risikoId])
+  @@index([tenantId, risikoId])
 }
 
 // ---------------------------------------------------------------------------
@@ -314,70 +337,77 @@ enum Design {
 }
 
 model Kontrolle {
-  id               String            @id @default(cuid())
-  programmId       String
-  programm         TcmsProgramm      @relation(fields: [programmId], references: [id])
-  code             String
-  herkunft         Herkunft          @default(KATALOG)
-  aktivAb          DateTime
-  entfallenAb      DateTime?
-  createdAt        DateTime          @default(now())
-  staende          KontrolleStand[]
-  risiken          RisikoKontrolle[]
-  durchfuehrungen  Durchfuehrung[]
+  id              String            @id @default(cuid())
+  tenantId        String            @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  programmId      String
+  programm        TcmsProgramm      @relation(fields: [tenantId, programmId], references: [tenantId, id])
+  code            String
+  herkunft        Herkunft          @default(KATALOG)
+  aktivAb         DateTime
+  entfallenAb     DateTime?
+  createdAt       DateTime          @default(now())
+  staende         KontrolleStand[]
+  risiken         RisikoKontrolle[]
+  durchfuehrungen Durchfuehrung[]
 
-  @@unique([programmId, code])
+  @@unique([tenantId, id])
+  @@unique([tenantId, programmId, code])
 }
 
 model KontrolleStand {
-  id                    String       @id @default(cuid())
-  kontrolleId           String
-  kontrolle             Kontrolle    @relation(fields: [kontrolleId], references: [id])
-  version               Int
-  titel                 String
-  ziel                  String
-  art                   KontrollArt
-  ausfuehrung           Ausfuehrung
-  vorlageTurnus         Turnus
-  vorlageAnlass         Boolean
+  id                       String          @id @default(cuid())
+  tenantId                 String          @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  kontrolleId              String
+  kontrolle                Kontrolle       @relation(fields: [tenantId, kontrolleId], references: [tenantId, id])
+  version                  Int
+  titel                    String
+  ziel                     String
+  art                      KontrollArt
+  ausfuehrung              Ausfuehrung
+  vorlageTurnus            Turnus
+  vorlageAnlass            Boolean
   /// Abweichung unter die Matrixfrequenz (nur mit Begründung + zweiter Person).
-  abweichungTurnus      Turnus?
-  abweichungAnlass      Boolean?
-  abweichungBegruendung String?
+  abweichungTurnus         Turnus?
+  abweichungAnlass         Boolean?
+  abweichungBegruendung    String?
   abweichungFreigegebenVon String?
-  partei                Partei
-  schluessel            Boolean
-  durchfuehrendId       String?
-  vertretungId          String?
-  gegenzeichnerId       String?
+  partei                   Partei
+  schluessel               Boolean
+  durchfuehrendId          String?
+  vertretungId             String?
+  gegenzeichnerId          String?
   /// Gegenzeichnung durch zweite Person beim Mandanten statt Kanzlei.
-  gegenzeichnungMandant Boolean      @default(false)
-  nachweis              String
-  mindestNachweise      Int
-  schritte              Json
-  kennzahlen            Json
-  toleranzEur           Decimal?     @db.Decimal(14, 2)
-  faelligNachTagen      Int
-  design                Design       @default(NICHT_BEURTEILT)
-  designVon             String?
-  designAm              DateTime?
-  designBegruendung     String?
-  gueltigAb             DateTime
-  gueltigBis            DateTime?
-  erstelltVon           String?
-  createdAt             DateTime     @default(now())
-  durchfuehrungen       Durchfuehrung[]
+  gegenzeichnungMandant    Boolean         @default(false)
+  nachweis                 String
+  mindestNachweise         Int
+  schritte                 Json
+  kennzahlen               Json
+  toleranzEur              Decimal?        @db.Decimal(14, 2)
+  faelligNachTagen         Int
+  design                   Design          @default(NICHT_BEURTEILT)
+  designVon                String?
+  designAm                 DateTime?
+  designBegruendung        String?
+  gueltigAb                DateTime
+  gueltigBis               DateTime?
+  erstelltVon              String?
+  createdAt                DateTime        @default(now())
+  durchfuehrungen          Durchfuehrung[]
 
-  @@index([kontrolleId, gueltigAb])
+  @@unique([tenantId, id])
+  @@unique([tenantId, kontrolleId, version])
+  @@index([tenantId, kontrolleId, gueltigAb])
 }
 
 model RisikoKontrolle {
+  tenantId    String    @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   risikoId    String
-  risiko      Risiko    @relation(fields: [risikoId], references: [id])
+  risiko      Risiko    @relation(fields: [tenantId, risikoId], references: [tenantId, id])
   kontrolleId String
-  kontrolle   Kontrolle @relation(fields: [kontrolleId], references: [id])
+  kontrolle   Kontrolle @relation(fields: [tenantId, kontrolleId], references: [tenantId, id])
 
   @@id([risikoId, kontrolleId])
+  @@index([tenantId, kontrolleId])
 }
 
 enum DurchfuehrungStatus {
@@ -397,10 +427,11 @@ enum Ergebnis {
 
 model Durchfuehrung {
   id                   String              @id @default(cuid())
+  tenantId             String              @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   kontrolleId          String
-  kontrolle            Kontrolle           @relation(fields: [kontrolleId], references: [id])
+  kontrolle            Kontrolle           @relation(fields: [tenantId, kontrolleId], references: [tenantId, id])
   kontrolleStandId     String
-  kontrolleStand       KontrolleStand      @relation(fields: [kontrolleStandId], references: [id])
+  kontrolleStand       KontrolleStand      @relation(fields: [tenantId, kontrolleStandId], references: [tenantId, id])
   periodeLabel         String
   periodeVon           DateTime            @db.Date
   periodeBis           DateTime            @db.Date
@@ -433,24 +464,29 @@ model Durchfuehrung {
   feststellungen       Feststellung[]      @relation("FeststellungQuelle")
   nachkontrolleFuer    Feststellung[]      @relation("Nachkontrolle")
 
-  @@index([kontrolleId, periodeVon])
-  @@index([faelligAm])
+  @@unique([tenantId, id])
+  @@index([tenantId, kontrolleId, periodeVon])
+  @@index([tenantId, faelligAm])
 }
 
+/// Verweis auf einen Nachweis (ADR 0001 §6). Im Dienst ist `dokumentId` die
+/// Dokument-ID der kanzleikonsole; die Demo-Oberfläche legt Dateien lokal ab
+/// und speichert hier den relativen Ablagepfad.
 model Nachweis {
   id              String        @id @default(cuid())
+  tenantId        String        @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   durchfuehrungId String
-  durchfuehrung   Durchfuehrung @relation(fields: [durchfuehrungId], references: [id])
+  durchfuehrung   Durchfuehrung @relation(fields: [tenantId, durchfuehrungId], references: [tenantId, id])
+  dokumentId      String
   dateiname       String
   mime            String
   groesse         Int
   sha256          String
-  speicherpfad    String
   gesperrt        Boolean       @default(false)
   hochgeladenVon  String
   hochgeladenAm   DateTime      @default(now())
 
-  @@index([durchfuehrungId])
+  @@index([tenantId, durchfuehrungId])
 }
 
 // ---------------------------------------------------------------------------
@@ -495,60 +531,67 @@ enum P153Entscheidung {
 }
 
 model Feststellung {
-  id                     String               @id @default(cuid())
+  id                     String                 @id @default(cuid())
+  tenantId               String                 @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId             String
-  programm               TcmsProgramm         @relation(fields: [programmId], references: [id])
+  programm               TcmsProgramm           @relation(fields: [tenantId, programmId], references: [tenantId, id])
   nummer                 String
   titel                  String
   sachverhalt            String
   quelle                 FeststellungQuelle
   quelleText             String
   durchfuehrungId        String?
-  durchfuehrung          Durchfuehrung?       @relation("FeststellungQuelle", fields: [durchfuehrungId], references: [id])
+  durchfuehrung          Durchfuehrung?         @relation("FeststellungQuelle", fields: [tenantId, durchfuehrungId], references: [tenantId, id], onDelete: Restrict)
   ereignisId             String?
   klasse                 FeststellungKlasse
   schwere                Klasse
   auswirkung             Auswirkung
   ursache                String?
-  status                 FeststellungStatus   @default(ERFASST)
-  vertraulich            Boolean              @default(false)
+  status                 FeststellungStatus     @default(ERFASST)
+  vertraulich            Boolean                @default(false)
   p153Entscheidung       P153Entscheidung?
   p153Begruendung        String?
-  p153Frist              DateTime?            @db.Date
+  p153Frist              DateTime?              @db.Date
   p153EntschiedenVon     String?
   p153EntschiedenAm      DateTime?
   nachkontrolleId        String?
-  nachkontrolle          Durchfuehrung?       @relation("Nachkontrolle", fields: [nachkontrolleId], references: [id])
+  nachkontrolle          Durchfuehrung?         @relation("Nachkontrolle", fields: [tenantId, nachkontrolleId], references: [tenantId, id], onDelete: Restrict)
   verwerfenBegruendung   String?
   verwerfenBeantragtVon  String?
   verwerfenBestaetigtVon String?
   erfasstVon             String
-  erfasstAm              DateTime             @default(now())
+  erfasstAm              DateTime               @default(now())
   geschlossenAm          DateTime?
   risiken                FeststellungRisiko[]
   erklaerungen           BetroffeneErklaerung[]
   massnahmen             Massnahme[]
 
-  @@unique([programmId, nummer])
+  @@unique([tenantId, id])
+  @@unique([tenantId, programmId, nummer])
 }
 
 model FeststellungRisiko {
+  tenantId       String       @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   feststellungId String
-  feststellung   Feststellung @relation(fields: [feststellungId], references: [id])
+  feststellung   Feststellung @relation(fields: [tenantId, feststellungId], references: [tenantId, id])
   risikoId       String
-  risiko         Risiko       @relation(fields: [risikoId], references: [id])
+  risiko         Risiko       @relation(fields: [tenantId, risikoId], references: [tenantId, id])
 
   @@id([feststellungId, risikoId])
+  @@index([tenantId, risikoId])
 }
 
 model BetroffeneErklaerung {
   id             String       @id @default(cuid())
+  tenantId       String       @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   feststellungId String
-  feststellung   Feststellung @relation(fields: [feststellungId], references: [id])
+  feststellung   Feststellung @relation(fields: [tenantId, feststellungId], references: [tenantId, id])
   steuerart      String
   land           String
   zeitraum       String
   auswirkungEur  Decimal?     @db.Decimal(14, 2)
+
+  @@index([tenantId, feststellungId])
 }
 
 enum MassnahmeStatus {
@@ -558,10 +601,11 @@ enum MassnahmeStatus {
 
 model Massnahme {
   id              String          @id @default(cuid())
+  tenantId        String          @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   feststellungId  String
-  feststellung    Feststellung    @relation(fields: [feststellungId], references: [id])
-  /// Laufende Wiedervorlage-Nummer (#123), kanzleiweit.
-  wiedervorlageNr Int             @unique
+  feststellung    Feststellung    @relation(fields: [tenantId, feststellungId], references: [tenantId, id])
+  /// Laufende Wiedervorlage-Nummer (#123), je Kanzlei (Tenant).
+  wiedervorlageNr Int
   beschreibung    String
   verantwortlich  String
   frist           DateTime        @db.Date
@@ -569,6 +613,9 @@ model Massnahme {
   erledigtAm      DateTime?
   erledigtVon     String?
   createdAt       DateTime        @default(now())
+
+  @@unique([tenantId, wiedervorlageNr])
+  @@index([tenantId, feststellungId])
 }
 
 // ---------------------------------------------------------------------------
@@ -608,9 +655,11 @@ enum FolgeStatus {
 
 model Ereignis {
   id                   String          @id @default(cuid())
+  tenantId             String          @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId           String
-  programm             TcmsProgramm    @relation(fields: [programmId], references: [id])
-  nummer               String          @unique
+  programm             TcmsProgramm    @relation(fields: [tenantId, programmId], references: [tenantId, id])
+  /// `<Jahr>-T-<nnnn>`, je Kanzlei (Tenant) eindeutig.
+  nummer               String
   typ                  String
   titel                String
   beschreibung         String
@@ -624,21 +673,26 @@ model Ereignis {
   triagiertAm          DateTime?
   folgen               EreignisFolge[]
 
-  @@index([programmId])
+  @@unique([tenantId, id])
+  @@unique([tenantId, nummer])
+  @@index([tenantId, programmId])
 }
 
 model EreignisFolge {
-  id          String      @id @default(cuid())
-  ereignisId  String
-  ereignis    Ereignis    @relation(fields: [ereignisId], references: [id])
-  art         FolgeArt
-  ziel        String?
-  text        String
-  zustaendig  String?
-  frist       DateTime?   @db.Date
-  status      FolgeStatus @default(VORGESCHLAGEN)
-  objektId    String?
-  erledigtAm  DateTime?
+  id         String      @id @default(cuid())
+  tenantId   String      @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  ereignisId String
+  ereignis   Ereignis    @relation(fields: [tenantId, ereignisId], references: [tenantId, id])
+  art        FolgeArt
+  ziel       String?
+  text       String
+  zustaendig String?
+  frist      DateTime?   @db.Date
+  status     FolgeStatus @default(VORGESCHLAGEN)
+  objektId   String?
+  erledigtAm DateTime?
+
+  @@index([tenantId, ereignisId])
 }
 
 // ---------------------------------------------------------------------------
@@ -651,23 +705,24 @@ enum DatenQuelle {
 }
 
 model LandStand {
-  id                     String       @id @default(cuid())
-  programmId             String
-  programm               TcmsProgramm @relation(fields: [programmId], references: [id])
-  land                   String
-  fernverkaeufeLfdEur    Decimal      @db.Decimal(14, 2)
-  fernverkaeufeVorjahrEur Decimal     @db.Decimal(14, 2)
-  lagerSeit              String?
-  oss                    Boolean
-  lokaleUstNr            Boolean
-  zmRelevant             Boolean      @default(false)
-  steuersaetzeGeprueftAm DateTime?    @db.Date
-  stand                  DateTime     @db.Date
-  quelle                 DatenQuelle  @default(MANUELL)
-  erfasstVon             String?
-  createdAt              DateTime     @default(now())
+  id                      String       @id @default(cuid())
+  tenantId                String       @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  programmId              String
+  programm                TcmsProgramm @relation(fields: [tenantId, programmId], references: [tenantId, id])
+  land                    String
+  fernverkaeufeLfdEur     Decimal      @db.Decimal(14, 2)
+  fernverkaeufeVorjahrEur Decimal      @db.Decimal(14, 2)
+  lagerSeit               String?
+  oss                     Boolean
+  lokaleUstNr             Boolean
+  zmRelevant              Boolean      @default(false)
+  steuersaetzeGeprueftAm  DateTime?    @db.Date
+  stand                   DateTime     @db.Date
+  quelle                  DatenQuelle  @default(MANUELL)
+  erfasstVon              String?
+  createdAt               DateTime     @default(now())
 
-  @@index([programmId, land, stand])
+  @@index([tenantId, programmId, land, stand])
 }
 
 // ---------------------------------------------------------------------------
@@ -683,27 +738,28 @@ enum BeschreibungStatus {
 }
 
 model BeschreibungVersion {
-  id                  String             @id @default(cuid())
-  programmId          String
-  programm            TcmsProgramm       @relation(fields: [programmId], references: [id])
-  nummer              String
-  status              BeschreibungStatus @default(ENTWURF)
+  id                    String             @id @default(cuid())
+  tenantId              String             @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  programmId            String
+  programm              TcmsProgramm       @relation(fields: [tenantId, programmId], references: [tenantId, id])
+  nummer                String
+  status                BeschreibungStatus @default(ENTWURF)
   /// [{ key, titel, text }] — Freitext je Abschnitt (0 Teilbereich, 1–7, Anhang).
-  abschnitte          Json
-  reviewAngefordertVon String?
-  reviewAngefordertAm DateTime?
-  reviewVon           String?
-  reviewAm            DateTime?
+  abschnitte            Json
+  reviewAngefordertVon  String?
+  reviewAngefordertAm   DateTime?
+  reviewVon             String?
+  reviewAm              DateTime?
   freigabeAngefordertAm DateTime?
-  freigegebenVon      String?
-  freigegebenAm       DateTime?
+  freigegebenVon        String?
+  freigegebenAm         DateTime?
   /// Eingefrorener Inhalt inkl. gerenderter lebender Bausteine.
-  snapshot            Json?
-  snapshotSha256      String?
-  createdAt           DateTime           @default(now())
-  erstelltVon         String?
+  snapshot              Json?
+  snapshotSha256        String?
+  createdAt             DateTime           @default(now())
+  erstelltVon           String?
 
-  @@unique([programmId, nummer])
+  @@unique([tenantId, programmId, nummer])
 }
 
 enum FreigabeArt {
@@ -723,8 +779,9 @@ enum FreigabeStatus {
 
 model Freigabe {
   id             String         @id @default(cuid())
+  tenantId       String         @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId     String
-  programm       TcmsProgramm   @relation(fields: [programmId], references: [id])
+  programm       TcmsProgramm   @relation(fields: [tenantId, programmId], references: [tenantId, id])
   art            FreigabeArt
   refId          String
   titel          String
@@ -739,36 +796,60 @@ model Freigabe {
   anmerkung      String?
   erledigtAm     DateTime?
 
-  @@index([programmId])
-  @@index([empfaengerId, status])
+  @@index([tenantId, programmId])
+  @@index([tenantId, empfaengerId, status])
 }
 
 /// Postausgang der Entwicklungsumgebung (kein Mailversand in Stufe 1).
 model Nachricht {
   id        String   @id @default(cuid())
+  tenantId  String   @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   an        String
   betreff   String
   text      String
   createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
 }
 
 // ---------------------------------------------------------------------------
-// Audit
+// Audit (Hashkette je Tenant, Kettenversion 2 – ADR 0001 §4, TS-08, TS-10)
 // ---------------------------------------------------------------------------
 
+/// Nur anhängen: Die Laufzeitrolle hat SELECT und INSERT, kein UPDATE/DELETE.
+/// (tenant_id, prevHash) ist eindeutig: Die Kette eines Tenants kann nicht
+/// verzweigen, auch wenn die Sperre einmal fehlte.
 model AuditEvent {
-  seq        Int      @id @default(autoincrement())
-  at         DateTime
-  actorId    String?
-  actorName  String
-  aktion     String
-  objektTyp  String
-  objektId   String
-  programmId String?
-  detail     Json
-  prevHash   String
-  hash       String   @unique
+  seq           Int      @id @default(autoincrement())
+  tenantId      String   @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  kettenVersion Int
+  at            DateTime
+  actorId       String?
+  actorName     String
+  aktion        String
+  objektTyp     String
+  objektId      String
+  programmId    String?
+  detail        Json
+  prevHash      String
+  hash          String
 
-  @@index([programmId, seq])
-  @@index([objektTyp, objektId])
+  @@unique([tenantId, hash])
+  @@unique([tenantId, prevHash])
+  @@index([tenantId, seq])
+  @@index([tenantId, programmId, seq])
+  @@index([tenantId, objektTyp, objektId])
+}
+
+// ---------------------------------------------------------------------------
+// Einmal-IDs der Akteursbestätigung (ADR 0001 §3.2, §4)
+// ---------------------------------------------------------------------------
+
+/// Nicht mandantengebunden, ohne RLS. Laufzeitrolle: nur INSERT, SELECT, DELETE.
+/// Der Dienst (apps/api) greift per Raw-SQL zu; die Struktur ist Vertrag.
+model AkteurJti {
+  jti String   @id
+  exp DateTime @db.Timestamptz(6)
+
+  @@map("akteur_jti")
 }

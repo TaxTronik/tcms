@@ -1,5 +1,5 @@
 import 'server-only';
-import { prisma, type Prisma, type Tx } from '@tcms/db';
+import { type Prisma, type Tx } from '@tcms/db';
 import {
   addTage,
   brutto,
@@ -11,8 +11,9 @@ import {
   type Klasse,
   type Turnus,
 } from '@tcms/domain';
+import { db } from './demo';
 import type { TcmsKontext } from './kontext';
-import { jetzt, tagesende } from './zeit';
+import { auditGrenze, jetzt, tagesende } from './zeit';
 
 // =============================================================================
 // Zusatzdaten und Planungshelfer für die Kontrollmatrix (S6):
@@ -149,13 +150,14 @@ export async function ladeKontrolleDetail(
   stand: Date,
 ): Promise<KontrolleDetail | null> {
   const ende = tagesende(stand);
-  const k = await prisma.kontrolle.findUnique({
+  const k = await db.kontrolle.findUnique({
     where: { id: kontrolleId },
     include: { staende: { where: { gueltigAb: { lte: ende } }, orderBy: { version: 'asc' } } },
   });
   if (!k) return null;
-  const audit = await prisma.auditEvent.findMany({
-    where: { objektTyp: 'Kontrolle', objektId: k.id, at: { lte: ende } },
+  const audit = await db.auditEvent.findMany({
+    // Audit-Zeitstempel sind echte Zeit (auditGrenze, zeit.ts).
+    where: { objektTyp: 'Kontrolle', objektId: k.id, at: { lte: auditGrenze(stand) } },
     orderBy: { seq: 'desc' },
     take: 40,
   });
@@ -213,7 +215,7 @@ export async function ladeFeststellungenJeDurchfuehrung(
 ): Promise<Map<string, { id: string; nummer: string; p153Offen: boolean }>> {
   const out = new Map<string, { id: string; nummer: string; p153Offen: boolean }>();
   if (!ctx.programm) return out;
-  const liste = await prisma.feststellung.findMany({
+  const liste = await db.feststellung.findMany({
     where: {
       programmId: ctx.programm.id,
       durchfuehrungId: { not: null },
@@ -240,7 +242,7 @@ export async function ladeOffeneAbweichungen(
   const offen = ctx.kontrollen.filter((k) => k.abweichung && !k.abweichung.freigegebenVon);
   if (offen.length === 0) return out;
   const ende = tagesende(ctx.stand);
-  const staende = await prisma.kontrolleStand.findMany({
+  const staende = await db.kontrolleStand.findMany({
     where: { kontrolleId: { in: offen.map((k) => k.id) }, gueltigAb: { lte: ende } },
     orderBy: { version: 'asc' },
   });
@@ -334,7 +336,14 @@ export async function neuerKontrollStand(
   zeitpunkt: Date,
   personId: string,
 ): Promise<KontrolleStandRoh> {
-  await tx.kontrolleStand.update({ where: { id: alt.id }, data: { gueltigBis: zeitpunkt } });
+  // TS-05: nur den noch offenen Stand schließen (bedingtes Update). Hat eine
+  // parallele Änderung ihn bereits geschlossen, bricht die Transaktion ab; die
+  // eindeutige (kontrolleId, version) verhindert zusätzlich eine Gabelung.
+  const zu = await tx.kontrolleStand.updateMany({
+    where: { id: alt.id, gueltigBis: null },
+    data: { gueltigBis: zeitpunkt },
+  });
+  if (zu.count !== 1) throw new Error('Die Kontrolle wurde inzwischen geändert. Bitte neu laden.');
   return tx.kontrolleStand.create({ data: fortschreibung(alt, aenderung, zeitpunkt, personId) });
 }
 

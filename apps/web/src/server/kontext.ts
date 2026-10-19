@@ -1,6 +1,5 @@
 import 'server-only';
 import { cache } from 'react';
-import { prisma } from '@tcms/db';
 import {
   abschnittHatText,
   betriebsStand,
@@ -37,6 +36,7 @@ import {
   type SchwellenErgebnis,
   type Turnus,
 } from '@tcms/domain';
+import { demoPersonen, lies, zustaendigkeit, type DemoPerson } from './demo';
 import { heute as heuteFn, tagesende } from './zeit';
 
 // =============================================================================
@@ -355,27 +355,35 @@ export interface TcmsKontext {
   ausgeblendet: number;
 }
 
-const p = (x: {
-  id: string;
-  name: string;
-  kuerzel: string;
-  art: 'KANZLEI' | 'MANDANT';
-  funktion: string | null;
-  email: string;
-  telefon: string | null;
-  kanzleiRolle: PersonKurz['kanzleiRolle'];
-  mandantRolle: PersonKurz['mandantRolle'];
-}): PersonKurz => ({
-  id: x.id,
-  name: x.name,
-  kuerzel: x.kuerzel,
-  art: x.art,
-  funktion: x.funktion,
-  email: x.email,
-  telefon: x.telefon,
-  kanzleiRolle: x.kanzleiRolle,
-  mandantRolle: x.mandantRolle,
-});
+/**
+ * Anzeigedaten einer Person aus dem Demo-Verzeichnis (im Zielbild löst die
+ * kanzleikonsole Namen auf). Die Rolle beim Mandanten kommt aus
+ * MandantKontaktRolle, nicht aus dem Verzeichnis.
+ */
+export function personKurz(
+  x: DemoPerson,
+  mandantRolle: PersonKurz['mandantRolle'] = null,
+): PersonKurz {
+  return {
+    id: x.id,
+    name: x.name,
+    kuerzel: x.kuerzel,
+    art: x.art,
+    funktion: x.funktion,
+    email: x.email,
+    telefon: x.telefon,
+    kanzleiRolle:
+      x.art === 'KANZLEI' ? (x.istBerufstraeger ? 'BERUFSTRAEGER' : 'BEARBEITUNG') : null,
+    mandantRolle,
+  };
+}
+
+/** Alle Personen des Verzeichnisses; Mandantenkontakte mit ihrer Rolle laut Verzeichnis. */
+export function allePersonen(): Map<string, PersonKurz> {
+  return new Map(demoPersonen.alle().map((x) => [x.id, personKurz(x, x.rolle)]));
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function gueltig<T extends { gueltigAb: Date; gueltigBis: Date | null }>(
   liste: T[],
@@ -402,42 +410,53 @@ async function lade(
   const heute = heuteFn();
   const stand = new Date(`${standIso}T00:00:00Z`);
   const ende = tagesende(stand);
-  const mandant = await prisma.mandant.findUnique({
-    where: { id: mandantId },
-    include: { personen: true },
-  });
+  if (!UUID.test(mandantId)) return null;
+  const { mandant, kontakte, programm } = await lies(async (tx) => ({
+    mandant: await tx.mandant.findUnique({ where: { id: mandantId } }),
+    kontakte: await tx.mandantKontaktRolle.findMany({
+      where: { mandantId, aktiv: true },
+      orderBy: { createdAt: 'asc' },
+    }),
+    programm: await tx.tcmsProgramm.findFirst({
+      where: { mandantId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        teilbereiche: { include: { ziele: { orderBy: { createdAt: 'asc' } } } },
+        profile: true,
+        risiken: {
+          include: {
+            staende: true,
+            kontrollen: true,
+            uebersteuerungen: { orderBy: { beantragtAm: 'desc' } },
+          },
+        },
+        kontrollen: {
+          include: {
+            staende: true,
+            risiken: true,
+            durchfuehrungen: { include: { _count: { select: { nachweise: true } } } },
+          },
+        },
+        feststellungen: { include: { massnahmen: true, risiken: { include: { risiko: true } } } },
+        ereignisse: { include: { folgen: true }, orderBy: { gemeldetAm: 'desc' } },
+        laender: true,
+        beschreibungen: { orderBy: { createdAt: 'asc' } },
+      },
+    }),
+  }));
   if (!mandant) return null;
 
-  const personenRoh = await prisma.person.findMany();
-  const personen = new Map(personenRoh.map((x) => [x.id, p(x)]));
-  const mandantPersonen = mandant.personen.map(p);
-
-  const programm = await prisma.tcmsProgramm.findFirst({
-    where: { mandantId },
-    orderBy: { createdAt: 'desc' },
-    include: {
-      teilbereiche: { include: { ziele: { orderBy: { createdAt: 'asc' } } } },
-      profile: true,
-      risiken: {
-        include: {
-          staende: true,
-          kontrollen: true,
-          uebersteuerungen: { orderBy: { beantragtAm: 'desc' } },
-        },
-      },
-      kontrollen: {
-        include: {
-          staende: true,
-          risiken: true,
-          durchfuehrungen: { include: { _count: { select: { nachweise: true } } } },
-        },
-      },
-      feststellungen: { include: { massnahmen: true, risiken: { include: { risiko: true } } } },
-      ereignisse: { include: { folgen: true }, orderBy: { gemeldetAm: 'desc' } },
-      laender: true,
-      beschreibungen: { orderBy: { createdAt: 'asc' } },
-    },
-  });
+  const personen = allePersonen();
+  // Mandantenpersonen: aktive Rollen aus MandantKontaktRolle, Anzeige aus dem Verzeichnis.
+  const mandantPersonen: PersonKurz[] = [];
+  for (const k of kontakte) {
+    const x = demoPersonen.person(k.kontaktId);
+    if (x && !mandantPersonen.some((m) => m.id === x.id)) {
+      mandantPersonen.push(personKurz(x, k.rolle));
+      personen.set(x.id, personKurz(x, k.rolle));
+    }
+  }
+  const zust = zustaendigkeit(mandant.id);
 
   const leer: TcmsKontext = {
     heute,
@@ -448,8 +467,8 @@ async function lade(
       name: mandant.name,
       rechtsform: mandant.rechtsform,
       datevNr: mandant.datevNr,
-      berufstraegerId: mandant.berufstraegerId,
-      bearbeitungId: mandant.bearbeitungId,
+      berufstraegerId: zust.berufstraegerId ?? '',
+      bearbeitungId: zust.bearbeitungId ?? '',
     },
     personen,
     mandantPersonen,

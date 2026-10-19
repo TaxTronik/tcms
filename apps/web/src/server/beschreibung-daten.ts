@@ -1,5 +1,4 @@
 import 'server-only';
-import { prisma } from '@tcms/db';
 import {
   ABSCHNITTE,
   FESTSTELLUNG_STATUS_LABEL,
@@ -11,6 +10,7 @@ import {
 } from '@tcms/domain';
 import { kanonisch, sha256 } from '@tcms/domain/audit';
 import type { BausteinSatz, Snapshot } from '@/components/beschreibung/typen';
+import { db } from './demo';
 import { personName, type TcmsKontext } from './kontext';
 
 // =============================================================================
@@ -263,15 +263,15 @@ export interface BeschreibungsDaten {
 /** Lädt alle Versionen inkl. Snapshot, die Beschreibungs-Freigaben und den Audit-Verlauf. */
 export async function ladeBeschreibungsDaten(programmId: string): Promise<BeschreibungsDaten> {
   const [versionen, freigaben] = await Promise.all([
-    prisma.beschreibungVersion.findMany({ where: { programmId }, orderBy: { createdAt: 'asc' } }),
-    prisma.freigabe.findMany({
+    db.beschreibungVersion.findMany({ where: { programmId }, orderBy: { createdAt: 'asc' } }),
+    db.freigabe.findMany({
       where: { programmId, art: 'BESCHREIBUNG' },
       orderBy: { angefordertAm: 'asc' },
     }),
   ]);
   const ids = versionen.map((v) => v.id);
   const audit = ids.length
-    ? await prisma.auditEvent.findMany({
+    ? await db.auditEvent.findMany({
         where: { objektTyp: 'BeschreibungVersion', objektId: { in: ids } },
         orderBy: { seq: 'asc' },
       })

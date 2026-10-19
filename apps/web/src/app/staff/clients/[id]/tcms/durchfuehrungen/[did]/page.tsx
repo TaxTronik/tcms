@@ -21,6 +21,7 @@ import {
   RisikenKarte,
   VerlaufKarte,
 } from '@/components/durchfuehrung/karten';
+import { handelnde } from '@/server/demo';
 import {
   beantrageEntfallen,
   beginneDurchfuehrung,
@@ -95,7 +96,7 @@ export default async function Kontrolldurchfuehrung({
     );
   }
 
-  const r = rechteFuer(nutzer, d, ctx.historisch);
+  const r = rechteFuer(handelnde(nutzer), d, ctx.historisch);
   const pruefung = pruefungAus(d);
   const kv = ctx.kontrollen.find((k) => k.id === d.kontrolle.id) ?? null;
   const felder = { id: d.id, stand: ctx.historisch ? seite.standIso : '' };

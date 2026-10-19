@@ -1,7 +1,6 @@
 'use server';
 
 import { z } from 'zod';
-import { prisma } from '@tcms/db';
 import {
   FESTSTELLUNG_STATUS_LABEL,
   isoDatum,
@@ -10,6 +9,7 @@ import {
   P153_LABEL,
   type FeststellungStatus,
 } from '@tcms/domain';
+import { db, personImMandat, type KanzleiAkteur } from '../demo';
 import {
   aktualisiereMandant,
   KEIN_RECHT,
@@ -25,8 +25,14 @@ import {
   naechsteWiedervorlageNr,
   p153Abschliessend,
 } from '../feststellungen-daten';
-import { kannBearbeiten, kannWuerdigen, zweitePerson } from '../rechte';
-import { brauchtKanzlei, type Nutzer } from '../sitzung';
+import {
+  auswirkungBeimAnlegen,
+  kannBearbeiten,
+  kannWuerdigen,
+  mitBezug,
+  zweitePerson,
+} from '../berechtigung';
+import { brauchtKanzlei } from '../sitzung';
 import { heute, jetzt } from '../zeit';
 
 // =============================================================================
@@ -46,29 +52,29 @@ const datum = z
   .refine((d) => !Number.isNaN(d.getTime()));
 
 async function ladeFeststellung(id: string) {
-  return prisma.feststellung.findUnique({
+  return db.feststellung.findUnique({
     where: { id },
     include: { programm: { include: { mandant: true } }, massnahmen: true, nachkontrolle: true },
   });
 }
 type Geladen = NonNullable<Awaited<ReturnType<typeof ladeFeststellung>>>;
 
-function beteiligt(n: Nutzer, f: Geladen): boolean {
+function beteiligt(n: KanzleiAkteur, f: Geladen): boolean {
   return istBeteiligt(
-    n,
+    mitBezug(n, f.programm.mandantId),
     {
       erfasstVon: f.erfasstVon,
       p153EntschiedenVon: f.p153EntschiedenVon,
       verwerfenBeantragtVon: f.verwerfenBeantragtVon,
       massnahmenVerantwortlich: f.massnahmen.map((m) => m.verantwortlich),
     },
-    f.programm.mandant,
+    f.programm.mandantId,
   );
 }
 
 /** Gemeinsame Vorprüfung: Objekt vorhanden, Bearbeitungsrecht, Vertraulichkeit, nicht abgeschlossen. */
 async function vorpruefung(
-  n: Nutzer,
+  n: KanzleiAkteur,
   id: string,
   opt: { offen?: boolean } = { offen: true },
 ): Promise<{ f: Geladen } | { fehler: string }> {
@@ -384,12 +390,8 @@ export async function legeMassnahmeAn(_prev: Ergebnis, fd: FormData): Promise<Er
   const { f } = v;
   if (p.data.frist.getTime() < tagHeute().getTime())
     return { fehler: 'Die Frist darf nicht in der Vergangenheit liegen.' };
-  const person = await prisma.person.findUnique({ where: { id: p.data.verantwortlich } });
-  if (
-    !person ||
-    !person.aktiv ||
-    (person.art !== 'KANZLEI' && person.mandantId !== f.programm.mandantId)
-  )
+  const person = await personImMandat(p.data.verantwortlich, f.programm.mandantId);
+  if (!person)
     return { fehler: 'Die verantwortliche Person ist für diesen Mandanten nicht zulässig.' };
   const { beschreibung, verantwortlich, frist } = p.data;
   const nr = await mitAudit(n, async (tx, zeitpunkt) => {
@@ -451,7 +453,7 @@ export async function erledigeMassnahme(_prev: Ergebnis, fd: FormData): Promise<
   const p = ErledigenSchema.safeParse(Object.fromEntries(fd));
   if (!p.success)
     return { fehler: 'Bitte den Nachweis der Umsetzung beschreiben (mindestens 10 Zeichen).' };
-  const m = await prisma.massnahme.findUnique({ where: { id: p.data.id } });
+  const m = await db.massnahme.findUnique({ where: { id: p.data.id } });
   if (!m) return { fehler: 'Maßnahme nicht gefunden.' };
   const f = await ladeFeststellung(m.feststellungId);
   if (!f) return { fehler: 'Feststellung nicht gefunden.' };
@@ -504,7 +506,7 @@ export async function legeNachkontrolleAn(_prev: Ergebnis, fd: FormData): Promis
     return { fehler: 'Es ist bereits eine Nachkontrolle verknüpft.' };
   if (p.data.faelligAm.getTime() < tagHeute().getTime())
     return { fehler: 'Die Fälligkeit darf nicht in der Vergangenheit liegen.' };
-  const k = await prisma.kontrolle.findFirst({
+  const k = await db.kontrolle.findFirst({
     where: { id: p.data.kontrolleId, programmId: f.programmId },
   });
   if (!k || (k.entfallenAb && k.entfallenAb.getTime() <= jetzt().getTime()))
@@ -720,7 +722,7 @@ export async function erfasseFeststellung(_prev: Ergebnis, fd: FormData): Promis
       fehler:
         'Bitte Titel (mind. 5 Zeichen), Sachverhalt (mind. 20 Zeichen), Quelle und Einstufung angeben.',
     };
-  const programm = await prisma.tcmsProgramm.findUnique({
+  const programm = await db.tcmsProgramm.findUnique({
     where: { id: p.data.programmId },
     include: { mandant: true },
   });
@@ -728,7 +730,7 @@ export async function erfasseFeststellung(_prev: Ergebnis, fd: FormData): Promis
   if (!kannBearbeiten(n, programm.mandant)) return { fehler: KEIN_RECHT };
   const risikoIds = fd.getAll('risiken').map(String).filter(Boolean);
   const risiken = risikoIds.length
-    ? await prisma.risiko.findMany({
+    ? await db.risiko.findMany({
         where: { id: { in: risikoIds }, programmId: programm.id },
         select: { id: true },
       })
@@ -736,13 +738,16 @@ export async function erfasseFeststellung(_prev: Ergebnis, fd: FormData): Promis
   if (risiken.length !== risikoIds.length) return { fehler: 'Unbekanntes Risiko gewählt.' };
   let durchfuehrungId: string | null = null;
   if (p.data.quelle === 'KONTROLLE' && p.data.durchfuehrungId) {
-    const d = await prisma.durchfuehrung.findFirst({
+    const d = await db.durchfuehrung.findFirst({
       where: { id: p.data.durchfuehrungId, kontrolle: { programmId: programm.id } },
     });
     if (!d) return { fehler: 'Die gewählte Durchführung gehört nicht zu diesem Mandanten.' };
     durchfuehrungId = d.id;
   }
-  const { titel, sachverhalt, quelle, quelleText, klasse, schwere, auswirkung } = p.data;
+  const { titel, sachverhalt, quelle, quelleText, klasse, schwere } = p.data;
+  // TS-04: „keine Auswirkung" ist eine Würdigungsentscheidung (nur Berufsträger:innen).
+  const auswirkung = auswirkungBeimAnlegen(n, programm.mandant, p.data.auswirkung);
+  const herabgestuft = auswirkung !== p.data.auswirkung;
   const nummer = await mitAudit(n, async (tx, zeitpunkt) => {
     const nr = await naechsteFeststellungsnummer(tx, programm.id, zeitpunkt.getUTCFullYear());
     const f = await tx.feststellung.create({
@@ -770,10 +775,20 @@ export async function erfasseFeststellung(_prev: Ergebnis, fd: FormData): Promis
         objektTyp: 'Feststellung',
         objektId: f.id,
         programmId: programm.id,
-        detail: { nummer: nr, quelle: quelleText, manuell: true, auswirkung },
+        detail: {
+          nummer: nr,
+          quelle: quelleText,
+          manuell: true,
+          auswirkung,
+          ...(herabgestuft ? { auswirkungAngegeben: p.data.auswirkung } : {}),
+        },
       },
     };
   });
   aktualisiereMandant(programm.mandantId);
-  return { ok: `Feststellung ${nummer} erfasst.` };
+  return {
+    ok: herabgestuft
+      ? `Feststellung ${nummer} erfasst. Die steuerliche Auswirkung „nein“ stufen nur Berufsträger:innen ein; sie ist als „unklar“ zur Würdigung erfasst.`
+      : `Feststellung ${nummer} erfasst.`,
+  };
 }

@@ -1,5 +1,7 @@
 import 'server-only';
-import { leseDatei, prisma, speichereDatei, type GespeicherteDatei, type Tx } from '@tcms/db';
+import type { Tx } from '@tcms/db';
+import type { Akteur } from '@tcms/contract';
+import { kannPortalLesen, type KontaktRolle, type NachweisVerweis } from '@tcms/service';
 import {
   EREIGNISTYPEN,
   ereignistyp,
@@ -10,8 +12,9 @@ import {
   type EreignisStatus,
   type FolgeArt,
 } from '@tcms/domain';
+import { db, demoAblage } from './demo';
 import { naechsteEreignisnummer } from './nummern';
-import { tagesende } from './zeit';
+import { auditGrenze, tagesende } from './zeit';
 
 // =============================================================================
 // Detaildaten für S11 (Ereigniseingang) und P3 (Portal-Meldung): verknüpfte
@@ -84,15 +87,9 @@ export const PORTAL_KACHELN: { code: string; label: string; icon: string; ton: T
   ];
 
 /** Ereignis melden im Portal: gesetzliche Vertreter und Tax-Compliance-Beauftragte (Fachkonzept §13). */
-export function darfPortalMelden(n: {
-  art: 'KANZLEI' | 'MANDANT';
-  mandantRolle: string | null;
-}): boolean {
-  return (
-    n.art === 'MANDANT' &&
-    (n.mandantRolle === 'GESETZLICHER_VERTRETER' ||
-      n.mandantRolle === 'TAX_COMPLIANCE_BEAUFTRAGTER')
-  );
+export function darfPortalMelden(a: Akteur, rollen: readonly KontaktRolle[]): boolean {
+  // Gesetzliche Vertretung und Tax-Compliance-Beauftragte (aktive Rolle, eigener Mandant).
+  return a.art === 'MANDANT' && kannPortalLesen(a, a.mandantId, rollen);
 }
 
 // ----------------------------------------------------------------------------
@@ -223,13 +220,13 @@ export async function ladeEreignisDetail(
   stand: Date,
 ): Promise<EreignisDetail | null> {
   const ende = tagesende(stand);
-  const e = await prisma.ereignis.findFirst({
+  const e = await db.ereignis.findFirst({
     where: { id: ereignisId, programmId },
     include: { folgen: true },
   });
   if (!e) return null;
   const folgenIds = e.folgen.map((f) => f.id);
-  const audits = await prisma.auditEvent.findMany({
+  const audits = await db.auditEvent.findMany({
     where: {
       OR: [
         { objektTyp: 'Ereignis', objektId: e.id },
@@ -248,13 +245,13 @@ export async function ladeEreignisDetail(
     .map((f) => f.objektId!);
   const [durchf, festst] = await Promise.all([
     dIds.length
-      ? prisma.durchfuehrung.findMany({
+      ? db.durchfuehrung.findMany({
           where: { id: { in: dIds } },
           include: { kontrolle: { select: { code: true } } },
         })
       : [],
     fIds.length
-      ? prisma.feststellung.findMany({
+      ? db.feststellung.findMany({
           where: { id: { in: fIds } },
           select: { id: true, nummer: true },
         })
@@ -263,7 +260,9 @@ export async function ladeEreignisDetail(
   const dJe = new Map(durchf.map((d) => [d.id, d]));
   const fJe = new Map(festst.map((f) => [f.id, f]));
 
-  const bisEnde = (a: { at: Date }) => a.at.getTime() <= ende.getTime();
+  // Audit-Zeitstempel sind echte Zeit (auditGrenze, zeit.ts).
+  const auditEnde = auditGrenze(stand);
+  const bisEnde = (a: { at: Date }) => a.at.getTime() <= auditEnde.getTime();
   const folgen: FolgeDetail[] = e.folgen
     .filter((f) => {
       // Später hinzugefügte Folgen gehören nicht zum Stand.
@@ -383,7 +382,7 @@ export async function ladeEreignisDetail(
           }
         : null,
     verlauf: audits
-      .filter((a) => a.at.getTime() <= ende.getTime())
+      .filter((a) => a.at.getTime() <= auditEnde.getTime())
       .map((a) => ({
         id: a.seq,
         at: a.at,
@@ -406,7 +405,7 @@ export async function ladeAnlage(
   ereignisId: string,
   sha256: string,
 ): Promise<{ anlage: Anlage; speicherpfad: string; programmId: string | null } | null> {
-  const meldung = await prisma.auditEvent.findFirst({
+  const meldung = await db.auditEvent.findFirst({
     where: {
       objektTyp: 'Ereignis',
       objektId: ereignisId,
@@ -435,10 +434,16 @@ export async function ladeAnlage(
 // Ablage der Anlagen (gemeinsame Ablage aus @tcms/db)
 // ----------------------------------------------------------------------------
 
-export function legeAnlageAb(inhalt: Buffer): Promise<GespeicherteDatei> {
-  return speichereDatei(inhalt);
+/** Demo: legt eine Anlage über den Ablage-Port ab (Dienst: nur Verweise, ADR 0001 §6). */
+export function legeAnlageAb(
+  inhalt: Buffer,
+  dateiname: string,
+  mime: string,
+): Promise<NachweisVerweis> {
+  return demoAblage.annehmen({ art: 'DATEI', dateiname, mime, inhalt });
 }
 
-export function leseAnlage(speicherpfad: string): Promise<Buffer> {
-  return leseDatei(speicherpfad);
+/** Demo: liest eine Anlage und prüft den SHA-256 (TS-09). */
+export function leseAnlage(speicherpfad: string, sha256: string): Promise<Buffer> {
+  return demoAblage.lese({ dokumentId: speicherpfad, sha256 });
 }

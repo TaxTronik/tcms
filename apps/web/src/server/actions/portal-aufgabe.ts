@@ -15,6 +15,7 @@ import {
   text,
 } from '../durchfuehrung-daten';
 import type { Ergebnis } from '../ergebnis';
+import type { Handelnde } from '../demo';
 import { brauchtPortal } from '../sitzung';
 
 // =============================================================================
@@ -27,36 +28,33 @@ const NUR_AKTUELL = 'Änderungen nur im aktuellen Stand möglich';
 const NICHT_GEFUNDEN = 'Diese Aufgabe wurde nicht gefunden.';
 
 /** Prüft vorab, ob die Aufgabe zum Mandanten der Portal-Person gehört. */
-async function eigeneAufgabe(
-  nutzer: Awaited<ReturnType<typeof brauchtPortal>>,
-  id: string,
-): Promise<boolean> {
+async function eigeneAufgabe(nutzer: Handelnde, id: string): Promise<boolean> {
   const d = await ladeFuerAktion(id);
   return !!d && darfPortalLesen(nutzer, d);
 }
 
 /** „Entwurf speichern" bzw. „An Kanzlei übermitteln" (absicht=einreichen). */
 export async function speichereAufgabe(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtPortal();
+  const nutzer = (await brauchtPortal()).handelnde;
   if (!(await eigeneAufgabe(nutzer, text(fd, 'id')))) return { fehler: NICHT_GEFUNDEN };
   return kernSpeichern(nutzer, fd);
 }
 
 export async function ladeAnlageHoch(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtPortal();
+  const nutzer = (await brauchtPortal()).handelnde;
   if (!(await eigeneAufgabe(nutzer, text(fd, 'id')))) return { fehler: NICHT_GEFUNDEN };
   return kernHochladen(nutzer, fd);
 }
 
 export async function entferneAnlage(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtPortal();
+  const nutzer = (await brauchtPortal()).handelnde;
   if (!(await eigeneAufgabe(nutzer, text(fd, 'id')))) return { fehler: NICHT_GEFUNDEN };
   return kernEntfernen(nutzer, fd);
 }
 
 /** Zweite Person beim Mandanten gibt die Aufgabe mit Begründung zur Überarbeitung zurück. */
 export async function gibAufgabeZurueck(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtPortal();
+  const nutzer = (await brauchtPortal()).handelnde;
   if (!(await eigeneAufgabe(nutzer, text(fd, 'id')))) return { fehler: NICHT_GEFUNDEN };
   return kernZurueckweisen(nutzer, fd);
 }
@@ -66,7 +64,7 @@ export async function gibAufgabeZurueck(_prev: Ergebnis, fd: FormData): Promise<
  * gegenzeichnungMandant). Danach schließt die Kanzlei mit der Gegenzeichnung ab.
  */
 export async function bestaetigeAufgabe(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const nutzer = await brauchtPortal();
+  const nutzer = (await brauchtPortal()).handelnde;
   return fuehreAus(async () => {
     if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
     const d = await ladeFuerAktion(text(fd, 'id'));

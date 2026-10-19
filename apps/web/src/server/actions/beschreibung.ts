@@ -2,7 +2,7 @@
 
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
-import { prisma, type Prisma } from '@tcms/db';
+import { type Prisma } from '@tcms/db';
 import {
   ABSCHNITTE,
   BAUSTEIN_LABEL,
@@ -11,6 +11,7 @@ import {
   type Abschnitt,
   type BausteinArt,
 } from '@tcms/domain';
+import { db, demoPersonen, kontakteMitRolle } from '../demo';
 import { aktualisiereMandant, KEIN_RECHT, mitAudit, type Protokoll } from '../aktion';
 import {
   baueSnapshot,
@@ -22,7 +23,7 @@ import {
 import type { Ergebnis } from '../ergebnis';
 import { adresse, codeNachricht, erzeugeCode } from '../freigaben-daten';
 import { ladeKontext } from '../kontext';
-import { kannBearbeiten } from '../rechte';
+import { kannBearbeiten } from '../berechtigung';
 import { brauchtKanzlei } from '../sitzung';
 import { heute } from '../zeit';
 
@@ -39,7 +40,7 @@ const BAUSTEINE = Object.keys(BAUSTEIN_LABEL) as BausteinArt[];
 const MAX_TEXT = 20_000;
 
 async function ladeVersion(id: string) {
-  return prisma.beschreibungVersion.findUnique({
+  return db.beschreibungVersion.findUnique({
     where: { id },
     include: { programm: { include: { mandant: true } } },
   });
@@ -165,7 +166,7 @@ export async function speichereAbschnitt(_prev: Ergebnis, fd: FormData): Promise
 export async function neueVersion(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
   const nutzer = await brauchtKanzlei();
   const programmId = String(fd.get('programmId') ?? '');
-  const programm = await prisma.tcmsProgramm.findUnique({
+  const programm = await db.tcmsProgramm.findUnique({
     where: { id: programmId },
     include: { mandant: true },
   });
@@ -268,7 +269,7 @@ export async function zurReview(_prev: Ergebnis, fd: FormData): Promise<Ergebnis
 }
 
 async function verlaufVon(versionId: string): Promise<VerlaufEintrag[]> {
-  const rows = await prisma.auditEvent.findMany({
+  const rows = await db.auditEvent.findMany({
     where: { objektTyp: 'BeschreibungVersion', objektId: versionId },
     orderBy: { seq: 'asc' },
   });
@@ -381,10 +382,7 @@ export async function freigabeAnfordern(_prev: Ergebnis, fd: FormData): Promise<
     return {
       fehler: 'Die Freigabe kann erst nach abgeschlossener Kanzlei-Review angefordert werden.',
     };
-  const gv = await prisma.person.findFirst({
-    where: { mandantId: mandant.id, mandantRolle: 'GESETZLICHER_VERTRETER', aktiv: true },
-    orderBy: { name: 'asc' },
-  });
+  const [gv] = await kontakteMitRolle(mandant.id, 'GESETZLICHER_VERTRETER');
   if (!gv) return { fehler: 'Beim Mandanten ist keine gesetzliche Vertretung erfasst.' };
   const ctx = await ladeKontext(mandant.id, isoDatum(heute()), false);
   if (!ctx) return { fehler: 'Tax-CMS nicht gefunden.' };
@@ -434,7 +432,8 @@ export async function freigabeAnfordern(_prev: Ergebnis, fd: FormData): Promise<
         });
       }
 
-      const { code, codeHash, codeAblauf } = erzeugeCode(zeitpunkt);
+      // Codefrist auf echter Zeit (Sicherheitsfrist, nicht Demo-Uhr).
+      const { code, codeHash, codeAblauf } = erzeugeCode(new Date());
       const freigabe = await tx.freigabe.create({
         data: {
           programmId: v.programmId,
@@ -458,7 +457,12 @@ export async function freigabeAnfordern(_prev: Ergebnis, fd: FormData): Promise<
         sha256: hash,
       });
       await tx.nachricht.create({
-        data: { an: adresse(gv), betreff: n.betreff, text: n.text, createdAt: zeitpunkt },
+        data: {
+          an: adresse(demoPersonen.person(gv.id)!),
+          betreff: n.betreff,
+          text: n.text,
+          createdAt: zeitpunkt,
+        },
       });
       protokoll.push({
         aktion: 'tcms.beschreibung.freigabe_angefordert',

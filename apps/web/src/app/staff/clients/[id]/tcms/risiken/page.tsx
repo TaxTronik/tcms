@@ -25,7 +25,7 @@ import { mitParams, param } from '@/components/risiken/url';
 import { risikenFreigabeSchritt } from '@/server/actions/risiken';
 import { KEIN_RECHT } from '@/server/aktion';
 import { personName, type RisikoView } from '@/server/kontext';
-import { zweitePerson } from '@/server/rechte';
+import { zweitePerson } from '@tcms/service';
 import { ladeAkzeptanzen, ladeNeuBewertenHinweise, ladeRisikoDetail } from '@/server/risiken-daten';
 import { ladeStaffSeite, NUR_AKTUELL } from '@/server/seite';
 

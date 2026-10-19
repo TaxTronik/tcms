@@ -362,6 +362,7 @@ export async function schreibeVersion1(
   const profil = await tx.profilStand.create({
     data: {
       programmId,
+      version: 1,
       antworten: e.profil as unknown as Prisma.InputJsonValue,
       gueltigAb: zeitpunkt,
       erstelltVon: nutzer.id,
@@ -389,6 +390,7 @@ export async function schreibeVersion1(
           ? {
               staende: {
                 create: {
+                  version: 1,
                   titel: k.titel,
                   fehlerquelle: k.fehlerquelle,
                   folge: k.folge,
@@ -668,8 +670,10 @@ export async function nimmRisikoAuf(
         aktivAb: zeitpunkt,
       },
     });
-    if (!gueltigerStand(vorhanden.staende, zeitpunkt))
-      await tx.risikoStand.create({ data: { risikoId: vorhanden.id, ...standDaten } });
+    if (!gueltigerStand(vorhanden.staende, zeitpunkt)) {
+      const version = Math.max(0, ...vorhanden.staende.map((x) => x.version)) + 1;
+      await tx.risikoStand.create({ data: { risikoId: vorhanden.id, version, ...standDaten } });
+    }
     risikoId = vorhanden.id;
   } else {
     const neu = await tx.risiko.create({
@@ -683,7 +687,7 @@ export async function nimmRisikoAuf(
         ownerId: r.tcb,
         aktivAb: zeitpunkt,
         createdAt: zeitpunkt,
-        staende: { create: standDaten },
+        staende: { create: { version: 1, ...standDaten } },
       },
     });
     risikoId = neu.id;

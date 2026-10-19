@@ -1,8 +1,8 @@
 'use server';
 
 import { z } from 'zod';
-import { prisma } from '@tcms/db';
 import { frequenzLabel, gleicheFrequenz, mindestensSoStreng, type Frequenz } from '@tcms/domain';
+import { db, personImMandat, type KanzleiAkteur } from '../demo';
 import { aktualisiereMandant, KEIN_RECHT, mitAudit, type Protokoll } from '../aktion';
 import type { Ergebnis } from '../ergebnis';
 import {
@@ -13,9 +13,9 @@ import {
   neuerKontrollStand,
   planeDurchfuehrungenNeu,
 } from '../kontrollen-daten';
-import { kannBearbeiten, zweitePerson } from '../rechte';
+import { kannBearbeiten, zweitePerson } from '../berechtigung';
 import { NUR_AKTUELL } from '../seite';
-import { brauchtKanzlei, type Nutzer } from '../sitzung';
+import { brauchtKanzlei } from '../sitzung';
 import { heute, jetzt, leseStand } from '../zeit';
 
 // =============================================================================
@@ -40,7 +40,7 @@ function felder(fd: FormData): Record<string, string> {
 }
 
 async function ladeKontrolle(id: string) {
-  return prisma.kontrolle.findUnique({
+  return db.kontrolle.findUnique({
     where: { id },
     include: { programm: { include: { mandant: true } }, staende: { orderBy: { version: 'asc' } } },
   });
@@ -52,7 +52,7 @@ function aktuellerStand(k: KontrolleMitProgramm) {
   return k.staende.find((s) => s.gueltigBis == null) ?? null;
 }
 
-function pruefe(nutzer: Nutzer, k: KontrolleMitProgramm | null): string | null {
+function pruefe(nutzer: KanzleiAkteur, k: KontrolleMitProgramm | null): string | null {
   if (!k) return 'Kontrolle nicht gefunden.';
   if (!kannBearbeiten(nutzer, k.programm.mandant)) return KEIN_RECHT;
   if (k.entfallenAb && k.entfallenAb.getTime() <= jetzt().getTime())
@@ -160,7 +160,7 @@ export async function frequenzAbweichungBeantragen(
   };
   if (ziel.turnus === 'KEIN' && !ziel.anlass)
     return { fehler: 'Eine Kontrolle ohne Turnus braucht mindestens die Prüfung bei Auslösung.' };
-  const risiken = await aktuelleRisikenDerKontrolle(prisma, k.id, jetzt());
+  const risiken = await aktuelleRisikenDerKontrolle(db, k.id, jetzt());
   const { ableitung, frequenz } = effektiveFrequenz(alt, risiken, k.programm.erklaerungsTurnus);
   if (gleicheFrequenz(ziel, frequenz))
     return {
@@ -237,7 +237,7 @@ export async function frequenzAbweichungEntscheiden(
   const tag = heute();
 
   if (p.data.entscheidung === 'freigeben') {
-    const risiken = await aktuelleRisikenDerKontrolle(prisma, k.id, jetzt());
+    const risiken = await aktuelleRisikenDerKontrolle(db, k.id, jetzt());
     const vorher = effektiveFrequenz(alt, risiken, k.programm.erklaerungsTurnus);
     const unterMatrix = !mindestensSoStreng(ziel, vorher.ableitung.mindest);
     const plan = await mitAudit(nutzer, async (tx, zeitpunkt) => {
@@ -343,7 +343,7 @@ export async function frequenzAbweichungAufheben(_prev: Ergebnis, fd: FormData):
   const alt = aktuellerStand(k)!;
   if (alt.abweichungTurnus == null || !alt.abweichungFreigegebenVon)
     return { fehler: 'Es besteht keine freigegebene Abweichung.' };
-  const risiken = await aktuelleRisikenDerKontrolle(prisma, k.id, jetzt());
+  const risiken = await aktuelleRisikenDerKontrolle(db, k.id, jetzt());
   const vorher = effektiveFrequenz(alt, risiken, k.programm.erklaerungsTurnus);
   const tag = heute();
   const plan = await mitAudit(nutzer, async (tx, zeitpunkt) => {
@@ -438,14 +438,13 @@ export async function verantwortlicheAendern(_prev: Ergebnis, fd: FormData): Pro
     vertretungId,
     ...(gegenzeichnerId && !gegenzeichnungMandant ? [gegenzeichnerId] : []),
   ];
-  const personen = await prisma.person.findMany({ where: { id: { in: ids }, aktiv: true } });
-  const person = (id: string) => personen.find((x) => x.id === id);
+  const personen = await Promise.all(ids.map((id) => personImMandat(id, k.programm.mandantId)));
+  const person = (id: string) => personen.find((x) => x?.id === id) ?? null;
   const seite = (id: string) => {
     const x = person(id);
     if (!x) return false;
-    return alt.partei === 'MANDANT'
-      ? x.art === 'MANDANT' && x.mandantId === k.programm.mandantId
-      : x.art === 'KANZLEI';
+    // Mandantenseite: Kontakt mit aktiver Rolle bei genau diesem Mandanten (personImMandat).
+    return alt.partei === 'MANDANT' ? x.art === 'MANDANT' : x.art === 'KANZLEI';
   };
   if (!seite(durchfuehrendId) || !seite(vertretungId)) {
     return {

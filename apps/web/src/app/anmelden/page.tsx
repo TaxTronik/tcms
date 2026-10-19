@@ -1,6 +1,7 @@
-import { prisma } from '@tcms/db';
+import { DEMO_MANDANTEN } from '@tcms/db/demo';
 import { anmelden } from '@/server/actions/sitzung';
-import { devLoginErlaubt } from '@/server/sitzung';
+import { demoPersonen, type DemoPerson } from '@/server/demo';
+import { demoLoginErlaubt } from '@/server/sitzung';
 
 export const metadata = { title: 'Anmelden' };
 
@@ -18,29 +19,26 @@ export default async function Anmelden({
   searchParams: Promise<{ fehler?: string }>;
 }) {
   const { fehler } = await searchParams;
-  if (!devLoginErlaubt()) {
+  if (!demoLoginErlaubt()) {
     return (
       <div className="page" style={{ maxWidth: 560, margin: '64px auto' }}>
         <h1 className="page-title">Anmeldung nicht verfügbar</h1>
         <p className="text-sm text-muted">
-          Die Entwicklungs-Anmeldung ist deaktiviert. Für den Produktivbetrieb ist eine Anbindung an
-          OIDC bzw. die kanzleikonsole vorgesehen.
+          Die Demo-Anmeldung ist in Produktion immer deaktiviert. Das Tax-CMS ist ein interner
+          Dienst der kanzleikonsole; Anmeldung und Personen verwaltet die kanzleikonsole.
         </p>
       </div>
     );
   }
-  const personen = await prisma.person.findMany({
-    where: { aktiv: true },
-    include: { mandant: true },
-    orderBy: [{ art: 'asc' }, { name: 'asc' }],
-  });
+  // Statisches Demo-Verzeichnis (ersetzt die frühere Tabelle Person).
+  const personen = [...demoPersonen.alle()].sort((a, b) => a.name.localeCompare(b.name, 'de'));
   const kanzlei = personen.filter((p) => p.art === 'KANZLEI');
-  const mandanten = new Map<string, typeof personen>();
+  const mandanten = new Map<string, DemoPerson[]>();
   for (const p of personen.filter((x) => x.art === 'MANDANT')) {
-    const k = p.mandant?.name ?? '—';
+    const k = DEMO_MANDANTEN.find((m) => m.id === p.mandantId)?.name ?? '—';
     mandanten.set(k, [...(mandanten.get(k) ?? []), p]);
   }
-  const Karte = ({ p }: { p: (typeof personen)[number] }) => (
+  const Karte = ({ p }: { p: DemoPerson }) => (
     <form action={anmelden}>
       <input type="hidden" name="personId" value={p.id} />
       <button
@@ -54,7 +52,13 @@ export default async function Anmelden({
             {p.name}
           </span>
           <span className="text-11 text-muted">
-            {ROLLE[p.kanzleiRolle ?? p.mandantRolle ?? ''] ?? ''}
+            {ROLLE[
+              p.art === 'KANZLEI'
+                ? p.istBerufstraeger
+                  ? 'BERUFSTRAEGER'
+                  : 'BEARBEITUNG'
+                : (p.rolle ?? '')
+            ] ?? ''}
             {p.funktion ? ` · ${p.funktion}` : ''}
             {p.istAdmin ? ' · Admin' : ''}
           </span>
@@ -66,10 +70,16 @@ export default async function Anmelden({
     <div className="page" style={{ maxWidth: 920, margin: '0 auto' }}>
       <h1 className="page-title mt-6">Tax-CMS · Anmeldung</h1>
       <p className="text-sm text-muted mb-4">
-        Entwicklungs-Anmeldung per Personenauswahl (Demo-Daten, fiktiv). Vor einem Produktivbetrieb
-        wird sie durch OIDC bzw. die kanzleikonsole ersetzt.
+        Demo-Anmeldung per Personenauswahl (Demo-Daten, fiktiv). Im Zielbild meldet die
+        kanzleikonsole die Person an und ruft das Tax-CMS als internen Dienst auf.
       </p>
-      {fehler ? <div className="alert-error mb-4">Die Person wurde nicht gefunden.</div> : null}
+      {fehler ? (
+        <div className="alert-error mb-4">
+          {fehler === 'rolle'
+            ? 'Für diese Person ist beim Mandanten keine aktive Rolle hinterlegt.'
+            : 'Die Person wurde nicht gefunden.'}
+        </div>
+      ) : null}
       <div className="g12">
         <div className="card gc-6">
           <div className="card-header">

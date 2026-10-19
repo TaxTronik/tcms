@@ -1,5 +1,5 @@
 import 'server-only';
-import { prisma } from '@tcms/db';
+import { db } from './demo';
 import { tagesende } from './zeit';
 
 // =============================================================================
@@ -22,7 +22,7 @@ export interface FreigabeZeile {
 
 export async function ladeFreigaben(programmId: string, stand: Date): Promise<FreigabeZeile[]> {
   const ende = tagesende(stand);
-  const roh = await prisma.freigabe.findMany({
+  const roh = await db.freigabe.findMany({
     where: { programmId, angefordertAm: { lte: ende } },
     orderBy: { angefordertAm: 'desc' },
     select: {

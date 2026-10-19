@@ -16,7 +16,8 @@ import { Leerzustand } from '@/components/ui/leer';
 import { MiniSteps } from '@/components/ui/visual';
 import { KEIN_RECHT } from '@/server/aktion';
 import { ladePortfolio, type PortfolioZeile } from '@/server/portfolio-daten';
-import { kannBearbeiten } from '@/server/rechte';
+import { kannBearbeiten } from '@tcms/service';
+import { fuerMandant, zugaenglicheMandanten } from '@/server/demo';
 import { brauchtKanzlei } from '@/server/sitzung';
 
 export const metadata = { title: 'Tax-CMS-Portfolio' };
@@ -45,7 +46,7 @@ export default async function Portfolio({ searchParams }: { searchParams: Promis
     ueberfaellig: eins(sp['ueberfaellig']) === '1',
     handlung: eins(sp['handlung']) === '1',
   };
-  const { heute, zeilen, berufstraeger } = await ladePortfolio();
+  const { heute, zeilen, berufstraeger } = await ladePortfolio(zugaenglicheMandanten(nutzer));
 
   const mitProgramm = zeilen.filter((z) => z.hatProgramm);
   const kpi = {
@@ -80,7 +81,7 @@ export default async function Portfolio({ searchParams }: { searchParams: Promis
   const ohneProgramm = zeilen
     .filter((z) => !z.hatProgramm)
     .map((z) => {
-      const darf = kannBearbeiten(nutzer, z.mandant);
+      const darf = kannBearbeiten(fuerMandant(nutzer, z.mandant.id), z.mandant.id);
       return { id: z.mandant.id, name: z.mandant.name, darf, grund: darf ? undefined : KEIN_RECHT };
     });
 
@@ -303,7 +304,11 @@ export default async function Portfolio({ searchParams }: { searchParams: Promis
                   z.hatProgramm ? (
                     <Zeile key={z.mandant.id} z={z} />
                   ) : (
-                    <OhneZeile key={z.mandant.id} z={z} darf={kannBearbeiten(nutzer, z.mandant)} />
+                    <OhneZeile
+                      key={z.mandant.id}
+                      z={z}
+                      darf={kannBearbeiten(fuerMandant(nutzer, z.mandant.id), z.mandant.id)}
+                    />
                   ),
                 )}
               </tbody>
