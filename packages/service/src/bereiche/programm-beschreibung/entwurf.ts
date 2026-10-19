@@ -6,14 +6,7 @@
 // liest `kern/profil.ts` (Profilregeln aus `@tcms/domain`).
 // =============================================================================
 
-import {
-  KontrollenSchrittSchema,
-  RisikenSchrittSchema,
-  TeilbereichSchrittSchema,
-  ZieleSchrittSchema,
-  type EntwurfRisiko,
-  type SetupEntwurf,
-} from '@tcms/contract';
+import { SetupEntwurfSchema, type EntwurfRisiko, type SetupEntwurf } from '@tcms/contract';
 import {
   addTage,
   isoDatum,
@@ -75,18 +68,28 @@ export function neuerEntwurf(heute: Date, gvId: string | null): SetupEntwurf {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Gespeicherte Fassung je Schritt (Texte nur mit Längengrenzen, wie die Antwort):
+// Ein Entwurf aus der Zeit vor einer strengeren Eingaberegel bleibt lesbar und
+// fällt nicht still auf Startwerte zurück (sonst schriebe das Speichern eines
+// anderen Schritts die Startwerte zurück). Neue Eingaben prüfen die Schritt-
+// Schemas des Vertrags.
+const TEILBEREICH_GESPEICHERT = SetupEntwurfSchema.pick({ teilbereich: true, zeitraum: true });
+const ZIELE_GESPEICHERT = SetupEntwurfSchema.pick({ ziele: true, freigabe: true });
+const RISIKEN_GESPEICHERT = SetupEntwurfSchema.pick({ risiken: true });
+const KONTROLLEN_GESPEICHERT = SetupEntwurfSchema.pick({ kontrollen: true });
+
 /** Liest einen gespeicherten Entwurf; unlesbare Teile fallen auf Startwerte zurück. */
 export function leseEntwurf(roh: unknown, heute: Date, gvId: string | null): SetupEntwurf {
   const basis = neuerEntwurf(heute, gvId);
   if (!roh || typeof roh !== 'object' || Array.isArray(roh)) return basis;
   const r = roh as Partial<Record<keyof SetupEntwurf, unknown>>;
-  const tb = TeilbereichSchrittSchema.safeParse({
+  const tb = TEILBEREICH_GESPEICHERT.safeParse({
     teilbereich: r.teilbereich,
     zeitraum: r.zeitraum,
   });
-  const zi = ZieleSchrittSchema.safeParse({ ziele: r.ziele, freigabe: r.freigabe });
-  const ri = RisikenSchrittSchema.safeParse({ risiken: r.risiken });
-  const ko = KontrollenSchrittSchema.safeParse({ kontrollen: r.kontrollen });
+  const zi = ZIELE_GESPEICHERT.safeParse({ ziele: r.ziele, freigabe: r.freigabe });
+  const ri = RISIKEN_GESPEICHERT.safeParse({ risiken: r.risiken });
+  const ko = KONTROLLEN_GESPEICHERT.safeParse({ kontrollen: r.kontrollen });
   const pr = leseProfil(r.profil);
   return {
     v: 1,

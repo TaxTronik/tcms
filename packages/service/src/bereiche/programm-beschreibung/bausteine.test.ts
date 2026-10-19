@@ -65,6 +65,19 @@ describe('Snapshot', () => {
     expect(n.find((a) => a.key === 'kultur')?.bloecke).toEqual([{ typ: 'text', text: '' }]);
     expect(n.find((a) => a.key === 'ziele')?.bloecke).toEqual([{ typ: 'text', text: '' }]);
   });
+
+  it('behält gespeicherte Texte aus der Zeit vor der Basisregel (Richtungssteuerzeichen, tcms-s9)', () => {
+    // Neue Texte weist die Eingabe ab; gespeicherte gingen sonst beim Speichern eines
+    // anderen Abschnitts, beim Anlegen der nächsten Version und im Snapshot verloren.
+    const alt = 'Ziel \u202eB-A\u202c und \u2067isoliert\u2069';
+    const n = normalisiereAbschnitte([{ key: 'ziele', bloecke: [{ typ: 'text', text: alt }] }]);
+    expect(n.find((a) => a.key === 'ziele')?.bloecke).toEqual([{ typ: 'text', text: alt }]);
+    // Die Längengrenze gilt weiter.
+    const lang = normalisiereAbschnitte([
+      { key: 'ziele', bloecke: [{ typ: 'text', text: 'x'.repeat(20_001) }] },
+    ]);
+    expect(lang.find((a) => a.key === 'ziele')?.bloecke).toEqual([{ typ: 'text', text: '' }]);
+  });
 });
 
 describe('Baustein FESTSTELLUNGEN (RT-01)', () => {

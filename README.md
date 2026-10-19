@@ -358,6 +358,13 @@ mit gespeicherten Ereignis-Anlagen (Detail `anlagen`, `ereignisAnlageLesen`) pr�
 Regel (`DATEINAME_GESPEICHERT_UNZULAESSIG`: Steuerzeichen, Pfadtrenner, Einbettung/Überschreibung,
 Isolierung), damit früher gemeldete Anlagen lesbar bleiben; Anzeigen behandeln Dateinamen immer als
 reinen Text.
+Mehrzeilige Freitexte (Begründungen, Kommentare, Sachverhalte, Abschnittstexte der Beschreibung) prüfen
+die Basisregel (`mitTextBasis`, `freitext`): kein NUL, keine einzelnen Surrogate und keine expliziten
+Richtungssteuerzeichen (Einbettung und Überschreibung U+202A–U+202E, Isolierung U+2066–U+2069; Meldung
+„Unzulässige Zeichen“). Zeilenumbruch, TAB, ZWJ und Variantenselektoren (Emoji) sowie LRM/RLM bleiben
+erlaubt; Anzeigen sollen Freitexte dennoch isolieren (`dir="auto"`, `bdi`). Gespeicherte Texte in Antworten
+(Entwurf des Assistenten, Abschnitte und Snapshots der Beschreibung) prüfen nur die Länge, damit
+Altbestand lesbar bleibt.
 Die Prüfung einer Durchführung (`pruefung`, Kanzlei-Detail, Portal-Aufgabe, Speichern) liefert je
 Kennzahl die vom Dienst berechneten Werte (`kennzahlen`: erfasster Wert bzw. Differenz a − b, Abweichung
 gegen Soll, Toleranzlage) – dieselbe Rechnung wie beim Einreichen.

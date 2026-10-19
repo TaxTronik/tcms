@@ -145,6 +145,31 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
     expect(k.code).toBe('UNGUELTIG');
   });
 
+  it('Richtungssteuerzeichen: neue Texte abgewiesen; gespeicherte bleiben lesbar und gehen beim Speichern nicht verloren (tcms-s9)', async () => {
+    for (const t of ['Betrag \u202e001\u202c EUR', 'Text \u2066isoliert\u2069']) {
+      const f = await fehlerVon(abschnitt(erste, t));
+      expect(f.code).toBe('UNGUELTIG');
+      expect(JSON.stringify(f.felder)).toContain('Unzulässige Zeichen');
+    }
+    // Altbestand: ein Text aus der Zeit vor der Regel, unterhalb des Dienstes gespeichert.
+    const alt = 'Ziele \u2067alt\u2069 aus der Zeit vor der Regel';
+    await inWelt(w, async (tx) => {
+      const v0 = await tx.beschreibungVersion.findUniqueOrThrow({ where: { id: erste } });
+      const abschnitte = (v0.abschnitte as { key: string }[]).filter((a) => a.key !== 'ziele');
+      abschnitte.push({ key: 'ziele', bloecke: [{ typ: 'text', text: alt }] } as never);
+      await tx.beschreibungVersion.update({ where: { id: erste }, data: { abschnitte } });
+    });
+    // Ein anderer Abschnitt wird gespeichert: der alte Text bleibt (früher: leerer Block).
+    await abschnitt(erste, 'Kultur nach der Regel.');
+    const b = await im(hbA(w), (ctx) => ladeBeschreibung(ctx, { mandantId: w.mandantA }));
+    expect(BeschreibungViewSchema.parse(b)).toEqual(b);
+    const ver = b.versionen.find((x) => x.id === erste)!;
+    expect(ver.abschnitte.find((a) => a.key === 'ziele')?.bloecke).toEqual(text(alt));
+    expect(ver.abschnitte.find((a) => a.key === 'kultur')?.bloecke).toEqual(
+      text('Kultur nach der Regel.'),
+    );
+  });
+
   it('Vier-Augen: die letzte Bearbeitung schließt die Review nicht ab (auch nicht in anderer Schreibweise)', async () => {
     await im(hbA(w), (ctx) => gibBeschreibungZurReview(ctx, v(erste)));
     const k = await fehlerVon(abschnitt(erste, 'Änderung in der Review'));

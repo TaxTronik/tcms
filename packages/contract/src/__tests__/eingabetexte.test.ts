@@ -11,6 +11,10 @@
 //   - RT4-T-08: Jede Zeichenkette (auch mehrzeilige Freitexte) weist NUL und
 //     einzelne Surrogate ab (`TEXT_UNZULAESSIG`, `mitTextBasis`), damit keine
 //     vertragsgültige Eingabe erst beim Speichern scheitert (500).
+//   - tcms-s9: Jede Zeichenkette weist die expliziten Richtungssteuerzeichen
+//     U+202A–U+202E und U+2066–U+2069 ab (Anzeigefälschung in Inhalten mit
+//     Beweiswert); ZWJ und Variantenselektoren bleiben in mehrzeiligen Texten
+//     erlaubt. Antworten mit gespeicherten Texten nehmen sie an (Altbestand).
 //
 // Ein Feld gilt als geprüft, wenn ein harmloser Wert passender Länge
 // angenommen und derselbe Wert mit dem Störzeichen in der Mitte abgewiesen
@@ -21,6 +25,7 @@
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { ENDPUNKT_LISTE } from '../endpunkte';
+import { TEXT_UNZULAESSIG_MELDUNG } from '../bereiche/lesepfade';
 import {
   NachrichtDatenEreignisGemeldetSchema,
   NachrichtDatenFreigabeAngefordertSchema,
@@ -263,5 +268,149 @@ describe('Eingaben: jede Zeichenkette ohne NUL und einzelne Surrogate (RT4-T-08)
       (b) => b.pfad === 'durchfuehrungSpeichern body.schritte[].kommentar',
     )!;
     expect(kommentar.schema.safeParse('Zeile 1\nZeile 2\tmit TAB \u{1f600}').success).toBe(true);
+  });
+});
+
+/** Explizite Richtungssteuerzeichen (Einbettung, Überschreibung, Isolierung), nur als Escape. */
+const RICHTUNG: Record<string, string> = {
+  LRE: '\u202a',
+  RLE: '\u202b',
+  PDF: '\u202c',
+  LRO: '\u202d',
+  RLO: '\u202e',
+  LRI: '\u2066',
+  RLI: '\u2067',
+  FSI: '\u2068',
+  PDI: '\u2069',
+};
+
+/** Feld mit festem Format (Muster): Störzeichen scheitern schon am Format. */
+const mitMuster = (b: Blatt) =>
+  ((b.schema as unknown as { _zod: { bag: { patterns?: Set<RegExp> } } })._zod.bag.patterns?.size ??
+    0) > 0;
+
+describe('Eingaben: jede Zeichenkette ohne Richtungssteuerzeichen (tcms-s9)', () => {
+  const blaetter = eingabeBlaetter();
+  const frei = blaetter.filter((b) => harmlos(b) !== null);
+  /** Mehrzeilige Freitexte: nehmen einen Zeilenumbruch an. */
+  const mehrzeilig = frei.filter((b) => b.schema.safeParse(gestoert(harmlos(b)!, '\n')).success);
+
+  it('prüft alle freien Felder, darunter die mehrzeiligen mit Beweiswert', () => {
+    expect(frei.length).toBeGreaterThanOrEqual(80);
+    expect(mehrzeilig.length).toBeGreaterThanOrEqual(20);
+    for (const p of [
+      'durchfuehrungSpeichern body.schritte[].kommentar',
+      'durchfuehrungSpeichern body.ergebnisKommentar',
+      'feststellungErfassen body.sachverhalt',
+      'p153Entscheiden body.begruendung',
+      'massnahmeErledigen body.nachweis',
+      'risikoNeuBewerten body.begruendung',
+      'beschreibungsabschnittSpeichern body.bloecke[]|0.text',
+      'beschreibungsreviewZurueckweisen body.begruendung',
+    ]) {
+      expect(
+        mehrzeilig.map((b) => b.pfad),
+        p,
+      ).toContain(p);
+    }
+  });
+
+  it('kein Feld nimmt ein Richtungssteuerzeichen an', () => {
+    const verletzt: string[] = [];
+    for (const b of frei) {
+      for (const [name, z] of Object.entries(RICHTUNG)) {
+        if (b.schema.safeParse(gestoert(harmlos(b)!, z)).success) {
+          verletzt.push(`${b.pfad} nimmt ${name} an`);
+        }
+      }
+    }
+    expect(verletzt).toEqual([]);
+  });
+
+  it('mehrzeilige Freitexte behalten ZWJ, Variantenselektoren und Richtungsmarken', () => {
+    const verletzt: string[] = [];
+    for (const b of mehrzeilig) {
+      // Familie (ZWJ-Sequenz), Herz mit VS16, LRM/RLM/ALM.
+      for (const z of ['\u{1f468}\u200d\u{1f469}', '\u2764\ufe0f', '\u200e', '\u200f', '\u061c']) {
+        if (!b.schema.safeParse(gestoert(harmlos(b)!, z)).success) verletzt.push(`${b.pfad} ${z}`);
+      }
+    }
+    expect(verletzt).toEqual([]);
+  });
+
+  it('Meldung wie bisher: Richtungssteuerzeichen „Unzulässige Zeichen“, NUL und Surrogat die Basismeldung', () => {
+    const kommentar = blaetter.find(
+      (b) => b.pfad === 'durchfuehrungSpeichern body.schritte[].kommentar',
+    )!;
+    const meldung = (s: string) => {
+      const r = kommentar.schema.safeParse(s);
+      return r.success ? null : r.error.issues.map((i) => i.message);
+    };
+    expect(meldung('a\u202eb')).toEqual(['Unzulässige Zeichen']);
+    expect(meldung('a\u2069b')).toEqual(['Unzulässige Zeichen']);
+    expect(meldung('a\u0000b')).toEqual([TEXT_UNZULAESSIG_MELDUNG]);
+    expect(meldung('a\ud800b')).toEqual([TEXT_UNZULAESSIG_MELDUNG]);
+  });
+});
+
+/**
+ * Antworten mit gespeicherten Texten, die Richtungssteuerzeichen bewusst
+ * abweisen (Pfad im Register → Begründung).
+ */
+const ANTWORT_STRENG: Record<string, string> = {
+  'ereignisLesen antwort.anlagen[].dateiname':
+    'Gespeicherte Anlagen: frühere Regel DATEINAME_GESPEICHERT_UNZULAESSIG, die Richtungssteuerzeichen schon immer abwies.',
+  'ereignisAnlageLesen antwort.dateiname': 'wie ereignisLesen (DATEINAME_GESPEICHERT_UNZULAESSIG).',
+  ...Object.fromEntries(
+    [
+      ...[0, 1, 2].map((i) => `nachrichtenOffenLesen antwort.nachrichten[]|${i}.daten.titel`),
+      'nachrichtenOffenLesen antwort.nachrichten[]|3.daten.titel',
+      'nachrichtenOffenLesen antwort.nachrichten[]|3.daten.nummer',
+      'nachrichtenOffenLesen antwort.nachrichten[]|3.daten.typ',
+    ].map((p) => [
+      p,
+      'Vorlagendaten der Nachrichten sind einzeilig; der Abruf verwirft Altdaten (DATEN_UNGUELTIG, RT4-T-03).',
+    ]),
+  ),
+};
+
+describe('Antworten: gespeicherte Texte bleiben lesbar (nur Länge, tcms-s9)', () => {
+  const blaetter: Blatt[] = [];
+  for (const e of ENDPUNKT_LISTE) {
+    if (e.antwortSchema) {
+      blaetter.push(...zeichenkettenBlaetter(e.antwortSchema as z.ZodType, `${e.name} antwort`));
+    }
+  }
+  const frei = blaetter.filter((b) => harmlos(b) !== null && !mitMuster(b));
+
+  it('prüft eine plausible Zahl gespeicherter Textfelder, auch Entwurf und Abschnitte', () => {
+    expect(frei.length).toBeGreaterThanOrEqual(150);
+    for (const p of [
+      'einrichtungLesen antwort.entwurf.teilbereich.abgrenzung',
+      'einrichtungLesen antwort.entwurf.ziele[].text',
+      'einrichtungLesen antwort.entwurf.risiken{}.begruendung',
+      'beschreibungLesen antwort.versionen[].abschnitte[].bloecke[]|0.text',
+      'beschreibungLesen antwort.versionen[].snapshot.abschnitte[].bloecke[]|0.text',
+    ]) {
+      expect(
+        frei.map((b) => b.pfad),
+        p,
+      ).toContain(p);
+    }
+  });
+
+  it('jede Antwort nimmt Richtungssteuerzeichen in gespeicherten Texten an (Ausnahmen begründet)', () => {
+    const verletzt: string[] = [];
+    const streng = new Set<string>();
+    for (const b of frei) {
+      for (const [name, z] of Object.entries(RICHTUNG)) {
+        if (b.schema.safeParse(gestoert(harmlos(b)!, z)).success) continue;
+        if (b.pfad in ANTWORT_STRENG) streng.add(b.pfad);
+        else verletzt.push(`${b.pfad} weist ${name} ab`);
+      }
+    }
+    expect(verletzt).toEqual([]);
+    // Jede Ausnahme wird gebraucht.
+    expect([...streng].sort()).toEqual(Object.keys(ANTWORT_STRENG).sort());
   });
 });

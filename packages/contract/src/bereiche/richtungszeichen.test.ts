@@ -27,8 +27,10 @@ import {
 } from './feststellungen-ereignisse';
 import {
   DATEINAME_UNZULAESSIG,
+  freitext,
   KontaktRollenBodySchema,
   MandantAnkerBodySchema,
+  TEXT_UNZULAESSIG,
   UNZULAESSIGE_ZEICHEN,
 } from './lesepfade';
 
@@ -197,6 +199,31 @@ describe('unzulässige Zeichen: eine Regel für Stammdaten und Dateinamen', () =
       const dateiname = `a${z(cp)}b.pdf`;
       expect(AnlageVerweisSchema.safeParse({ ...VERWEIS, dateiname }).success).toBe(false);
       expect(AnlageGespeichertSchema.safeParse({ ...VERWEIS, dateiname }).success).toBe(true);
+    }
+  });
+
+  it('Basisregel der Freitexte: genau NUL, einzelne Surrogate und Richtungssteuerzeichen (tcms-s9)', () => {
+    // Explizite Einbettung/Überschreibung U+202A–U+202E und Isolierung U+2066–U+2069.
+    const richtung = (cp: number) =>
+      (cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069);
+    const surrogat = (cp: number) => cp >= 0xd800 && cp <= 0xdfff;
+    // Freitext: zusätzlich die Steuerzeichen außer TAB, LF, CR (eigene Regel von `freitext`).
+    const steuer = (cp: number) => (cp <= 0x1f && ![0x09, 0x0a, 0x0d].includes(cp)) || cp === 0x7f;
+    const text = freitext(0, 100);
+    const abweichend: string[] = [];
+    for (let cp = 0; cp <= 0x10ffff; cp += 1) {
+      const basis = cp === 0 || surrogat(cp) || richtung(cp);
+      if (TEXT_UNZULAESSIG.test(`A${z(cp)}B`) !== basis) abweichend.push(hex(cp));
+      if (cp <= 0x30000 || cp >= 0xe0000) {
+        const erwartet = !(basis || steuer(cp));
+        if (text.safeParse(`A${z(cp)}B`).success !== erwartet)
+          abweichend.push(`freitext ${hex(cp)}`);
+      }
+    }
+    expect(abweichend).toEqual([]);
+    // Pflichtliste der Richtungssteuerzeichen, unabhängig von der Umsetzung oben.
+    for (const cp of [0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069]) {
+      expect(TEXT_UNZULAESSIG.test(z(cp)), hex(cp)).toBe(true);
     }
   });
 

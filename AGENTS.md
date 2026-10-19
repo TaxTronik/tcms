@@ -259,7 +259,10 @@ für KI-Werkzeuge.
   eine eigene Artprüfung in der Operation und den registerweiten Test
   (`apps/api/src/__tests__/systemakteur*.test.ts`) angepasst.
 - Jeder Text einer Eingabe weist NUL und einzelne Surrogate ab (`mitTextBasis`, `freitext`,
-  `einzeilig`; RT4-T-08). Scheitert trotzdem ein Text an der Datenbank (22021, 22P05,
+  `einzeilig`; RT4-T-08), ebenso die expliziten Richtungssteuerzeichen U+202A–U+202E und
+  U+2066–U+2069 (Anzeigefälschung in Inhalten mit Beweiswert, tcms-s9); ZWJ,
+  Variantenselektoren und LRM/RLM/ALM bleiben in mehrzeiligen Texten erlaubt (Meldung
+  „Unzulässige Zeichen“). Scheitert trotzdem ein Text an der Datenbank (22021, 22P05,
   22P02, `eingabeFehlercode` aus `@tcms/db`), antworten Dienst (`fehlerAntwort`) und
   Dienstkern (`imDienst`, `imSystemdienst`) `UNGUELTIG`; ins Log nur der Code (`dbFehler`).
 - Logs: JSON-Zeilen ohne Header-Werte, Bodys, Namen und rohe Pfade, nur IDs
@@ -315,7 +318,10 @@ vorhandenen Tokens aufsetzen.
   Teilbereich und Bezeichnungen des Geschäftsprofils) nutzt `einzeilig(min, max)`
   (RT4-T-03); `__tests__/eingabetexte.test.ts` prüft das für jedes Feld des
   Endpunktregisters. Gespeicherte Texte in Antworten prüfen nur die Länge
-  (Altbestände, z. B. `ProfilAntwortenGespeichertSchema`). Einzige Ausnahme: gespeicherte Ereignis-Anlagen
+  (Altbestände, z. B. `ProfilAntwortenGespeichertSchema`, `SetupEntwurfSchema`,
+  `BeschreibungAbschnittSchema`); der Dienst liest gespeicherte Entwürfe und Abschnitte mit
+  denselben Schemas, damit Altbestand weder unlesbar wird noch beim Speichern verloren geht
+  (`eingabetexte.test.ts` prüft jedes Antwortschema). Einzige Ausnahme: gespeicherte Ereignis-Anlagen
   in Antworten (`DATEINAME_GESPEICHERT_UNZULAESSIG`, frühere Regel, weil das
   Meldungs-Audit unveränderlich ist). Die Regel folgt aus Unicode-Eigenschaften
   (`UNZULAESSIG_KLASSE`: Cc, Cf, Zl, Zp, Default_Ignorable_Code_Point, Cs), nie

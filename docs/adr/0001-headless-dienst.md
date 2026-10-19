@@ -313,8 +313,11 @@ Form. Ebenso prüfen Antworten mit gespeicherten Ereignis-Anlagen
 (`AnlageGespeichertSchema`: Detail, `ereignisAnlageLesen`) den Dateinamen nur
 nach der früheren Zeichenregel (`DATEINAME_GESPEICHERT_UNZULAESSIG`), weil die
 Anlagen im hash-verketteten Meldungs-Audit stehen; neue Verweise prüft die
-strengere Regel (`DATEINAME_UNZULAESSIG`). Die kanzleikonsole speist ihren
-Client direkt aus einem Eintrag.
+strengere Regel (`DATEINAME_UNZULAESSIG`). Freitexte einer Eingabe weisen NUL,
+einzelne Surrogate und die expliziten Richtungssteuerzeichen U+202A–U+202E und
+U+2066–U+2069 ab (`400`, tcms-s9); gespeicherte Freitexte in Antworten
+(Entwurf, Abschnitte, Snapshots) prüfen nur die Länge. Die kanzleikonsole
+speist ihren Client direkt aus einem Eintrag.
 
 ## 8. Betrieb (Stufe 2, in der kanzleikonsole)
 
