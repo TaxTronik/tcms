@@ -6,6 +6,9 @@
 // Mandantenkontext: ausschließlich `mitTenant` aus @tcms/db (eine einzige
 // Implementierung). Der `pg`-Pool derselben Laufzeitverbindung dient nur dem
 // nicht mandantengebundenen `akteur_jti` und dem Ping des Health-Checks.
+//
+// Produktion startet das Bundle `dist/server.mjs` mit `node` (scripts/build.mjs,
+// ADR 0001 §8); `pnpm api` startet in der Entwicklung über tsx.
 // =============================================================================
 
 import { readFileSync } from 'node:fs';
@@ -19,11 +22,20 @@ import { jsonLogger } from './log';
 
 const log = jsonLogger();
 
+/** Beim Bündeln gesetzt (TCMS-Version = Image-Tag); in der Entwicklung aus package.json. */
+declare const __TCMS_VERSION__: string | undefined;
+
+function dienstVersion(): string {
+  if (typeof __TCMS_VERSION__ === 'string') return __TCMS_VERSION__;
+  const paket = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    version: string;
+  };
+  return paket.version;
+}
+
 async function starte() {
   const konfiguration = ladeKonfiguration(process.env);
-  const { version } = JSON.parse(
-    readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
-  ) as { version: string };
+  const version = dienstVersion();
 
   // Fail closed: Superuser, BYPASSRLS oder Tabelleneigentum der Laufzeitrolle
   // (DATABASE_URL, dieselbe Variable wie oben geprüft) verhindern den Start.

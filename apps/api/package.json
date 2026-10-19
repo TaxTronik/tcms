@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "tsx --env-file-if-exists=../../.env src/server.ts",
+    "build": "node scripts/build.mjs",
+    "start:dist": "node --enable-source-maps dist/server.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -15,12 +17,13 @@
     "@tcms/service": "workspace:*",
     "hono": "4.13.13",
     "pg": "8.20.0",
-    "tsx": "4.21.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.10.1",
     "@types/pg": "8.15.6",
+    "esbuild": "0.27.7",
+    "tsx": "4.21.0",
     "typescript": "6.0.3",
     "vitest": "4.1.11"
   }
