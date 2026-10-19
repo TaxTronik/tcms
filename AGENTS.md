@@ -34,7 +34,8 @@ für KI-Werkzeuge.
   des Geschäftsprofils (`kern/profil.ts`, Profilregeln in `@tcms/domain`) und
   die Kontrollvorlagen für neue Kontrollen aus dem Katalog
   (`kern/kontroll-vorlage.ts`: Vorbelegung der Zuständigkeit, erster Stand,
-  geplante Durchführungen). Regeln, die mehrere Bereiche brauchen, gibt es nur
+  geplante Durchführungen) und der Zustellstatus der Nachrichten zu Freigaben
+  (`kern/zustellung.ts`). Regeln, die mehrere Bereiche brauchen, gibt es nur
   einmal. Änderungen hier brauchen Tests (`pnpm --filter @tcms/service test`).
   Bereiche unter `src/bereiche/<bereich>` (z. B. `risiken-kontrollen`: Risiken,
   Kontrollen, Geschäftsprofil). TS-05 dort: Zeile in der Transaktion sperren
@@ -144,7 +145,9 @@ für KI-Werkzeuge.
   `nichtBerechtigt(grund, meldung)` (`@tcms/contract`): `403` mit
   maschinenlesbarem `grund` aus `VERWEIGERUNG_GRUENDE`, passend zur abgelehnten
   Rechtefunktion (Rechtefunktionen mit Ergebnisobjekt liefern ihn als
-  `verweigerung`). Eine neue Stelle gehört mit ihrem Grund ins Inventar von
+  `verweigerung`, ebenso die Rechte-Flags der Durchführung für die Oberfläche;
+  Kennzeichen und Operation rechnen mit derselben Funktion). Eine neue Stelle
+  gehört mit ihrem Grund ins Inventar von
   `packages/service/src/__tests__/verweigerung.test.ts`.
 - Vertrauliche Feststellungen (Fachkonzept §13): Für Personen ohne
   `kannVertraulichLesen` ist jede Ausgabe eine eigene Variante
@@ -183,9 +186,16 @@ für KI-Werkzeuge.
   Zweck aus `NACHRICHT_ZWECKE`, nie über Namen; jede trägt `mandantId`, die aus dem Zweck folgende
   `empfaengerArt` und Vorlagendaten `daten` (geprüft gegen den Vertrag, ohne Namen und ohne Code).
   Neue Nachrichten nur über `legeNachrichtAn`. Der Code steht nur in der Spalte `code` der offenen
-  Nachricht. „Zugestellt" setzt `zugestelltAm` und leert `code` und Text; gilt ein Code nicht mehr,
-  verwirft der nächste Abruf die Nachricht (`verworfenAm`, leert `code` und Text) und liefert sie
-  nicht aus. Abholen und Zustellung melden darf ausschließlich der Systemakteur (Stufe 4).
+  Nachricht. „Zugestellt" setzt `zugestelltAm` und leert `code` und Text; „unzustellbar" (Meldung der
+  kanzleikonsole mit Grund aus `NACHRICHT_UNZUSTELLBAR_GRUENDE`) setzt `unzustellbarAm` und
+  `unzustellbarGrund` und leert ebenso; beide schließen sich aus (`409` unter Zeilensperre, CHECK) und
+  sind idempotent (unzustellbar nur mit demselben Grund). Gilt ein Code nicht mehr, verwirft der
+  nächste Abruf die Nachricht (`verworfenAm`, leert `code` und Text) und liefert sie nicht aus.
+  Abholen, Zustellung und Unzustellbarkeit melden darf ausschließlich der Systemakteur (Stufe 4).
+- Die Kanzlei sieht an Freigaben (Historie, Beschreibung, Risikoakzeptanz) den Zustellstatus
+  `zustellung` der jüngsten Nachricht an den aktuellen Empfänger (`kern/zustellung.ts`): nur
+  Nachrichten des Mandanten der Anfrage und dieser Freigabe, nur Zweck, Status, Zeitpunkte und Grund
+  (nie Text, Betreff, Vorlagendaten oder Code), im historischen Stand `null`.
 - Freigegeben wird nur ein eingefrorener Inhalt, dessen SHA-256 zum gespeicherten Hash passt. Ab
   dem Einfrieren (beim Mandanten, freigegeben, abgelöst) verhindert der Trigger
   `BeschreibungVersion_eingefroren` jede Änderung außer den Statusübergängen zu „freigegeben"
@@ -215,7 +225,7 @@ für KI-Werkzeuge.
   Akteursarten aus `akteure` zu (sonst 404): `MANDANT`-Personen nur `/v1/ich`
   und `…/portal/…`, die Portal-Endpunkte nur `MANDANT`-Personen
   (`NUR_MANDANT`, beim Laden von `pruefePortal` erzwungen), der Systemakteur (`knd: SYSTEM`, ohne `rol`/`cli`) nur die
-  zwei Nachrichten-Endpunkte, nie neben einer Person und nie auf
+  drei Nachrichten-Endpunkte, nie neben einer Person und nie auf
   Mandantenpfaden. Pfade unter `/v1/mandanten/:mandantId/…` sind an `cli.id`
   gebunden. Pfadparameter werden nach Body und Query eingesetzt.
 - Operationen für Personen bekommen nur einen `DienstKontext` (Akteur

@@ -111,7 +111,7 @@ Mandantenbindung (3.3, 3.4). Erst danach wird der Body geparst.
 | --------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `KANZLEI` | Mitarbeiter:in der Kanzlei (`rol`, optional `cli`)                                                  | Abschnitt 5; Mandantenpfade nur mit `cli`                                                                                     |
 | `MANDANT` | Mandantenkontakt (`cli` Pflicht, ohne Rollen)                                                       | nur Portal-Endpunkte des eigenen Mandanten, Rollen aus `MandantKontaktRolle`                                                  |
-| `SYSTEM`  | Dienstnutzer der kanzleikonsole je Tenant, z. B. der Worker, der Nachrichten zustellt (kein Mensch) | **nur** `GET /v1/nachrichten/offen` und `POST /v1/nachrichten/:nachrichtId/zugestellt`; jeder andere Endpunkt antwortet `404` |
+| `SYSTEM`  | Dienstnutzer der kanzleikonsole je Tenant, z. B. der Worker, der Nachrichten zustellt (kein Mensch) | **nur** `GET /v1/nachrichten/offen`, `POST /v1/nachrichten/:id/zugestellt` bzw. `…/unzustellbar`; jeder andere Endpunkt `404` |
 
 Der Systemakteur hat weder `rol` noch `cli` (sonst `401`), `sub` ist eine von
 der kanzleikonsole je Tenant fest vergebene UUID, `nam` seine Bezeichnung
@@ -123,7 +123,8 @@ Schichten, jede für sich getestet über alle Einträge des Endpunktregisters:
    Tenant-Transaktion.
 2. Kontexte: Operationen für Personen bekommen nur einen `DienstKontext`
    (`personAkteur`: Systemakteur → `404`, bevor die Transaktion benutzt
-   wird); die zwei Systemoperationen nur einen `SystemKontext`
+   wird); die Systemoperationen (abholen, Zustellung bzw. Unzustellbarkeit
+   melden) nur einen `SystemKontext`
    (`systemAkteur`: jede Person → `404`, auch Admins).
 3. Operationen und Rechte: Die Nachrichten-Operationen prüfen die Art vor
    ihrer Eingabe erneut; jede Rechtefunktion (Abschnitt 5) verweigert dem
@@ -205,7 +206,11 @@ mit lokaler Dateiablage, der Dienst einen Port, der nur Verweise annimmt.
   `VERWALTUNG`, `VERTRAULICH`, `DURCHFUEHREN`, `GEGENZEICHNEN`, `PARTEI`,
   `PORTAL_ROLLE`, `PORTAL_ZUGEORDNET`), je Wert eine Rechtefunktion des
   Dienstes; die kanzleikonsole wählt danach ihre feste Meldung. Erst nach der
-  Sichtbarkeitsprüfung, nie an `404` (kein Existenz-Orakel). `DienstFehler`
+  Sichtbarkeitsprüfung, nie an `404` (kein Existenz-Orakel). Die
+  Rechte-Kennzeichen der Kontrolldurchführung tragen denselben Wert als
+  `verweigerung` (`{ erlaubt, grund, verweigerung }`, `null` bei Erlaubnis oder
+  wenn nur der Zustand entgegensteht – dann `409`); Kennzeichen und
+  Schreiboperation rechnen mit derselben Rechtefunktion. `DienstFehler`
   erzwingt das (Typ und Konstruktor; ein 403 ohne Grund wird `500 INTERN`),
   `FehlerSchema` ebenso, ein statischer Test hält jede Stelle mit ihrem Grund
   fest (`packages/service/src/__tests__/verweigerung.test.ts`).
@@ -239,7 +244,7 @@ Akteursarten); sonst startet er nicht.
 `['KANZLEI', 'MANDANT']` nur für `/v1/ich`, `['MANDANT']` für alle
 Portal-Endpunkte (`…/portal/…`, seit Stufe 5: Kanzleipersonen lesen und
 schreiben über ihre eigenen Endpunkte, ein Portal-Endpunkt antwortet ihnen
-`404`), `['SYSTEM']` nur für die zwei Nachrichten-Endpunkte, leer nur bei
+`404`), `['SYSTEM']` nur für die drei Nachrichten-Endpunkte, leer nur bei
 `health`. `pruefeAkteure` weist beim Laden des Vertrags unbekannte oder
 doppelte Arten ab, ebenso `SYSTEM` neben einer Person oder auf einem
 Mandantenpfad; `pruefePortal` weist jeden Registereintrag ab, der einen
@@ -252,7 +257,22 @@ widersprechen kann.
 **Postausgang (Stufe 4).** Der Zustell-Worker der kanzleikonsole holt mit dem
 Systemakteur `GET /v1/nachrichten/offen?limit=` (1–100, Standard 50, älteste
 zuerst) und meldet `POST /v1/nachrichten/:nachrichtId/zugestellt` (idempotent
-für Nachrichten des eigenen Tenants; unbekannte und fremde IDs `404`). Eine
+für Nachrichten des eigenen Tenants; unbekannte und fremde IDs `404`). Kann er
+eine Nachricht nicht zustellen (Empfänger gehört nicht zum Mandanten, kein
+bestätigter Portalzugang, Frist abgelaufen), meldet er
+`POST /v1/nachrichten/:nachrichtId/unzustellbar` mit `{ grund }`
+(`EMPFAENGER_UNGUELTIG`, `KEIN_PORTALZUGANG`, `ABGELAUFEN`, `SONSTIGES`): Das
+setzt `unzustellbarAm`/`unzustellbarGrund`, leert `code` und `text` wie die
+Zustellung, die Nachricht wird nicht mehr ausgeliefert, Audit
+`tcms.nachricht.unzustellbar` (Zweck, Empfänger-ID, Grund, keine Inhalte).
+Idempotent mit demselben Grund; ein anderer Grund → `409`. Zugestellt und
+unzustellbar schließen sich aus (`409` in beide Richtungen, unter Zeilensperre
+geprüft, zusätzlich CHECK). Wo die Kanzlei Freigaben sieht
+(Freigabenhistorie, CMS-Beschreibung, Risikoakzeptanz), trägt jede Freigabe
+`zustellung`: Status der jüngsten Nachricht an den aktuellen Empfänger
+(`OFFEN`, `ZUGESTELLT`, `UNZUSTELLBAR` mit `grund`, `VERWORFEN`; Zweck und
+Zeitpunkte, keine Inhalte; `null` ohne Nachricht und im historischen Stand),
+damit sie bei „unzustellbar" neu adressieren kann. Eine
 offene Nachricht ist nach `zweck` diskriminiert und trägt `mandantId`,
 `empfaengerId`, `empfaengerArt` (`KONTAKT` für die drei Freigabe-Zwecke,
 `KANZLEI` für `EREIGNIS_GEMELDET`), `daten` (Vorlagendaten: `freigabeId`,
@@ -266,8 +286,9 @@ Freigabe eines anderen Mandanten), liefert der Abruf die Nachricht nicht mehr
 aus und leert sie (`verworfenAm`, Audit `tcms.nachricht.verworfen` mit Grund).
 Ausgeliefert wird nur, was geprüft ist (Kandidaten und je Abruf die ältesten
 1 000 offenen Code-Nachrichten). CHECKs in der Datenbank erzwingen
-Empfängerart je Zweck, Codeformat und leeren Klartext nach Zustellung oder
-Verwerfen. Pfadparameter prüft er nach der
+Empfängerart je Zweck, Codeformat, leeren Klartext nach Zustellung,
+Unzustellbarkeit oder Verwerfen, den Grund genau bei „unzustellbar" und den
+Ausschluss von zugestellt und unzustellbar. Pfadparameter prüft er nach der
 Mandantenbindung mit `paramsSchema` (`400`). Die API-Tests prüfen jede Antwort
 gegen `antwortSchema` bzw. `FehlerSchema`. Antwortschemas sind streng
 (unbekannte Felder abgewiesen), außer dem Inhalt eingefrorener

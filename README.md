@@ -128,7 +128,9 @@ auf ein Objekt eines anderen Tenants scheitert also schon in der Datenbank.
   `20261019200000_audit_pos` ergänzt die Audit-Position `pos` je Tenant (RT-03; ebenfalls ohne
   Bestandsdaten). `20261019230000_nachrichten_strukturiert` ergänzt den Postausgang um Mandant
   (Fremdschlüssel), Empfängerart, Vorlagendaten, Code und `verworfenAm` samt CHECKs (Stufe 4, ohne
-  Bestandsdaten).
+  Bestandsdaten). `20261019234500_nachricht_unzustellbar` ergänzt `unzustellbarAm`/`unzustellbarGrund`
+  (Enum) mit CHECKs: Grund genau bei „unzustellbar", zugestellt und unzustellbar schließen sich aus,
+  kein Klartext danach.
 
 DB-Tests (RLS je Tabelle aus dem Katalog, Rechte, Tenantgrenzen, Audit-Kette bei parallelen
 Schreibern) laufen gegen eine migrierte Datenbank:
@@ -271,7 +273,7 @@ Header-Werte und Bodys). Fremde Mandanten und nicht kanonische Pfade ergeben `40
 
 **Systemakteur (Stufe 4).** Für Arbeit ohne Person (Zustell-Worker) signiert die kanzleikonsole
 `knd: 'SYSTEM'` mit `sub` = feste UUID des Dienstnutzers je Tenant und `nam` = Bezeichnung, ohne `rol`
-und ohne `cli`. Er erreicht ausschließlich die zwei Nachrichten-Endpunkte (`akteure: ['SYSTEM']`); jeder
+und ohne `cli`. Er erreicht ausschließlich die drei Nachrichten-Endpunkte (`akteure: ['SYSTEM']`); jeder
 andere Endpunkt antwortet `404`, und keine Person – auch kein Admin – erreicht die Nachrichten-Endpunkte.
 Im Audit steht er als `System: <nam>` mit `detail.systemakteur: true`.
 
@@ -293,6 +295,9 @@ und Zuständigkeit ergänzt die kanzleikonsole):
 Rechte-Kennzeichen für die Oberfläche berechnet der Dienst mit denselben Rechtefunktionen wie die
 Schreiboperationen: Kontext `rechte` (`bearbeiten`, `wuerdigen`) und `mandant.rechte.bearbeiten` (Anker
 pflegen), beide im historischen Stand `false`; `GET …/kontakte` liefert `rechte.bearbeiten` (Rollen setzen).
+Die Durchführung (Kanzlei und Portal-Aufgabe) liefert je Handlung `{ erlaubt, grund, verweigerung }`:
+`verweigerung` ist der `grund` des `403`, den die Operation liefern würde, `null` bei Erlaubnis oder wenn
+nur der Zustand entgegensteht (`409`).
 
 **Endpunkte Kontrolldurchführung** (`durchfuehrung`, Pfade unter `/v1/mandanten/:mandantId/`;
 Rechte prüft `@tcms/service`, nicht Sichtbares ergibt `404`, fehlendes Recht `403` mit Grund, ein
@@ -301,7 +306,7 @@ nicht erlaubter oder gleichzeitig geänderter Status `409`, Mängel beim Einreic
 
 | Methode | Pfad                                                                                         | Recht                                                                   |
 | ------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| GET     | `durchfuehrungen/:id?stand=`                                                                 | Kanzlei mit Bezug (`kannLesen`); Rechte als Flags                       |
+| GET     | `durchfuehrungen/:id?stand=`                                                                 | Kanzlei mit Bezug (`kannLesen`); Rechte als Flags (Text und Grund)      |
 | POST    | `durchfuehrungen/:id/beginnen`, `…/speichern`, `…/einreichen`                                | zugewiesene Person oder Vertretung                                      |
 | POST    | `durchfuehrungen/:id/nachweise` (201), `…/nachweise/:n/entfernen`                            | zugewiesene Person; Entfernen nur vor der Einreichung                   |
 | POST    | `durchfuehrungen/:id/zurueckweisen`, `…/gegenzeichnen`                                       | Gegenzeichnung bzw. zuständige BT, nie Beteiligte (Vier-Augen)          |
@@ -372,6 +377,7 @@ Rechte prüft `packages/service`, Eingaben und Antworten in
 | ------- | ------------------------------------------------------ | --------------------------------------------------------------------------- |
 | GET     | `/v1/nachrichten/offen?limit=`                         | nur Systemakteur (tenantweit); verfallene Codes nicht ausgeliefert, geleert |
 | POST    | `/v1/nachrichten/:nachrichtId/zugestellt`              | nur Systemakteur; idempotent, leert Text und Code; fremde ID `404`          |
+| POST    | `/v1/nachrichten/:nachrichtId/unzustellbar`            | nur Systemakteur; `{ grund }`, idempotent je Grund, leert Text und Code     |
 | GET     | `…/einrichtung?berufstraegerId=&bearbeitungId=&…`      | `kannLesen`                                                                 |
 | POST    | `…/einrichtung/entwurf`, `…/einrichtung/anlegen`       | `kannBearbeiten`; ein Programm je Mandant                                   |
 | GET     | `…/beschreibung?stand=`                                | `kannLesen`                                                                 |
@@ -389,6 +395,14 @@ bei `EREIGNIS_GEMELDET`) und Vorlagendaten `daten`; `betreff`/`text` bleiben Rü
 in der offenen Nachricht und wird bei Zustellung bzw. Verwerfen (Freigabe erledigt, Code abgelaufen,
 ersetzt, gesperrt oder neu adressiert) geleert. Ein falscher Code ergibt `200` mit
 `freigegeben: false` (der Fehlversuch bleibt gezählt und protokolliert).
+
+Kann die kanzleikonsole eine Nachricht nicht zustellen, meldet ihr Systemakteur sie als unzustellbar
+(`grund`: `EMPFAENGER_UNGUELTIG`, `KEIN_PORTALZUGANG`, `ABGELAUFEN`, `SONSTIGES`); die Nachricht ist
+damit abgeschlossen wie bei der Zustellung (Audit `tcms.nachricht.unzustellbar` ohne Inhalte).
+Freigabenhistorie, CMS-Beschreibung (`freigaben`) und Risikoakzeptanzen tragen je Freigabe
+`zustellung`: Status der jüngsten Nachricht an den aktuellen Empfänger (`OFFEN`, `ZUGESTELLT`,
+`UNZUSTELLBAR` mit `grund`, `VERWORFEN`), mit Zweck und Zeitpunkten, ohne Inhalte; `null` ohne Nachricht
+und im historischen Stand. Bei „unzustellbar" adressiert die Kanzlei neu.
 
 Tests: `pnpm --filter @tcms/api test`. Die PostgreSQL-Tests laufen gegen eine Datenbank, die wie in
 Produktion aufgebaut ist (Bootstrap und Migration wie oben unter „Datenbank“), ausschließlich als
