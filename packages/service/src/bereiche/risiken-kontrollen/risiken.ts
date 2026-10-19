@@ -398,6 +398,7 @@ async function bewerte(
     return {
       wert: {
         risikoId,
+        code: risiko.code,
         standId: neu.id,
         version: neu.version,
         geaendert,
@@ -712,7 +713,7 @@ export async function risikoZurueckweisen(
       });
       if (z.count !== 1) throw konflikt('Der Freigabestatus hat sich inzwischen geändert.');
       return {
-        wert: { risikoId: risiko.id, freigabe: 'BEWERTET' as const },
+        wert: { risikoId: risiko.id, code: risiko.code, freigabe: 'BEWERTET' as const },
         protokoll: {
           aktion: 'tcms.risiko.zurueckgewiesen',
           objektTyp: 'Risiko',

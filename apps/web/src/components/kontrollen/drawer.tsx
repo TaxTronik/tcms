@@ -143,7 +143,14 @@ export function KontrolleDrawer({
   const freigegeben = k.abweichung?.freigegebenVon ? k.abweichung : null;
   const antragVon = detail?.abweichungBeantragtVon ?? null;
   const darfEntscheiden = zweitePerson(nutzer, antragVon);
-  const felder = { id: k.id, stand: seite.standIso };
+  // Mandant, gesehener Kontrollstand (TS-05) und Code für die Meldung gehen mit jeder Aktion mit.
+  const felder = {
+    id: k.id,
+    stand: seite.standIso,
+    mandantId: ctx.mandant.id,
+    standId: k.standId,
+    code: k.code,
+  };
   const kanzlei = [...ctx.personen.values()]
     .filter((p) => p.art === 'KANZLEI')
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -469,9 +476,10 @@ export function KontrolleDrawer({
             {offen ? (
               <>
                 <AktionsForm action={frequenzAbweichungEntscheiden} className="inline-form">
-                  <input type="hidden" name="id" value={k.id} />
+                  {Object.entries(felder).map(([n, v]) => (
+                    <input key={n} type="hidden" name={n} value={v} />
+                  ))}
                   <input type="hidden" name="entscheidung" value="freigeben" />
-                  <input type="hidden" name="stand" value={seite.standIso} />
                   <SubmitButton
                     className="btn-primary btn-tiny"
                     disabled={!!sperre || !darfEntscheiden}
@@ -599,8 +607,9 @@ export function KontrolleDrawer({
             </summary>
             <div className="details-body">
               <AktionsForm action={verantwortlicheAendern} className="col">
-                <input type="hidden" name="id" value={k.id} />
-                <input type="hidden" name="stand" value={seite.standIso} />
+                {Object.entries(felder).map(([n, v]) => (
+                  <input key={n} type="hidden" name={n} value={v} />
+                ))}
                 <fieldset
                   disabled={!!sperre}
                   style={{ border: 0, padding: 0, margin: 0 }}

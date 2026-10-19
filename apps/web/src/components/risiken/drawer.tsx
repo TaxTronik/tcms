@@ -139,7 +139,8 @@ export function RisikoDrawer({
   const betriebAktiv =
     !!ctx.programm?.wirksamAb && ctx.programm.wirksamAb.getTime() <= ctx.stand.getTime();
   const turnus = ctx.programm?.erklaerungsTurnus ?? 'MONATLICH';
-  const felder = { id: r.id, stand: seite.standIso };
+  // Mandant und gesehener Risikostand (TS-05) gehen mit jeder Aktion mit.
+  const felder = { id: r.id, stand: seite.standIso, mandantId: ctx.mandant.id, standId: r.standId };
 
   const ende = ctx.stand.getTime() + 86_400_000 - 1;
   // Status zum Stichtag: später entschiedene Übersteuerungen galten dort noch als beantragt.
@@ -695,6 +696,7 @@ export function RisikoDrawer({
                   <div className="row-s">
                     <AktionsForm action={uebersteuerungEntscheiden} className="inline-form">
                       <input type="hidden" name="id" value={u.id} />
+                      <input type="hidden" name="mandantId" value={ctx.mandant.id} />
                       <input type="hidden" name="entscheidung" value="freigeben" />
                       <input type="hidden" name="stand" value={seite.standIso} />
                       <SubmitButton
@@ -709,7 +711,12 @@ export function RisikoDrawer({
                       ausloeser="Ablehnen…"
                       titel="Übersteuerung ablehnen"
                       action={uebersteuerungEntscheiden}
-                      felder={{ id: u.id, entscheidung: 'ablehnen', stand: seite.standIso }}
+                      felder={{
+                        id: u.id,
+                        entscheidung: 'ablehnen',
+                        stand: seite.standIso,
+                        mandantId: ctx.mandant.id,
+                      }}
                       bestaetigen="Ablehnen"
                       vierAugen={false}
                       disabled={!!grund}
@@ -772,6 +779,7 @@ export function RisikoDrawer({
           {r.freigabe === 'BEWERTET' ? (
             <AktionsForm action={risikenFreigabeSchritt}>
               <input type="hidden" name="ids" value={r.id} />
+              <input type="hidden" name="mandantId" value={ctx.mandant.id} />
               <input type="hidden" name="aktion" value="einreichen" />
               <input type="hidden" name="stand" value={seite.standIso} />
               <SubmitButton
@@ -787,6 +795,7 @@ export function RisikoDrawer({
             <div className="row-s">
               <AktionsForm action={risikenFreigabeSchritt} className="inline-form">
                 <input type="hidden" name="ids" value={r.id} />
+                <input type="hidden" name="mandantId" value={ctx.mandant.id} />
                 <input type="hidden" name="aktion" value="freigeben" />
                 <input type="hidden" name="stand" value={seite.standIso} />
                 <SubmitButton

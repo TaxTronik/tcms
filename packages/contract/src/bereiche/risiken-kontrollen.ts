@@ -636,6 +636,7 @@ export const RisikoDetailSchema = z
 export const NeuBewertungErgebnisSchema = z
   .object({
     risikoId: z.string(),
+    code: z.string(),
     standId: z.string(),
     version: z.number().int(),
     geaendert: z.boolean(),
@@ -673,7 +674,7 @@ export const FreigabeSchrittErgebnisSchema = z
   .strict();
 
 export const RisikoZurueckgewiesenSchema = z
-  .object({ risikoId: z.string(), freigabe: RisikoFreigabeSchema })
+  .object({ risikoId: z.string(), code: z.string(), freigabe: RisikoFreigabeSchema })
   .strict();
 
 export const RisikoakzeptanzAngefordertSchema = z
@@ -848,7 +849,10 @@ export const ProfilDatenSchema = z
   .object({
     ...lesestand,
     version1Am: zeitpunkt.nullable(),
-    /** Profilstände bis zum Stichtag, aufsteigend nach Beginn. */
+    /**
+     * Bis zum Stichtag erfasste Profilstände (auch im Voraus erfasste, später
+     * gültige), aufsteigend nach Beginn; `gueltigBis` nach dem Stichtag gilt als offen.
+     */
     staende: z.array(
       z
         .object({

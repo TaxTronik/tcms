@@ -20,11 +20,7 @@ import { kurzName } from '@/components/risiken/labels';
 import { mitParams, param } from '@/components/risiken/url';
 import { KEIN_RECHT } from '@/server/aktion';
 import { personName, type KontrolleView } from '@/server/kontext';
-import {
-  ladeFeststellungenJeDurchfuehrung,
-  ladeKontrolleDetail,
-  ladeOffeneAbweichungen,
-} from '@/server/kontrollen-daten';
+import { ladeKontrollenZusatz } from '@/server/kontrollen-daten';
 import { ladeStaffSeite, NUR_AKTUELL } from '@/server/seite';
 
 export const metadata = { title: 'Kontrollmatrix' };
@@ -102,11 +98,10 @@ export default async function Kontrollmatrix({
   const sperre = ctx.historisch ? NUR_AKTUELL : seite.darfBearbeiten ? null : KEIN_RECHT;
   const ansicht = param(sp, 'ansicht') === 'matrix' ? 'matrix' : 'liste';
   const auswahl = ctx.kontrollen.find((k) => k.id === param(sp, 'kontrolle')) ?? null;
-  const [feststellungen, offeneAbweichungen, detail] = await Promise.all([
-    ladeFeststellungenJeDurchfuehrung(ctx),
-    ladeOffeneAbweichungen(ctx),
-    auswahl ? ladeKontrolleDetail(auswahl.id, ctx.stand) : Promise.resolve(null),
-  ]);
+  const { feststellungen, offeneAbweichungen, detail } = await ladeKontrollenZusatz(
+    ctx,
+    auswahl?.id ?? null,
+  );
   const kontrolleHref = (kid: string) => mitParams(pfad, sp, { kontrolle: kid });
   const risikoHref = (rid: string) => mitStand(`${basis}/risiken?risiko=${rid}`);
   const risikoCode = new Map(ctx.risiken.map((r) => [r.id, r.code]));

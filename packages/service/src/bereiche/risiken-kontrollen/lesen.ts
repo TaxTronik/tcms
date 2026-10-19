@@ -646,8 +646,9 @@ export async function ladeProfil(ctx: DienstKontext, eingabe: ProfilLesen): Prom
     select: {
       id: true,
       version1Am: true,
+      // Bis zum Stichtag erfasste Stände, auch im Voraus erfasste (künftig gültige).
       profile: {
-        where: { gueltigAb: { lte: ende } },
+        where: { createdAt: { lte: ende } },
         orderBy: [{ gueltigAb: 'asc' }, { createdAt: 'asc' }],
       },
       risiken: {

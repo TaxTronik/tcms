@@ -38,14 +38,17 @@ function Senden({
 /** „Profil ändern": neuer Profilstand mit Gültig-ab-Datum; Trigger laut Fachkonzept § 4/§ 7. */
 export function ProfilAenderung({
   aktion,
-  programmId,
+  mandantId,
+  profilStandId,
   start,
   personen,
   heuteIso,
   abbrechen,
 }: {
   aktion: Aktion;
-  programmId: string;
+  mandantId: string;
+  /** Offener Stand, auf dem die Änderung beruht (TS-05: sonst Konflikt). */
+  profilStandId: string;
   start: Geschaeftsprofil;
   personen: PersonInfo[];
   heuteIso: string;
@@ -55,7 +58,8 @@ export function ProfilAenderung({
   const [state, formAction] = useActionState(aktion, null);
   return (
     <form action={formAction}>
-      <input type="hidden" name="programmId" value={programmId} />
+      <input type="hidden" name="mandantId" value={mandantId} />
+      <input type="hidden" name="profilStandId" value={profilStandId} />
       <input type="hidden" name="profil" value={JSON.stringify(profil)} />
       <div className="p-4">
         <ProfilFormular
@@ -116,14 +120,14 @@ export function ProfilAenderung({
 /** „Risiko aufnehmen" für einen deterministischen Profilvorschlag (ein Klick, protokolliert). */
 export function RisikoAufnehmen({
   aktion,
-  programmId,
+  mandantId,
   code,
   darf,
   grund,
   label = 'Risiko aufnehmen',
 }: {
   aktion: Aktion;
-  programmId: string;
+  mandantId: string;
   code: string;
   darf: boolean;
   grund?: string;
@@ -132,7 +136,7 @@ export function RisikoAufnehmen({
   const [state, formAction] = useActionState(aktion, null);
   return (
     <form action={formAction} className="col-s" style={{ alignItems: 'flex-end' }}>
-      <input type="hidden" name="programmId" value={programmId} />
+      <input type="hidden" name="mandantId" value={mandantId} />
       <input type="hidden" name="code" value={code} />
       {state?.ok ? (
         <span className="badge-green">
