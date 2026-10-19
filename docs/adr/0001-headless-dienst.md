@@ -93,6 +93,13 @@ wird der Body geparst.
 - Mandantenübergreifende Lesepfade (Portfolio, Arbeitskorb) bekommen die Liste
   der zugänglichen Mandanten-IDs im Body (gebunden über `req.b`, höchstens
   5 000 IDs) und liefern nur diese.
+- Dieselben Lesepfade tragen je Mandant die Zuständigkeit wie `cli`:
+  `bt` (Mandanten, für die die Person zuständige:r Berufsträger:in ist) und
+  `hb` (Hauptbearbeitung) als Teilmengen von `mandantIds` im selben Body,
+  ebenfalls über `req.b` gebunden. Doppelte oder nicht in `mandantIds`
+  enthaltene Einträge → `400`. Die Angaben steuern nur Auswahl und
+  Zuständigkeitskennzeichen der Liste; Schreibrechte entstehen daraus nie
+  (Schreiben nur mandantenbezogen mit `cli`).
 
 ## 4. Mandantentrennung in der Datenbank
 
@@ -123,7 +130,8 @@ beginnt mit dieser Stufe neu (eine neue Init-Migration ersetzt die bisherige).
   das Audit speichert zusätzlich `actorName` aus `nam`.
 - `Mandant` wird zum Anker: `id` = Mandanten-ID der kanzleikonsole, dazu
   `tenant_id`, `name`, `rechtsform` (von der kanzleikonsole beim Einrichten
-  übergeben und per Endpunkt aktualisierbar). `berufstraegerId` und
+  übergeben und per Endpunkt aktualisierbar). Schlüssel ist `(tenant_id, id)`:
+  Das Anlegen verrät nie, ob dieselbe ID in einem anderen Tenant besteht. `berufstraegerId` und
   `bearbeitungId` entfallen; Zuständigkeit kommt aus `cli.bt` / `cli.hb`.
 - Neu `MandantKontaktRolle (tenant_id, mandant_id, kontakt_id, rolle, funktion, aktiv)`:
   Rollen der Mandantenseite (`GESETZLICHER_VERTRETER`,
@@ -157,6 +165,14 @@ mit lokaler Dateiablage, der Dienst einen Port, der nur Verweise annimmt.
 - Datumswerte als ISO-8601-Strings, keine `Map`/`Set`/`Date` im JSON.
 - Lesen zu einem Stichtag: `?stand=YYYY-MM-DD`. Schreibende Endpunkte nehmen
   **keinen** Stichtag an und arbeiten immer auf dem aktuellen Stand.
+- Personen-IDs der kanzleikonsole für Vorbelegung und Anzeige (nie für
+  Rechte): Schreibende Endpunkte nehmen sie im Body, lesende als Query –
+  `GET …/einrichtung?berufstraegerId=&bearbeitungId=&vertretungId=`
+  (Vorbelegung der Zuständigkeiten) und
+  `GET …/beschreibung?stand=&berufstraegerId=&bearbeitungId=` (Baustein
+  „Verantwortung"). Die Query ist Teil von `req.p` und damit von der
+  Akteursbestätigung gebunden; nur UUIDs, unbekannte oder doppelte Parameter
+  → `400`. Rechte kommen ausschließlich aus der Akteursbestätigung.
 - „Heute“ kommt aus einer injizierten Uhr; `TCMS_DEMO_TODAY` wirkt nur in der
   Demo-Oberfläche, nie im Dienst.
 - Antwort-Header: `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`.
