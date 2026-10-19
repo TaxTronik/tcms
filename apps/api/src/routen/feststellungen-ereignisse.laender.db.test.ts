@@ -76,4 +76,23 @@ describe.skipIf(!AKTIV)('API Länder-Monitor gegen PostgreSQL', () => {
     const l = await rufe(HB, 'GET', `${B}/laender?stand=2026-10-01`);
     expect(LaenderSchema.parse(l.json['daten']).historisch).toBe(true);
   });
+
+  it('Länderbezüge je Land: Ereignisse, die das Land nennen; vertrauliche Feststellungen nie', async () => {
+    const neu = await rufe(HB, 'POST', `${B}/laender`, {
+      datenstand: '2026-10-01',
+      land: landEingabe('LV'),
+    });
+    expect(neu.status).toBe(201);
+    const e = await ereignis(w.programm, [{ art: 'HINWEIS' }], {
+      titel: 'Neue Meldepflicht in Lettland',
+    });
+    const geheim = await feststellung({ titel: 'LV Selbstanzeige vorbereiten', vertraulich: true });
+    const l = LaenderSchema.parse((await rufe(HB, 'GET', `${B}/laender`)).json['daten']);
+    const lv = l.bezuege.find((b) => b.land === 'LV')!;
+    expect(lv.ereignisse).toContain(e.id);
+    expect(lv.risiken.every((r) => r.grund.length > 0)).toBe(true);
+    expect(l.bezuege.map((b) => b.land).sort()).toEqual(l.historie.map((h) => h.land).sort());
+    expect(JSON.stringify(l)).not.toContain(geheim.id);
+    expect(JSON.stringify(l)).not.toContain('Selbstanzeige');
+  });
 });

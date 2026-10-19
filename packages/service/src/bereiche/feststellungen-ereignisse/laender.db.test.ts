@@ -11,6 +11,7 @@ import { fuegeLandHinzu, ladeLaender, speichereLandStaende } from './laender';
 import {
   akteure,
   baueWelt,
+  eindeutig,
   fehlerVon,
   genauEinerKonflikt,
   gleichzeitig,
@@ -158,5 +159,128 @@ describe.skipIf(!AKTIV)('Länder-Monitor gegen PostgreSQL', () => {
     );
     expect(alt.historie).toEqual([]);
     expect(alt.historisch).toBe(true);
+  });
+
+  it('Länderbezüge: aktive Risiken mit Grund, Kontrollen daran, Ereignisse, die das Land nennen', async () => {
+    const aktivAb = new Date('2026-01-01T00:00:00Z');
+    const ereignis = (titel: string, beschreibung: string, gemeldetAm: string) =>
+      inTenant(w, (tx) =>
+        tx.ereignis.create({
+          data: {
+            programmId: w.programm,
+            nummer: eindeutig('E'),
+            typ: 'SONST',
+            titel,
+            beschreibung,
+            quelle: 'MANUELL',
+            gemeldetVon: w.p.hb,
+            gemeldetAm: new Date(gemeldetAm),
+            ereignisDatum: new Date(gemeldetAm),
+            status: 'NEU',
+          },
+          select: { id: true },
+        }),
+      );
+    const [code, name, fremd, spaet] = await Promise.all([
+      ereignis('Neue Rechnungsregeln LU', 'Hinweis der Steuerverwaltung', '2026-10-05T09:00:00Z'),
+      ereignis('Hinweis', 'Lager in Luxemburg geplant', '2026-10-06T09:00:00Z'),
+      ereignis('LUX-Anbindung', 'Schnittstelle LUXOR', '2026-10-07T09:00:00Z'),
+      ereignis('LU nach dem Stichtag', 'später', '2026-10-15T09:00:00Z'),
+    ]);
+    await inTenant(w, async (tx) => {
+      // EC-UST-02 (Steuersätze) aktiv mit Stand und Kontrolle K-EC-02 daran.
+      await tx.risikoStand.create({
+        data: {
+          risikoId: w.risiko,
+          version: 1,
+          titel: 'Falscher Steuersatz',
+          fehlerquelle: 'Stammdaten',
+          folge: 'Nachzahlung',
+          normanker: [],
+          s: 'M',
+          w: 'MOEGLICH',
+          r: 2,
+          gt: 'FF',
+          modell: 'test',
+          gueltigAb: aktivAb,
+        },
+      });
+      await tx.risikoKontrolle.create({ data: { risikoId: w.risiko, kontrolleId: w.kontrolle } });
+      // EC-UST-03 (OSS) passt zum Land, ist aber erst 2027 aktiv: kein Bezug.
+      const spaeter = await tx.risiko.create({
+        data: {
+          programmId: w.programm,
+          code: 'EC-UST-03',
+          aktivAb: new Date('2027-01-01T00:00:00Z'),
+          entscheidung: 'UEBERNOMMEN',
+        },
+      });
+      await tx.risikoStand.create({
+        data: {
+          risikoId: spaeter.id,
+          version: 1,
+          titel: 'OSS',
+          fehlerquelle: 'Meldung',
+          folge: 'Nachzahlung',
+          normanker: [],
+          s: 'M',
+          w: 'MOEGLICH',
+          r: 2,
+          gt: 'FF',
+          modell: 'test',
+          gueltigAb: new Date('2027-01-01T00:00:00Z'),
+        },
+      });
+    });
+    // Länderstand LU (OSS, ohne Lager), am 01.10. erfasst – auch im Stand vom 10.10. sichtbar.
+    await inTenant(w, (tx) =>
+      tx.landStand.create({
+        data: {
+          programmId: w.programm,
+          land: 'LU',
+          fernverkaeufeLfdEur: 1200,
+          fernverkaeufeVorjahrEur: 800,
+          lagerSeit: null,
+          oss: true,
+          lokaleUstNr: false,
+          zmRelevant: false,
+          steuersaetzeGeprueftAm: new Date('2026-09-30T00:00:00Z'),
+          stand: new Date('2026-10-01T00:00:00Z'),
+          quelle: 'MANUELL',
+          erfasstVon: w.p.hb,
+          createdAt: new Date('2026-10-01T09:00:00Z'),
+        },
+      }),
+    );
+    const lies = (stand?: string) =>
+      im(A.leser, (ctx) => ladeLaender(ctx, { mandantId: w.mandant, ...(stand ? { stand } : {}) }));
+    const l = await lies();
+    expect(LaenderSchema.parse(l)).toEqual(l);
+    const lu = l.bezuege.find((b) => b.land === 'LU')!;
+    expect(lu.risiken).toEqual([{ code: 'EC-UST-02', grund: 'Steuersätze in Luxemburg' }]);
+    expect(lu.kontrollen).toEqual(['K-EC-02']);
+    expect(lu.ereignisse.sort()).toEqual([code.id, name.id, spaet.id].sort());
+    expect(lu.ereignisse).not.toContain(fremd.id);
+    // Jedes Land im Monitor hat genau einen Eintrag.
+    expect(l.bezuege.map((b) => b.land).sort()).toEqual(l.historie.map((h) => h.land).sort());
+    // Stichtag: Ereignisse erst bis zum Ende des Stichtags.
+    const frueher = (await lies('2026-10-10')).bezuege.find((b) => b.land === 'LU')!;
+    expect(frueher.ereignisse.sort()).toEqual([code.id, name.id].sort());
+
+    // RT-01: Eine vertrauliche Feststellung zum Land ändert keine Ausgabe – weder
+    // `feststellungen` noch die Bezüge (kein Inhalt, keine Zahl, kein Orakel).
+    const vorher = await lies();
+    const geheim = await neueFeststellung(w, {
+      titel: 'LU Betriebsstätte geheim',
+      vertraulich: true,
+    });
+    await inTenant(w, (tx) =>
+      tx.betroffeneErklaerung.create({
+        data: { feststellungId: geheim.id, steuerart: 'USt', land: 'LU', zeitraum: '2026' },
+      }),
+    );
+    const nachher = await lies();
+    expect(nachher).toEqual(vorher);
+    expect(JSON.stringify(nachher)).not.toContain(geheim.id);
   });
 });

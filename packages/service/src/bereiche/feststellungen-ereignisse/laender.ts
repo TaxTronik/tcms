@@ -32,6 +32,7 @@ import {
   type FeststellungStatus,
 } from '@tcms/domain';
 import type { Protokoll } from '../../audit';
+import { ladeKontext, type EreignisView, type TcmsKontext } from '../../kern/tcms-kontext';
 import { heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { kannBearbeiten } from '../../rechte';
@@ -69,6 +70,94 @@ function datumDe(d: Date): string {
 }
 
 // ---------------------------------------------------------------------------
+// Länderbezüge (bisher in der Demo, `apps/web/src/server/laender-daten.ts`):
+// deterministisch aus den Merkmalen des jüngsten Länderstands und dem
+// Tax-CMS-Kontext zum Stichtag, jeder Risikobezug mit Grund (AGENTS.md Regel 7).
+// ---------------------------------------------------------------------------
+
+/** Merkmale eines Länderstands, aus denen die Bezüge folgen. */
+export interface LandMerkmale {
+  land: string;
+  lagerSeit: string | null;
+  oss: boolean;
+  zmRelevant: boolean;
+}
+
+/**
+ * Katalogrisiken mit Bezug zu einem Land und Grund (Fachkonzept §5
+ * EC-UST-01…-06, EC-ERT): Fernverkäufe ins EU-Ausland, Steuersätze, OSS,
+ * Lager (Abgrenzung OSS/Lagerland, Registrierung, Bestände, Betriebsstätte),
+ * ZM-relevante Bewegungen. Nur die Kandidaten; aktiv sind sie erst im Inventar.
+ */
+export function risikoBezuegeZumLand(l: LandMerkmale): { code: string; grund: string }[] {
+  const name = LAND_NAME[l.land] ?? l.land;
+  const lager = l.lagerSeit ? `Lager in ${l.land} seit ${fmtMonatJahr(l.lagerSeit)}` : null;
+  const kandidaten: [string, string | null][] = [
+    ['EC-UST-01', istEuAusland(l.land) ? `EU-Fernverkäufe nach ${name}` : null],
+    ['EC-UST-02', `Steuersätze in ${name}`],
+    ['EC-UST-03', l.oss ? `Umsätze in ${l.land} über OSS` : null],
+    ['EC-UST-04', lager && l.oss ? `${lager}: Abgrenzung OSS / Lagerland` : null],
+    ['EC-UST-05', lager],
+    ['EC-UST-06', l.zmRelevant ? `ZM-relevante Bewegungen mit ${l.land}` : null],
+    ['EC-ERT-01', lager ? `Bestände im Lager ${l.land}` : null],
+    [
+      'EC-ERT-03',
+      lager && l.lagerSeit
+        ? `Betriebsstätte durch das Lager in ${l.land} seit ${fmtMonatJahr(l.lagerSeit)}`
+        : null,
+    ],
+  ];
+  return kandidaten.flatMap(([code, grund]) => (grund ? [{ code, grund }] : []));
+}
+
+/**
+ * Ereignisse, die ein Land nennen: Ländercode als eigenes Wort oder deutscher
+ * Name des Landes in Titel oder Beschreibung. Der Code geht nur als zwei
+ * Großbuchstaben in den Ausdruck ein (keine Regex-Einschleusung).
+ */
+export function ereignisseZumLand(
+  ereignisse: readonly Pick<EreignisView, 'id' | 'titel' | 'beschreibung'>[],
+  land: string,
+): string[] {
+  if (!/^[A-Z]{2}$/.test(land)) return [];
+  const name = LAND_NAME[land];
+  const re = new RegExp(`\\b${land}\\b`);
+  return ereignisse
+    .filter(
+      (e) =>
+        re.test(e.titel) ||
+        re.test(e.beschreibung) ||
+        (!!name && (e.titel.includes(name) || e.beschreibung.includes(name))),
+    )
+    .map((e) => e.id);
+}
+
+/**
+ * Bezüge je Land aus dem Kontext zum Stichtag: aktive Risiken (Code und
+ * Grund), Codes der aktiven Kontrollen an diesen Risiken, IDs der Ereignisse
+ * bis zum Stichtag. Feststellungen gehen nicht ein (die nicht vertraulichen
+ * stehen in `feststellungen`, vertrauliche nie – RT-01).
+ */
+export function laenderBezuege(
+  k: Pick<TcmsKontext, 'risiken' | 'kontrollen' | 'ereignisse'>,
+  laender: readonly LandMerkmale[],
+): Laender['bezuege'] {
+  const risikoJe = new Map(k.risiken.map((r) => [r.code, r]));
+  return laender.map((l) => {
+    const risiken = risikoBezuegeZumLand(l).filter((r) => risikoJe.has(r.code));
+    const ids = new Set(risiken.map((r) => risikoJe.get(r.code)!.id));
+    return {
+      land: l.land,
+      risiken,
+      kontrollen: k.kontrollen
+        .filter((x) => x.risikoIds.some((id) => ids.has(id)))
+        .map((x) => x.code),
+      ereignisse: ereignisseZumLand(k.ereignisse, l.land),
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Lesen
 // ---------------------------------------------------------------------------
 
@@ -87,7 +176,8 @@ export async function ladeLaender(ctx: DienstKontext, eingabe: LaenderLesen): Pr
   const ende = tagesende(stand);
   const kopf = { stand: isoTag(stand), historisch };
   const programm = await programmVon(ctx.tx, mandantId);
-  if (!programm) return { ...kopf, programmId: null, historie: [], feststellungen: [], namen: [] };
+  if (!programm)
+    return { ...kopf, programmId: null, historie: [], feststellungen: [], bezuege: [], namen: [] };
 
   const [staende, feststellungen] = await Promise.all([
     ctx.tx.landStand.findMany({
@@ -149,11 +239,19 @@ export async function ladeLaender(ctx: DienstKontext, eingabe: LaenderLesen): Pr
       ]);
     }
   }
+  // Kontext zum selben Stichtag (gleiche Regeln für aktive Risiken, Kontrollen
+  // und Ereignisse wie überall; prüft `kannLesen` erneut).
+  const k = await ladeKontext(ctx, { mandantId, ...(x.stand ? { stand: x.stand } : {}) });
   return {
     ...kopf,
     programmId: programm.id,
     historie: [...historie].map(([land, liste]) => ({ land, staende: liste })),
     feststellungen: [...fJe].map(([land, eintraege]) => ({ land, eintraege })),
+    // Jüngster Stand je Land (Historie: neueste zuerst).
+    bezuege: laenderBezuege(
+      k,
+      [...historie.values()].map((liste) => liste[0]!),
+    ),
     namen: await namenListe(
       ctx,
       [...historie.values()].flat().map((s) => s.erfasstVon),

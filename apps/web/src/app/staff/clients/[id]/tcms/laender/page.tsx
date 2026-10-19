@@ -183,7 +183,7 @@ export default async function LaenderMonitor({
               <tbody>
                 {ctx.laender.map((l) => {
                   const fest = detail.feststellungen.get(l.land) ?? [];
-                  const offen = ereignisseZumLand(ctx.ereignisse, l.land).filter(
+                  const offen = ereignisseZumLand(ctx, detail, l.land).filter(
                     (e) => e.status === 'NEU' || e.status === 'IN_TRIAGE',
                   ).length;
                   const fehlt = l.registrierung === 'FEHLT';
@@ -335,7 +335,7 @@ export default async function LaenderMonitor({
           kopf={<LandDrawerKopf l={auswahl} lagerArt={lagerArt(auswahl.land)} />}
         >
           {(() => {
-            const risiken = risikenZumLand(ctx, auswahl);
+            const risiken = risikenZumLand(ctx, detail, auswahl.land);
             return (
               <LandDrawerInhalt
                 ctx={ctx}
@@ -344,9 +344,9 @@ export default async function LaenderMonitor({
                 mitStand={mitStand}
                 historie={detail.historie.get(auswahl.land) ?? []}
                 feststellungen={detail.feststellungen.get(auswahl.land) ?? []}
-                ereignisse={ereignisseZumLand(ctx.ereignisse, auswahl.land)}
+                ereignisse={ereignisseZumLand(ctx, detail, auswahl.land)}
                 risiken={risiken}
-                kontrollen={kontrollenZumLand(ctx, risiken)}
+                kontrollen={kontrollenZumLand(ctx, detail, auswahl.land)}
                 formular={
                   darfBearbeiten ? (
                     <LandStandForm mandantId={id} land={auswahl} heute={seite.heuteIso} />

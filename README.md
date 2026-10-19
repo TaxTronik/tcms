@@ -378,6 +378,12 @@ lesbare (RT-01).
 | GET     | `laender`                                                                 | Kanzlei mit Bezug                                                                               |
 | POST    | `laender` (201), `laender/staende` (201)                                  | `kannBearbeiten`                                                                                |
 
+`GET laender` liefert je Land im Monitor `bezuege` (jüngster Stand bis zum Stichtag, deterministisch
+aus seinen Merkmalen): aktive Risiken mit Länderbezug (Code und Grund: Fernverkäufe, Steuersätze, OSS,
+Lager, ZM), Codes der aktiven Kontrollen an diesen Risiken und IDs der Ereignisse bis zum Stichtag, die
+das Land (Code oder Name) in Titel oder Beschreibung nennen. Feststellungen gehen in die Bezüge nicht
+ein; `feststellungen` enthält nur nicht vertrauliche (RT-01).
+
 **Endpunkte Programm, Beschreibung, Freigaben, Postausgang** (`…` = `/v1/mandanten/:mandantId`;
 Rechte prüft `packages/service`, Eingaben und Antworten in
 `packages/contract/src/bereiche/programm-beschreibung.ts`):

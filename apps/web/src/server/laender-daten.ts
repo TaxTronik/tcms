@@ -1,17 +1,16 @@
 import 'server-only';
-import { DienstFehler } from '@tcms/contract';
-import { fmtMonatJahr, istEuAusland, LAND_NAME } from '@tcms/domain';
+import { DienstFehler, type Laender } from '@tcms/contract';
 import { imDienst, ladeLaender } from '@tcms/service';
 import { DEMO_PORTS } from './demo';
-import type { EreignisView, KontrolleView, LandView, RisikoView, TcmsKontext } from './kontext';
+import type { EreignisView, KontrolleView, RisikoView, TcmsKontext } from './kontext';
 import { demoAkteur } from './sitzung';
 
 // =============================================================================
 // Länder-Monitor (Fachkonzept S12, §4 P2/P3/P9/P10, §5 EC-UST-01…-06, EC-ERT):
-// Historie der Länderstände und Bezug zu Feststellungen kommen aus dem
-// Service-Lader (`ladeLaender`, nur nicht vertrauliche Feststellungen); die
-// Zuordnung zu Ereignissen, Risiken und Kontrollen ist deterministisch aus den
-// Merkmalen des Landes und dem Tax-CMS-Kontext.
+// Historie der Länderstände, Bezug zu Feststellungen (nur nicht vertrauliche)
+// und die Bezüge zu Risiken, Kontrollen und Ereignissen kommen aus dem
+// Service-Lader (`ladeLaender`, Regeln im Service); die Demo ordnet die Codes
+// und IDs nur den Objekten des Tax-CMS-Kontexts zu.
 // =============================================================================
 
 export { registrierungVon } from '@tcms/service';
@@ -43,9 +42,12 @@ export interface LandFeststellung {
   p153Offen: boolean;
 }
 
+export type LandBezug = Laender['bezuege'][number];
+
 export interface LaenderDetail {
   historie: Map<string, LandStandRoh[]>;
   feststellungen: Map<string, LandFeststellung[]>;
+  bezuege: Map<string, LandBezug>;
 }
 
 const tag = (iso: string) => new Date(iso.length === 10 ? `${iso}T00:00:00Z` : iso);
@@ -59,7 +61,11 @@ export async function ladeLaenderDetail(
   mandantId: string,
   standIso: string,
 ): Promise<LaenderDetail> {
-  const leer: LaenderDetail = { historie: new Map(), feststellungen: new Map() };
+  const leer: LaenderDetail = {
+    historie: new Map(),
+    feststellungen: new Map(),
+    bezuege: new Map(),
+  };
   const akteur = await demoAkteur(mandantId);
   if (!akteur) return leer;
   try {
@@ -79,6 +85,7 @@ export async function ladeLaenderDetail(
         ]),
       ),
       feststellungen: new Map(l.feststellungen.map((f) => [f.land, f.eintraege])),
+      bezuege: new Map(l.bezuege.map((b) => [b.land, b])),
     };
   } catch (e) {
     if (e instanceof DienstFehler && e.code === 'NICHT_GEFUNDEN') return leer;
@@ -86,16 +93,14 @@ export async function ladeLaenderDetail(
   }
 }
 
-/** Ereignisse, die ein Land im Titel oder in der Beschreibung nennen. */
-export function ereignisseZumLand(ereignisse: EreignisView[], land: string): EreignisView[] {
-  const name = LAND_NAME[land];
-  const re = new RegExp(`\\b${land.replace(/[^A-Z]/g, '')}\\b`);
-  return ereignisse.filter(
-    (e) =>
-      re.test(e.titel) ||
-      re.test(e.beschreibung) ||
-      (!!name && (e.titel.includes(name) || e.beschreibung.includes(name))),
-  );
+/** Ereignisse, die das Land nennen (IDs aus dem Service, Objekte aus dem Kontext). */
+export function ereignisseZumLand(
+  ctx: TcmsKontext,
+  detail: LaenderDetail,
+  land: string,
+): EreignisView[] {
+  const ids = new Set(detail.bezuege.get(land)?.ereignisse ?? []);
+  return ctx.ereignisse.filter((e) => ids.has(e.id));
 }
 
 export interface LandRisiko {
@@ -103,34 +108,25 @@ export interface LandRisiko {
   grund: string;
 }
 
-/** Länderbezogene Risiken mit Grund (deterministisch aus den Merkmalen des Landes). */
-export function risikenZumLand(ctx: TcmsKontext, l: LandView): LandRisiko[] {
-  const name = LAND_NAME[l.land] ?? l.land;
-  const lager = l.lagerSeit ? `Lager in ${l.land} seit ${fmtMonatJahr(l.lagerSeit)}` : null;
-  const kandidaten: [string, string | null][] = [
-    ['EC-UST-01', istEuAusland(l.land) ? `EU-Fernverkäufe nach ${name}` : null],
-    ['EC-UST-02', `Steuersätze in ${name}`],
-    ['EC-UST-03', l.oss ? `Umsätze in ${l.land} über OSS` : null],
-    ['EC-UST-04', lager && l.oss ? `${lager}: Abgrenzung OSS / Lagerland` : null],
-    ['EC-UST-05', lager],
-    ['EC-UST-06', l.zmRelevant ? `ZM-relevante Bewegungen mit ${l.land}` : null],
-    ['EC-ERT-01', lager ? `Bestände im Lager ${l.land}` : null],
-    [
-      'EC-ERT-03',
-      lager
-        ? `Betriebsstätte durch das Lager in ${l.land} seit ${fmtMonatJahr(l.lagerSeit)}`
-        : null,
-    ],
-  ];
+/** Länderbezogene Risiken mit Grund (Regeln im Service). */
+export function risikenZumLand(
+  ctx: TcmsKontext,
+  detail: LaenderDetail,
+  land: string,
+): LandRisiko[] {
   const je = new Map(ctx.risiken.map((r) => [r.code, r]));
-  return kandidaten.flatMap(([code, grund]) => {
+  return (detail.bezuege.get(land)?.risiken ?? []).flatMap(({ code, grund }) => {
     const r = je.get(code);
-    return grund && r ? [{ risiko: r, grund }] : [];
+    return r ? [{ risiko: r, grund }] : [];
   });
 }
 
-/** Kontrollen, die an den länderbezogenen Risiken hängen. */
-export function kontrollenZumLand(ctx: TcmsKontext, risiken: LandRisiko[]): KontrolleView[] {
-  const ids = new Set(risiken.map((r) => r.risiko.id));
-  return ctx.kontrollen.filter((k) => k.risikoIds.some((id) => ids.has(id)));
+/** Kontrollen an den länderbezogenen Risiken (Codes aus dem Service). */
+export function kontrollenZumLand(
+  ctx: TcmsKontext,
+  detail: LaenderDetail,
+  land: string,
+): KontrolleView[] {
+  const codes = new Set(detail.bezuege.get(land)?.kontrollen ?? []);
+  return ctx.kontrollen.filter((k) => codes.has(k.code));
 }

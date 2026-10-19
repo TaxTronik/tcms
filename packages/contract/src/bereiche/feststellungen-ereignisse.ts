@@ -841,6 +841,23 @@ export const LaenderSchema = z
         })
         .strict(),
     ),
+    /**
+     * Bezüge je Land im Monitor (jüngster Stand bis zum Stichtag), deterministisch
+     * aus seinen Merkmalen: aktive Risiken mit Länderbezug (Katalogcode und Grund),
+     * Codes der aktiven Kontrollen an diesen Risiken, IDs der Ereignisse bis zum
+     * Stichtag, die das Land (Code oder Name) in Titel oder Beschreibung nennen.
+     * Feststellungen gehen nicht ein (vertrauliche nie, RT-01).
+     */
+    bezuege: z.array(
+      z
+        .object({
+          land: z.string(),
+          risiken: z.array(z.object({ code: z.string(), grund: z.string() }).strict()),
+          kontrollen: z.array(z.string()),
+          ereignisse: z.array(z.string()),
+        })
+        .strict(),
+    ),
     namen: NamenSchema,
   })
   .strict();
