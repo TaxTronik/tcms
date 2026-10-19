@@ -18,6 +18,7 @@ import { ladeKontext, type TcmsKontext } from '../../kern/tcms-kontext';
 import type { DienstKontext } from '../../kontext';
 import { kannBearbeiten, kannWuerdigen } from '../../rechte';
 import { alsJson, antwortNach, pruefeEingabe } from './hilfen';
+import { darfStammdatenPflegen } from './mandant';
 
 /**
  * Rechte des Akteurs für den geladenen Kontext (Kennzeichen für die
@@ -44,7 +45,11 @@ export function kontextAlsAntwort(a: Akteur, k: TcmsKontext): KontextAntwort {
     heute: isoDatum(k.heute),
     stand: isoDatum(k.stand),
     historisch: k.historisch,
-    mandant: { ...k.mandant },
+    mandant: {
+      ...k.mandant,
+      // Wie PUT /v1/mandanten/:id; im historischen Stand gesperrt (Regel 6).
+      rechte: { bearbeiten: !k.historisch && darfStammdatenPflegen(a, k.mandant.id) },
+    },
     rechte: kontextRechte(a, k),
     kontaktRollen: k.kontaktRollen.map((r) => ({
       kontaktId: r.kontaktId,

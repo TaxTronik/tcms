@@ -67,6 +67,12 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
       expect(daten.mandant.id).toBe(DEMO_IDS.talwind);
       expect(daten.historisch).toBe(true);
       expect(daten.rechte).toEqual({ bearbeiten: false, wuerdigen: false });
+      expect(daten.mandant.rechte).toEqual({ bearbeiten: false });
+      // Aktueller Stand: Admin/Partnerin mit Bezug darf den Anker pflegen.
+      const heute = await bestaetigtSenden(app(), { ziel: pfad, claims: anna() });
+      expect(KontextAntwortSchema.parse((await json(heute))['daten']).mandant.rechte).toEqual({
+        bearbeiten: true,
+      });
     });
 
     it('falscher Mandant im Pfad: 404 (Bindung an cli.id)', async () => {
@@ -274,6 +280,15 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
       expect(g.status).toBe(200);
       const liste = KontakteAntwortSchema.parse((await json(g))['daten']);
       expect(liste.kontakte.map((x) => x.kontaktId)).toContain(kontaktId);
+      expect(liste.rechte).toEqual({ bearbeiten: true });
+      // Ohne Zuständigkeit: Lesen ja, Kennzeichen false (wie das 403 beim Setzen).
+      const ohne = await bestaetigtSenden(app(), {
+        ziel: kontaktPfad,
+        claims: admin({ rol: { adm: false, bt: true } }),
+      });
+      expect(KontakteAntwortSchema.parse((await json(ohne))['daten']).rechte).toEqual({
+        bearbeiten: false,
+      });
       // Der neue Kontakt ist jetzt GV, darf aber Staff-Endpunkte nie nutzen.
       const kontaktGet = mandantClaims(mandant, {
         tnt: tenant,

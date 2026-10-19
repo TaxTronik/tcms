@@ -284,10 +284,14 @@ und Zuständigkeit ergänzt die kanzleikonsole):
 | POST    | `/v1/arbeitskorb`                                            | wie Portfolio; Zuständigkeit nur aus `bt`/`hb` der Liste               |
 | GET     | `/v1/mandanten/:mandantId/portal/uebersicht`                 | Mandantenkontakt mit aktiver Rolle (`portal: true`)                    |
 | PUT     | `/v1/mandanten/:mandantId`                                   | `kannBearbeiten`; Anker anlegen/aktualisieren, auditiert               |
-| GET     | `/v1/mandanten/:mandantId/kontakte`                          | Kanzleiperson mit `cli`                                                |
+| GET     | `/v1/mandanten/:mandantId/kontakte`                          | Kanzleiperson mit `cli`; `rechte.bearbeiten` wie PUT                   |
 | PUT     | `/v1/mandanten/:mandantId/kontakte`                          | `kannBearbeiten`; Rollen eines Kontakts setzen/deaktivieren, auditiert |
 | GET     | `/v1/audit?programmId=&mandantId=&aktion=&nach=&vor=&limit=` | Admin/Partner; höchstens 500 je Seite; Cursor = Position `pos`         |
 | POST    | `/v1/audit/pruefen`                                          | Admin/Partner; Kette seitenweise, Zeitbudget 20 s, Fortsetzung `ab`    |
+
+Rechte-Kennzeichen für die Oberfläche berechnet der Dienst mit denselben Rechtefunktionen wie die
+Schreiboperationen: Kontext `rechte` (`bearbeiten`, `wuerdigen`) und `mandant.rechte.bearbeiten` (Anker
+pflegen), beide im historischen Stand `false`; `GET …/kontakte` liefert `rechte.bearbeiten` (Rollen setzen).
 
 **Endpunkte Kontrolldurchführung** (`durchfuehrung`, Pfade unter `/v1/mandanten/:mandantId/`;
 Rechte prüft `@tcms/service`, nicht Sichtbares ergibt `404`, fehlendes Recht `403` mit Grund, ein

@@ -31,7 +31,7 @@ import { mitAudit } from '../../audit';
 import type { DienstKontext } from '../../kontext';
 import { kannLesen, type MandantRolle } from '../../rechte';
 import { antwortNach, pruefeEingabe } from './hilfen';
-import { brauchtBearbeitung } from './mandant';
+import { brauchtBearbeitung, darfStammdatenPflegen } from './mandant';
 
 const ROLLEN: readonly MandantRolle[] = [
   'GESETZLICHER_VERTRETER',
@@ -70,7 +70,10 @@ export async function ladeKontakte(
     orderBy: [{ kontaktId: 'asc' }, { rolle: 'asc' }],
     select: ZEILE,
   });
-  return antwortNach(KontakteAntwortSchema, 'ladeKontakte', { kontakte: gruppiere(zeilen) });
+  return antwortNach(KontakteAntwortSchema, 'ladeKontakte', {
+    kontakte: gruppiere(zeilen),
+    rechte: { bearbeiten: darfStammdatenPflegen(ctx.akteur, id) },
+  });
 }
 
 /** Sperrt die Mandantenzeile (TS-05); unbekannt bzw. fremder Tenant → NICHT_GEFUNDEN. */

@@ -427,6 +427,19 @@ const prueflastSicht = z
   })
   .strict();
 
+/**
+ * Stammdaten des Mandanten pflegen – Anker (`PUT /v1/mandanten/:mandantId`) und
+ * Kontaktrollen (`PUT …/kontakte`) – als Kennzeichen für die Oberfläche. Der
+ * Dienst berechnet es mit derselben Regel wie diese Schreiboperationen
+ * (`kannBearbeiten`: Admin/Partner, zuständige:r BT oder Hauptbearbeitung);
+ * ein falsches `true` öffnet nichts, der Dienst prüft beim Schreiben erneut.
+ */
+const stammdatenRechte = z
+  .object({
+    bearbeiten: z.boolean(),
+  })
+  .strict();
+
 /** Rechte des Akteurs für diesen Mandanten als Kennzeichen für die Oberfläche (ADR 0001 §5). */
 const kontextRechte = z
   .object({
@@ -449,6 +462,8 @@ export const KontextAntwortSchema = z
         name: text(200),
         rechtsform: text(50),
         datevNr: text(20).nullable(),
+        /** Anker pflegen; im historischen Stand `false` (AGENTS.md Regel 6). */
+        rechte: stammdatenRechte,
       })
       .strict(),
     rechte: kontextRechte,
@@ -932,7 +947,13 @@ const kontaktRollenSicht = z
   })
   .strict();
 
-export const KontakteAntwortSchema = z.object({ kontakte: z.array(kontaktRollenSicht) }).strict();
+export const KontakteAntwortSchema = z
+  .object({
+    kontakte: z.array(kontaktRollenSicht),
+    /** Kontaktrollen setzen (`PUT …/kontakte`); nicht versioniert, ohne Stichtag. */
+    rechte: stammdatenRechte,
+  })
+  .strict();
 export type KontakteAntwort = z.infer<typeof KontakteAntwortSchema>;
 
 /**

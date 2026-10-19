@@ -25,11 +25,21 @@ import { kannBearbeiten, kannLesen } from '../../rechte';
 import { antwortNach, pruefeEingabe } from './hilfen';
 
 /**
+ * Stammdaten und Kontaktrollen eines Mandanten pflegen: eine Regel für die
+ * Schreiboperationen (`brauchtBearbeitung`) und die Kennzeichen der Oberfläche
+ * (`rechte.bearbeiten` in Kontakten und Kontext), damit beide nie
+ * auseinanderlaufen.
+ */
+export function darfStammdatenPflegen(a: Akteur, mandantId: string): boolean {
+  return kannBearbeiten(a, mandantId);
+}
+
+/**
  * Bearbeitungsrecht für Stammdaten und Rollen eines Mandanten: ohne Bezug wie
  * unbekannt (`NICHT_GEFUNDEN`), mit Bezug ohne Zuständigkeit `NICHT_BERECHTIGT`.
  */
 export function brauchtBearbeitung(a: Akteur, mandantId: string, was: string): void {
-  if (kannBearbeiten(a, mandantId)) return;
+  if (darfStammdatenPflegen(a, mandantId)) return;
   if (a.art !== 'KANZLEI' || !kannLesen(a, mandantId)) throw new DienstFehler('NICHT_GEFUNDEN');
   throw nichtBerechtigt(
     'BEARBEITEN',
