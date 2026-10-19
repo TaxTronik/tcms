@@ -21,6 +21,7 @@ export async function naechsteEreignisnummern(
   const vorhandene = await tx.ereignis.findMany({
     where: { nummer: { startsWith: praefix } },
     select: { nummer: true },
+    orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
   });
   let max = vorhandene.reduce(
     (m, e) => Math.max(m, Number.parseInt(e.nummer.slice(praefix.length), 10) || 0),
@@ -44,6 +45,7 @@ export async function naechsteFeststellungsnummer(
   const vorhandene = await tx.feststellung.findMany({
     where: { programmId, nummer: { startsWith: praefix } },
     select: { nummer: true },
+    orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
   });
   const max = vorhandene.reduce(
     (m, f) => Math.max(m, Number.parseInt(f.nummer.slice(praefix.length), 10) || 0),

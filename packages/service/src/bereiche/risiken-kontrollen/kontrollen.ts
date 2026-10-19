@@ -269,7 +269,7 @@ export async function frequenzAbweichungEntscheiden(
       if (!abweichungOffen(alt)) throw konflikt('Es ist keine Frequenzabweichung beantragt.');
       const staende = await tx.kontrolleStand.findMany({
         where: { kontrolleId: k.id, gueltigAb: { lte: alt.gueltigAb } },
-        orderBy: { version: 'asc' },
+        orderBy: [{ version: 'asc' }, { id: 'asc' }],
       });
       const antrag = antragDerAbweichung(staende);
       if (!zweitePerson(ctx.akteur, antrag.von)) {
@@ -446,6 +446,7 @@ export async function pruefeKanzleiPersonen(
   const kontakte = await tx.mandantKontaktRolle.findMany({
     where: { mandantId, kontaktId: { in: ids.map((x) => x.id) } },
     select: { kontaktId: true },
+    orderBy: { id: 'asc' },
   });
   for (const x of ids) {
     if (kontakte.some((k) => gleicheId(k.kontaktId, x.id))) {
@@ -463,6 +464,7 @@ async function pruefeMandantPersonen(
   const aktiv = await tx.mandantKontaktRolle.findMany({
     where: { mandantId, aktiv: true, kontaktId: { in: ids.map((x) => x.id) } },
     select: { kontaktId: true },
+    orderBy: { id: 'asc' },
   });
   for (const x of ids) {
     if (!aktiv.some((k) => gleicheId(k.kontaktId, x.id))) {

@@ -122,7 +122,7 @@ export async function ladeArbeitskorb(
   const abweichungsStaende: AbweichungsStand[] = abweichungsKontrollIds.length
     ? await ctx.tx.kontrolleStand.findMany({
         where: { kontrolleId: { in: abweichungsKontrollIds } },
-        orderBy: { gueltigAb: 'asc' },
+        orderBy: [{ gueltigAb: 'asc' }, { id: 'asc' }],
         select: {
           kontrolleId: true,
           gueltigAb: true,
@@ -151,6 +151,7 @@ export async function ladeArbeitskorb(
           verwerfenBeantragtVon: true,
           vertraulich: true,
         },
+        orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
       })
     : [];
   const staendeJe = new Map<string, AbweichungsStand[]>();

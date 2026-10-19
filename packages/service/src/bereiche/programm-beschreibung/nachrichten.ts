@@ -278,6 +278,7 @@ async function veralteteCodes(
           codeFehlversuche: true,
           programm: { select: { mandantId: true } },
         },
+        orderBy: { id: 'asc' },
       })
     ).map((f) => [f.id, f]),
   );

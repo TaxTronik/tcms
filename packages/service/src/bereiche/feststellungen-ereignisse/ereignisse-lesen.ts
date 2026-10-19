@@ -105,7 +105,7 @@ export async function ladeEreignisse(
   const roh = await ctx.tx.ereignis.findMany({
     where: { programmId: programm.id },
     include: { folgen: { orderBy: { id: 'asc' } } },
-    orderBy: { gemeldetAm: 'desc' },
+    orderBy: [{ gemeldetAm: 'desc' }, { id: 'desc' }],
   });
   const ereignisse = roh
     .filter((e) => e.gemeldetAm.getTime() <= ende.getTime())
@@ -242,12 +242,14 @@ export async function ladeEreignis(
     ? await tx.durchfuehrung.findMany({
         where: { id: { in: dIds }, kontrolle: { programmId: e.programmId } },
         include: { kontrolle: { select: { code: true } } },
+        orderBy: { id: 'asc' },
       })
     : [];
   const festst = fIds.length
     ? await tx.feststellung.findMany({
         where: { id: { in: fIds }, programmId: e.programmId },
         select: { id: true, nummer: true },
+        orderBy: { id: 'asc' },
       })
     : [];
   const dJe = new Map(durchf.map((d) => [d.id, d]));

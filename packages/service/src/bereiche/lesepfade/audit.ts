@@ -59,6 +59,7 @@ export async function ladeAudit(
     const programme = await ctx.tx.tcmsProgramm.findMany({
       where: { mandantId: e.mandantId.toLowerCase() },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
     where.programmId = { in: programme.map((p) => p.id) };
   }
@@ -91,6 +92,7 @@ export async function ladeAudit(
       ? await ctx.tx.tcmsProgramm.findMany({
           where: { id: { in: programmIds } },
           select: { id: true, mandantId: true },
+          orderBy: { id: 'asc' },
         })
       : []
     ).map((p) => [p.id, p.mandantId]),

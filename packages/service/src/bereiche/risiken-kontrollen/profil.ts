@@ -377,6 +377,7 @@ async function planeKuenftigNeu(
     include: {
       _count: { select: { nachweise: true, feststellungen: true, nachkontrolleFuer: true } },
     },
+    orderBy: [{ periodeVon: 'asc' }, { id: 'asc' }],
   });
   const entfernbar = alle.filter(
     (d) =>
@@ -481,7 +482,7 @@ export async function vorgeschlagenesRisikoAufnehmen(
       const vorhanden = vorhandenRef
         ? await tx.risiko.findUniqueOrThrow({
             where: { id: vorhandenRef.id },
-            include: { staende: true },
+            include: { staende: { orderBy: [{ version: 'asc' }, { id: 'asc' }] } },
           })
         : null;
       if (vorhanden && vorhanden.entscheidung === 'UEBERNOMMEN') {
@@ -558,6 +559,7 @@ export async function vorgeschlagenesRisikoAufnehmen(
       const bestehendeRefs = await tx.kontrolle.findMany({
         where: { programmId: programm.id, code: { in: kandidaten.map((k) => k.code) } },
         select: { id: true },
+        orderBy: { id: 'asc' },
       });
       await sperreKontrollen(
         tx,
@@ -566,11 +568,16 @@ export async function vorgeschlagenesRisikoAufnehmen(
       );
       const bestehende = await tx.kontrolle.findMany({
         where: { id: { in: bestehendeRefs.map((k) => k.id) } },
-        include: { staende: true, risiken: true },
+        include: {
+          staende: { orderBy: [{ version: 'asc' }, { id: 'asc' }] },
+          risiken: { orderBy: { risikoId: 'asc' } },
+        },
+        orderBy: [{ code: 'asc' }, { id: 'asc' }],
       });
       const alleRisiken = await tx.risiko.findMany({
         where: { programmId: programm.id },
-        include: { staende: true },
+        include: { staende: { orderBy: [{ version: 'asc' }, { id: 'asc' }] } },
+        orderBy: [{ code: 'asc' }, { id: 'asc' }],
       });
 
       // --- Bruttoklassen der aktiven Risiken (mit dem neuen) ---
@@ -673,7 +680,9 @@ export async function vorgeschlagenesRisikoAufnehmen(
             staende: { create: kontrollStandDaten(kk, z, ctx.akteur.id, zeitpunkt) },
             risiken: { create: codes.map((c) => ({ risikoId: risikoIdJe.get(c)! })) },
           },
-          include: { staende: { select: { id: true } } },
+          include: {
+            staende: { select: { id: true }, orderBy: [{ version: 'asc' }, { id: 'asc' }] },
+          },
         });
         neueKontrollen.push(kk.code);
         const ableitung = leiteFrequenzAb(

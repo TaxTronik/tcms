@@ -420,7 +420,7 @@ export async function schreibeVersion1(
         staende: { create: kontrollStandDaten(kat, pk.zust, nutzer.id, zeitpunkt) },
         risiken: { create: pk.risikoCodes.map((c) => ({ risikoId: risikoIds.get(c)! })) },
       },
-      include: { staende: { select: { id: true } } },
+      include: { staende: { select: { id: true }, orderBy: [{ version: 'asc' }, { id: 'asc' }] } },
     });
     for (const p of pk.perioden)
       durchf.push(

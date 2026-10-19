@@ -182,7 +182,7 @@ export async function ladePortalMeldungen(
       // damit die Grenze von 20 nur Sichtbares zählt).
       ...(alle ? {} : { gemeldetVon: { equals: ctx.akteur.id, mode: 'insensitive' as const } }),
     },
-    orderBy: { gemeldetAm: 'desc' },
+    orderBy: [{ gemeldetAm: 'desc' }, { id: 'desc' }],
     take: 20,
     select: {
       id: true,

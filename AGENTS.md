@@ -43,6 +43,12 @@ für KI-Werkzeuge.
   Zustand unter der Sperre lesen, versionierte Änderungen nur auf dem
   gesehenen Stand (`standId`/`profilStandId`, sonst `KONFLIKT`), bedingte
   Updates; Neuplanung löscht nur unberührte geplante Durchführungen.
+  Reihenfolge: Jede Listenabfrage (`findMany`) und jede Listenrelation in
+  `include`/`select` trägt ein `orderBy` (fachlich, z. B. Code, Version,
+  Nummer, Zeitpunkt) mit der `id` als letzter Stufe (Verknüpfungstabellen: ihr
+  Schlüssel), damit Antworten, Vergleiche und eingefrorene Snapshots nicht vom
+  Abfrageplan abhängen; `src/__tests__/reihenfolge.test.ts` prüft das statisch
+  gegen das Prisma-Schema (Ausnahmen nur begründet in der Allowlist dort).
 - `packages/contract` – gemeinsamer Vertrag mit der kanzleikonsole (ADR 0001
   §3, §7): Claims-Schema und `Akteur`, Signieren und Prüfen der
   Akteursbestätigung (`signiereAkteur`, `pruefeAkteur`, nur `node:crypto`),

@@ -104,9 +104,10 @@ export async function ladeFeststellungen(
   const roh = await ctx.tx.feststellung.findMany({
     where: { programmId: programm.id },
     include: {
-      massnahmen: { orderBy: { wiedervorlageNr: 'asc' } },
-      risiken: { include: { risiko: { select: { code: true } } } },
+      massnahmen: { orderBy: [{ wiedervorlageNr: 'asc' }, { id: 'asc' }] },
+      risiken: { include: { risiko: { select: { code: true } } }, orderBy: { risikoId: 'asc' } },
     },
+    orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
   });
   const personen: (string | null)[] = [];
   const feststellungen: FeststellungListenEintrag[] = roh
@@ -314,9 +315,12 @@ export async function ladeFeststellung(
   const f = await tx.feststellung.findFirst({
     where: { id: e.feststellungId, programm: { mandantId } },
     include: {
-      risiken: { include: { risiko: { select: { id: true, code: true } } } },
+      risiken: {
+        include: { risiko: { select: { id: true, code: true } } },
+        orderBy: { risikoId: 'asc' },
+      },
       erklaerungen: { orderBy: { id: 'asc' } },
-      massnahmen: { orderBy: { wiedervorlageNr: 'asc' } },
+      massnahmen: { orderBy: [{ wiedervorlageNr: 'asc' }, { id: 'asc' }] },
       durchfuehrung: { include: { kontrolle: { select: { code: true } } } },
       nachkontrolle: {
         include: {

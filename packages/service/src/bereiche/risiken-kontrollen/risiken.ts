@@ -95,7 +95,7 @@ async function risikoUnterSperre(tx: Tx, mandantId: string, risikoId: string) {
   const r = await tx.risiko.findFirst({
     where: { id: risikoId, programmId: programm.id },
     include: {
-      staende: { where: { gueltigBis: null } },
+      staende: { where: { gueltigBis: null }, orderBy: [{ version: 'asc' }, { id: 'asc' }] },
       programm: { select: { id: true, mandantId: true, erklaerungsTurnus: true } },
     },
   });
@@ -140,6 +140,7 @@ async function erledigeEreignisFolgen(
       ereignis: { programmId, status: { in: ['NEU', 'IN_TRIAGE'] } },
     },
     select: { id: true, ereignisId: true },
+    orderBy: { id: 'asc' },
   });
   const erledigt: typeof folgen = [];
   for (const f of folgen) {
@@ -154,7 +155,7 @@ async function erledigeEreignisFolgen(
   for (const ereignisId of new Set(erledigt.map((f) => f.ereignisId))) {
     const e = await tx.ereignis.findFirst({
       where: { id: ereignisId, programmId },
-      include: { folgen: true },
+      include: { folgen: { orderBy: { id: 'asc' } } },
     });
     if (!e) continue;
     protokolle.push({
@@ -226,6 +227,7 @@ async function bewerte(
     const links = await tx.risikoKontrolle.findMany({
       where: { risikoId },
       select: { kontrolleId: true },
+      orderBy: [{ risikoId: 'asc' }, { kontrolleId: 'asc' }],
     });
     await sperreKontrollen(
       tx,
@@ -238,8 +240,10 @@ async function bewerte(
         programmId: programm.id,
         OR: [{ entfallenAb: null }, { entfallenAb: { gt: zeitpunkt } }],
       },
-      include: { staende: { where: { gueltigBis: null } } },
-      orderBy: { code: 'asc' },
+      include: {
+        staende: { where: { gueltigBis: null }, orderBy: [{ version: 'asc' }, { id: 'asc' }] },
+      },
+      orderBy: [{ code: 'asc' }, { id: 'asc' }],
     });
     const vorher = new Map<string, ReturnType<typeof effektiveFrequenz>>();
     for (const k of kontrollen) {
@@ -614,7 +618,7 @@ async function freigabeSchritt(
       await sperreRisiken(tx, programm.id, e.risikoIds);
       const risiken = await tx.risiko.findMany({
         where: { id: { in: e.risikoIds }, programmId: programm.id },
-        orderBy: { code: 'asc' },
+        orderBy: [{ code: 'asc' }, { id: 'asc' }],
       });
       const bearbeitet: FreigabeSchrittErgebnis['bearbeitet'] = [];
       const uebersprungen: FreigabeSchrittErgebnis['uebersprungen'] = [];

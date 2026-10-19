@@ -141,10 +141,13 @@ export async function ladeBeschreibung(
   const programmId = k.programm.id;
   const tx = ctx.tx;
   const [versionen, freigaben] = await Promise.all([
-    tx.beschreibungVersion.findMany({ where: { programmId }, orderBy: { createdAt: 'asc' } }),
+    tx.beschreibungVersion.findMany({
+      where: { programmId },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    }),
     tx.freigabe.findMany({
       where: { programmId, art: 'BESCHREIBUNG' },
-      orderBy: { angefordertAm: 'asc' },
+      orderBy: [{ angefordertAm: 'asc' }, { id: 'asc' }],
     }),
   ]);
   const ids = versionen.map((v) => v.id);
@@ -270,7 +273,7 @@ export async function legeBeschreibungsversionAn(
     throw new DienstFehler('KONFLIKT', 'Für diesen Mandanten ist noch kein Tax-CMS eingerichtet.');
   const versionen = await ctx.tx.beschreibungVersion.findMany({
     where: { programmId },
-    orderBy: { createdAt: 'asc' },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
   const offen = versionen.find((x) => x.status === 'ENTWURF' || x.status === 'KANZLEI_REVIEW');
   if (offen) {
@@ -565,6 +568,7 @@ export async function fordereBeschreibungsfreigabeAn(
     const aeltere = await tx.beschreibungVersion.findMany({
       where: { programmId: v.programmId, status: 'BEIM_MANDANTEN', id: { not: v.id } },
       select: { id: true, nummer: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
     const protokoll: Protokoll[] = [];
     for (const a of aeltere) {

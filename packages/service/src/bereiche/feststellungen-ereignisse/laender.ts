@@ -185,12 +185,12 @@ export async function ladeLaender(ctx: DienstKontext, eingabe: LaenderLesen): Pr
   const [staende, feststellungen] = await Promise.all([
     ctx.tx.landStand.findMany({
       where: { programmId: programm.id },
-      orderBy: [{ stand: 'desc' }, { createdAt: 'desc' }],
+      orderBy: [{ stand: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
     }),
     ctx.tx.feststellung.findMany({
       where: { programmId: programm.id, vertraulich: false },
-      include: { erklaerungen: { select: { land: true } } },
-      orderBy: { nummer: 'desc' },
+      include: { erklaerungen: { select: { land: true }, orderBy: { id: 'asc' } } },
+      orderBy: [{ nummer: 'desc' }, { id: 'desc' }],
     }),
   ]);
   const historie = new Map<string, LandStand[]>();
@@ -329,7 +329,10 @@ async function schreibeStaende(
   modus: 'neu' | 'aktualisieren',
 ): Promise<{ wert: LandStaendeErgebnis; protokoll: Protokoll[] }> {
   const tx = ctx.tx;
-  const alle = await tx.landStand.findMany({ where: { programmId } });
+  const alle = await tx.landStand.findMany({
+    where: { programmId },
+    orderBy: [{ stand: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+  });
   const vorher = juengsteJeLand(alle);
   const nachher = new Map<
     string,

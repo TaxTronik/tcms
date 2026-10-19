@@ -478,33 +478,51 @@ function pruefeEingabe(eingabe: unknown): { mandantId: string; stand: string | u
   return { mandantId: p.data.mandantId.toLowerCase(), stand: p.data.stand };
 }
 
-/** Was der Kontext je Programm aus der Datenbank braucht (eine Abfrage, auch für Blöcke). */
+/**
+ * Was der Kontext je Programm aus der Datenbank braucht (eine Abfrage, auch für Blöcke).
+ * Jede Liste in fester Reihenfolge mit der ID als letzter Stufe (Verknüpfungen: der
+ * andere Schlüssel): Ohne ORDER BY hinge sie vom Abfrageplan ab, Einzel- und
+ * Blockabfrage lieferten verschiedene Reihenfolgen, und Bausteine eingefrorener
+ * Beschreibungen (SHA-256) hingen davon ab (tcms-s9, `__tests__/reihenfolge.test.ts`).
+ */
 const PROGRAMM_INHALT = {
-  teilbereiche: { include: { ziele: { orderBy: { createdAt: 'asc' } } } },
-  profile: true,
+  teilbereiche: {
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    include: { ziele: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
+  },
+  profile: { orderBy: [{ version: 'asc' }, { id: 'asc' }] },
   risiken: {
+    orderBy: [{ code: 'asc' }, { id: 'asc' }],
     include: {
-      staende: true,
-      kontrollen: true,
-      uebersteuerungen: { orderBy: { beantragtAm: 'desc' } },
+      staende: { orderBy: [{ version: 'asc' }, { id: 'asc' }] },
+      kontrollen: { orderBy: { kontrolleId: 'asc' } },
+      uebersteuerungen: { orderBy: [{ beantragtAm: 'desc' }, { id: 'desc' }] },
     },
   },
   kontrollen: {
+    orderBy: [{ code: 'asc' }, { id: 'asc' }],
     include: {
-      staende: true,
-      risiken: true,
-      // Feste Reihenfolge: Ohne ORDER BY hinge sie vom Abfrageplan ab (Einzel- und
-      // Blockabfrage lieferten dann verschiedene Reihenfolgen).
+      staende: { orderBy: [{ version: 'asc' }, { id: 'asc' }] },
+      risiken: { orderBy: { risikoId: 'asc' } },
       durchfuehrungen: {
         orderBy: [{ periodeVon: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
         include: { _count: { select: { nachweise: { where: { entferntAm: null } } } } },
       },
     },
   },
-  feststellungen: { include: { massnahmen: true, risiken: { include: { risiko: true } } } },
-  ereignisse: { include: { folgen: true }, orderBy: { gemeldetAm: 'desc' } },
-  laender: true,
-  beschreibungen: { orderBy: { createdAt: 'asc' } },
+  feststellungen: {
+    orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
+    include: {
+      massnahmen: { orderBy: [{ wiedervorlageNr: 'asc' }, { id: 'asc' }] },
+      risiken: { orderBy: { risikoId: 'asc' }, include: { risiko: true } },
+    },
+  },
+  ereignisse: {
+    include: { folgen: { orderBy: { id: 'asc' } } },
+    orderBy: [{ gemeldetAm: 'desc' }, { id: 'desc' }],
+  },
+  laender: { orderBy: [{ land: 'asc' }, { stand: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] },
+  beschreibungen: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
 } as const satisfies Prisma.TcmsProgrammInclude;
 
 type ProgrammRoh = Prisma.TcmsProgrammGetPayload<{ include: typeof PROGRAMM_INHALT }>;
@@ -535,7 +553,7 @@ export async function ladeKontext(
   if (!mandant) throw new DienstFehler('NICHT_GEFUNDEN');
   const kontakte = await tx.mandantKontaktRolle.findMany({
     where: { mandantId, aktiv: true },
-    orderBy: { createdAt: 'asc' },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     select: { kontaktId: true, rolle: true, funktion: true },
   });
   const programm = await tx.tcmsProgramm.findFirst({
@@ -586,19 +604,19 @@ export async function jeAktuellerKontext(
     const block = ids.slice(i, i + groesse);
     const mandanten = await tx.mandant.findMany({
       where: { id: { in: block }, aktiv: true },
-      orderBy: { name: 'asc' },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
       select: { id: true, name: true, rechtsform: true, datevNr: true },
     });
     if (mandanten.length === 0) continue;
     const vorhanden = mandanten.map((m) => m.id);
     const kontakte = await tx.mandantKontaktRolle.findMany({
       where: { mandantId: { in: vorhanden }, aktiv: true },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       select: { mandantId: true, kontaktId: true, rolle: true, funktion: true },
     });
     const programme = await tx.tcmsProgramm.findMany({
       where: { mandantId: { in: vorhanden } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       include: PROGRAMM_INHALT,
     });
     const programmJe = new Map<string, ProgrammRoh>();

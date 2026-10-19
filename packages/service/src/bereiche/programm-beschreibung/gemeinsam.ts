@@ -161,7 +161,7 @@ export const isoTagVon = (d: Date): string => d.toISOString().slice(0, 10);
 export async function aktiveKontakte(tx: Tx, mandantId: string) {
   return tx.mandantKontaktRolle.findMany({
     where: { mandantId, aktiv: true },
-    orderBy: { createdAt: 'asc' },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     select: { kontaktId: true, rolle: true },
   });
 }

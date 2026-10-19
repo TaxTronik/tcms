@@ -93,7 +93,10 @@ async function ladeGesperrt(ctx: DienstKontext, mandantId: string, feststellungI
   await sperreFeststellung(ctx.tx, mandantId, feststellungId);
   return ctx.tx.feststellung.findUniqueOrThrow({
     where: { id: feststellungId },
-    include: { massnahmen: true, nachkontrolle: true },
+    include: {
+      massnahmen: { orderBy: [{ wiedervorlageNr: 'asc' }, { id: 'asc' }] },
+      nachkontrolle: true,
+    },
   });
 }
 type Gesperrt = Awaited<ReturnType<typeof ladeGesperrt>>;
@@ -520,7 +523,10 @@ export async function erledigeMassnahme(
     const feststellungId = await sperreMassnahme(tx, mandantId, e.massnahmeId);
     const f = await tx.feststellung.findUniqueOrThrow({
       where: { id: feststellungId },
-      include: { massnahmen: true, nachkontrolle: true },
+      include: {
+        massnahmen: { orderBy: [{ wiedervorlageNr: 'asc' }, { id: 'asc' }] },
+        nachkontrolle: true,
+      },
     });
     const m = f.massnahmen.find((x) => x.id === e.massnahmeId);
     if (!m) throw new DienstFehler('NICHT_GEFUNDEN');

@@ -75,7 +75,7 @@ export async function ladeKontakte(
   if (!m) throw new DienstFehler('NICHT_GEFUNDEN');
   const zeilen = await ctx.tx.mandantKontaktRolle.findMany({
     where: { mandantId: id },
-    orderBy: [{ kontaktId: 'asc' }, { rolle: 'asc' }],
+    orderBy: [{ kontaktId: 'asc' }, { rolle: 'asc' }, { id: 'asc' }],
     select: ZEILE,
   });
   return antwortNach(KontakteAntwortSchema, 'ladeKontakte', {
@@ -104,6 +104,7 @@ export async function setzeKontaktRollen(
 
   const vorher = await tx.mandantKontaktRolle.findMany({
     where: { mandantId, kontaktId },
+    orderBy: [{ rolle: 'asc' }, { id: 'asc' }],
     select: ZEILE,
   });
   const aktivVorher = new Set(vorher.filter((z) => z.aktiv).map((z) => z.rolle));
@@ -185,7 +186,7 @@ export async function setzeKontaktRollen(
 
   const nachher = await tx.mandantKontaktRolle.findMany({
     where: { mandantId, kontaktId },
-    orderBy: { rolle: 'asc' },
+    orderBy: [{ rolle: 'asc' }, { id: 'asc' }],
     select: ZEILE,
   });
   return antwortNach(KontaktRollenAntwortSchema, 'setzeKontaktRollen', {

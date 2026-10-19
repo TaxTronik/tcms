@@ -333,6 +333,7 @@ export async function haengeNachweisAn(
         durchfuehrung: { kontrolle: { programm: { mandantId: lage.mandantId.toLowerCase() } } },
       },
       select: { sha256: true, groesse: true },
+      orderBy: [{ hochgeladenAm: 'asc' }, { id: 'asc' }],
     });
     const fremd = gleiche.some((n) => n.sha256 !== verweis.sha256 || n.groesse !== verweis.groesse);
     if (fremd) {
@@ -558,6 +559,7 @@ export async function gegenzeichneDurchfuehrung(
             risiko: { entscheidung: 'UEBERNOMMEN', programmId: lage.programmId },
           },
           select: { risiko: { select: { id: true, code: true } } },
+          orderBy: [{ kontrolleId: 'asc' }, { risikoId: 'asc' }],
         });
         const erlaubt = new Map(links.map((l) => [l.risiko.id, l.risiko.code]));
         if (f.risikoIds.some((id) => !erlaubt.has(id))) {

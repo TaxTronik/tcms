@@ -338,13 +338,19 @@ export async function ladeDurchfuehrung(
       erfasstVon: true,
       p153EntschiedenVon: true,
       verwerfenBeantragtVon: true,
-      massnahmen: { select: { verantwortlich: true } },
+      massnahmen: {
+        select: { verantwortlich: true },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      },
     },
-    orderBy: { nummer: 'asc' },
+    orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
   });
   const risikoLinks = await ctx.tx.risikoKontrolle.findMany({
     where: { kontrolleId: d.kontrolleId },
-    include: { risiko: { include: { staende: true } } },
+    include: {
+      risiko: { include: { staende: { orderBy: [{ version: 'asc' }, { id: 'asc' }] } } },
+    },
+    orderBy: [{ kontrolleId: 'asc' }, { risikoId: 'asc' }],
   });
   const letzteRoh = await ctx.tx.durchfuehrung.findMany({
     where: {
@@ -353,12 +359,12 @@ export async function ladeDurchfuehrung(
       periodeVon: { lt: d.periodeVon },
       nachtragZuId: null,
     },
-    orderBy: { periodeVon: 'desc' },
+    orderBy: [{ periodeVon: 'desc' }, { id: 'desc' }],
     take: 3,
   });
   const nachtraegeRoh = await ctx.tx.durchfuehrung.findMany({
     where: { nachtragZuId: d.id, kontrolleId: d.kontrolleId },
-    orderBy: { createdAt: 'asc' },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
   const kurz = (x: (typeof letzteRoh)[number]) => ({
     id: x.id,

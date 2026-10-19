@@ -110,7 +110,7 @@ async function profilAenderungen(
 ): Promise<{ am: Date; fragen: string[] }[]> {
   const staende = await tx.profilStand.findMany({
     where: { programmId, gueltigAb: { lte: ende } },
-    orderBy: { gueltigAb: 'asc' },
+    orderBy: [{ gueltigAb: 'asc' }, { version: 'asc' }, { id: 'asc' }],
     select: { gueltigAb: true, antworten: true },
   });
   const out: { am: Date; fragen: string[] }[] = [];
@@ -193,7 +193,7 @@ async function akzeptanzen(
   const ende = tagesende(k.stand);
   const liste = await ctx.tx.freigabe.findMany({
     where: { programmId: k.programm.id, art: 'RISIKOAKZEPTANZ', angefordertAm: { lte: ende } },
-    orderBy: { angefordertAm: 'desc' },
+    orderBy: [{ angefordertAm: 'desc' }, { id: 'desc' }],
   });
   // Zustellstatus der Anforderung: nur im aktuellen Stand.
   const zustellungen = await zustellungenDerFreigaben(ctx.tx, k.mandant.id, liste, k);
@@ -350,7 +350,10 @@ export async function ladeRisiko(ctx: DienstKontext, eingabe: RisikoLesen): Prom
       where: { id: r.id, programmId: k.programm.id },
       select: {
         aktivAb: true,
-        staende: { where: { gueltigAb: { lte: ende } }, orderBy: { gueltigAb: 'desc' } },
+        staende: {
+          where: { gueltigAb: { lte: ende } },
+          orderBy: [{ gueltigAb: 'desc' }, { version: 'desc' }, { id: 'desc' }],
+        },
       },
     }),
     auditSpur(ctx.tx, k, 'Risiko', r.id),
@@ -423,6 +426,7 @@ async function feststellungenJeDurchfuehrung(tx: Tx, k: TcmsKontext): Promise<Fe
       erfasstAm: { lte: tagesende(k.stand) },
     },
     select: { id: true, nummer: true, durchfuehrungId: true },
+    orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
   });
   const sicht = new Map(k.feststellungen.map((f) => [f.id, f]));
   for (const f of liste) {
@@ -470,7 +474,7 @@ async function kontrollStaende(
   if (kontrolleIds.length === 0) return out;
   const staende = await tx.kontrolleStand.findMany({
     where: { kontrolleId: { in: [...kontrolleIds] }, gueltigAb: { lte: ende } },
-    orderBy: { version: 'asc' },
+    orderBy: [{ version: 'asc' }, { id: 'asc' }],
   });
   for (const s of staende) out.set(s.kontrolleId, [...(out.get(s.kontrolleId) ?? []), s]);
   return out;
@@ -678,11 +682,11 @@ export async function ladeProfil(ctx: DienstKontext, eingabe: ProfilLesen): Prom
       // Bis zum Stichtag erfasste Stände, auch im Voraus erfasste (künftig gültige).
       profile: {
         where: { createdAt: { lte: ende } },
-        orderBy: [{ gueltigAb: 'asc' }, { createdAt: 'asc' }],
+        orderBy: [{ gueltigAb: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       },
       risiken: {
         where: { createdAt: { lte: ende } },
-        orderBy: { code: 'asc' },
+        orderBy: [{ code: 'asc' }, { id: 'asc' }],
         select: {
           id: true,
           code: true,

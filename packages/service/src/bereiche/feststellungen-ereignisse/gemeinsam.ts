@@ -356,7 +356,7 @@ export async function legeAusserplanmaessigeDurchfuehrungAn(
 ): Promise<{ id: string; code: string }> {
   const k = await tx.kontrolle.findFirst({
     where: { id: a.kontrolleId, programmId: a.programmId },
-    include: { staende: true },
+    include: { staende: { orderBy: [{ version: 'asc' }, { id: 'asc' }] } },
   });
   if (!k) throw new DienstFehler('NICHT_GEFUNDEN');
   const t = a.zeitpunkt.getTime();

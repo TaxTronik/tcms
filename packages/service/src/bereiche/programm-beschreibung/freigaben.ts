@@ -162,7 +162,11 @@ export async function ladePortalFreigaben(
   const lesen = kannPortalLesen(a, mandantId, rollen);
   const istGv = istGesetzlicherVertreter(a, mandantId, rollen);
   const tx = ctx.tx;
-  const programme = await tx.tcmsProgramm.findMany({ where: { mandantId }, select: { id: true } });
+  const programme = await tx.tcmsProgramm.findMany({
+    where: { mandantId },
+    select: { id: true },
+    orderBy: { id: 'asc' },
+  });
   const ids = programme.map((p) => p.id);
   const kontakte = await aktiveKontakte(tx, mandantId);
   const gesetzlicheVertreter = kontakte
@@ -185,7 +189,7 @@ export async function ladePortalFreigaben(
     }),
     tx.beschreibungVersion.findMany({
       where: { programmId: { in: ids } },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     }),
   ]);
   const freigaben = alle.filter((f) => lesen || gleicheId(f.empfaengerId, a.id));
@@ -561,6 +565,7 @@ export async function erteileFreigabe(
           status: { in: ['FREIGEGEBEN', 'BEIM_MANDANTEN'] },
         },
         select: { id: true, nummer: true, status: true },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       });
       for (const a of vorgaenger) {
         await tx.beschreibungVersion.updateMany({

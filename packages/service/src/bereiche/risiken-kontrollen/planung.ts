@@ -131,7 +131,14 @@ export async function aktuelleRisikenDerKontrolle(
 ): Promise<RisikoFuerPlanung[]> {
   const links = await tx.risikoKontrolle.findMany({
     where: { kontrolleId },
-    include: { risiko: { include: { staende: { where: { gueltigBis: null } } } } },
+    include: {
+      risiko: {
+        include: {
+          staende: { where: { gueltigBis: null }, orderBy: [{ version: 'asc' }, { id: 'asc' }] },
+        },
+      },
+    },
+    orderBy: [{ kontrolleId: 'asc' }, { risikoId: 'asc' }],
   });
   return links.flatMap((l) => {
     const r = l.risiko;
@@ -308,6 +315,7 @@ export async function planeDurchfuehrungenNeu(
     include: {
       _count: { select: { nachweise: true, feststellungen: true, nachkontrolleFuer: true } },
     },
+    orderBy: [{ periodeVon: 'asc' }, { id: 'asc' }],
   });
   const istKandidat = (d: (typeof alle)[number]) =>
     d.status === 'GEPLANT' &&

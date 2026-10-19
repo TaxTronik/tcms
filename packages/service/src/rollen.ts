@@ -50,5 +50,6 @@ export async function ladeKontaktRollen(tx: Tx, akteur: Akteur): Promise<Kontakt
   return tx.mandantKontaktRolle.findMany({
     where: { mandantId: akteur.mandantId, kontaktId: akteur.id, aktiv: true },
     select: { mandantId: true, kontaktId: true, rolle: true, aktiv: true },
+    orderBy: [{ rolle: 'asc' }, { id: 'asc' }],
   });
 }
