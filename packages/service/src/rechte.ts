@@ -14,8 +14,10 @@
 // =============================================================================
 
 import type { Akteur, MandantBezug } from '@tcms/contract';
+import type { MandantRolle } from '@tcms/domain';
 
-export type MandantRolle = 'GESETZLICHER_VERTRETER' | 'TAX_COMPLIANCE_BEAUFTRAGTER' | 'MITARBEITER';
+/** Rollen der Mandantenseite; eine Quelle in `@tcms/domain` (`MANDANT_ROLLEN`). */
+export type { MandantRolle };
 
 /** Rolle eines Mandantenkontakts (Zeile aus MandantKontaktRolle). */
 export interface KontaktRolle {
