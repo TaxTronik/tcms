@@ -3,6 +3,7 @@ import {
   DF_MAX_NACHWEIS_BYTES,
   DurchfuehrungBegruendungBodySchema,
   DurchfuehrungLesenEingabeSchema,
+  DurchfuehrungRechtSchema,
   DurchfuehrungSpeichernBodySchema,
   DurchfuehrungSpeichernEingabeSchema,
   DurchfuehrungZielSchema,
@@ -227,5 +228,39 @@ describe('Vertrag durchfuehrung: Gegenzeichnen', () => {
     expect(ok(GegenzeichnenBodySchema, { feststellung: { ...f, status: 'GESCHLOSSEN' } })).toBe(
       false,
     );
+  });
+});
+
+describe('Vertrag durchfuehrung: Rechte-Flag', () => {
+  it('erlaubt ohne Grund; verweigert mit Text und optionalem Verweigerungsgrund der Liste', () => {
+    expect(ok(DurchfuehrungRechtSchema, { erlaubt: true, grund: null, verweigerung: null })).toBe(
+      true,
+    );
+    expect(
+      ok(DurchfuehrungRechtSchema, {
+        erlaubt: false,
+        grund: 'Bereits begonnen',
+        verweigerung: null,
+      }),
+    ).toBe(true);
+    expect(
+      ok(DurchfuehrungRechtSchema, {
+        erlaubt: false,
+        grund: 'Gegenzeichnung durch eine andere Person',
+        verweigerung: 'VIER_AUGEN',
+      }),
+    ).toBe(true);
+  });
+
+  it('weist widersprüchliche, unbekannte und unvollständige Flags ab (fail closed)', () => {
+    const falsch: [string, unknown][] = [
+      ['erlaubt mit Verweigerung', { erlaubt: true, grund: null, verweigerung: 'BEARBEITEN' }],
+      ['erlaubt mit Text', { erlaubt: true, grund: 'x', verweigerung: null }],
+      ['verweigert ohne Text', { erlaubt: false, grund: null, verweigerung: 'BEARBEITEN' }],
+      ['unbekannter Grund', { erlaubt: false, grund: 'x', verweigerung: 'ADMIN' }],
+      ['Grund fehlt', { erlaubt: false, grund: 'x' }],
+      ['interne Art', { erlaubt: false, grund: 'x', verweigerung: null, art: 'STATUS' }],
+    ];
+    for (const [name, r] of falsch) expect(ok(DurchfuehrungRechtSchema, r), name).toBe(false);
   });
 });

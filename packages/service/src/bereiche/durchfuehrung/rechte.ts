@@ -298,13 +298,23 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
   };
 }
 
-/** Flags für die Oberfläche (ohne interne Art). */
-export function rechteFlags(
-  r: HandlungsRechte,
-): Record<keyof HandlungsRechte, { erlaubt: boolean; grund: string | null }> {
-  const out = {} as Record<keyof HandlungsRechte, { erlaubt: boolean; grund: string | null }>;
+/** Flag einer Handlung für die Oberfläche (Vertrag `DurchfuehrungRechtSchema`). */
+export interface RechtFlag {
+  erlaubt: boolean;
+  grund: string | null;
+  /** Verweigerungsgrund des `403` der Operation; `null` bei Erlaubnis oder Zustand (`409`). */
+  verweigerung: VerweigerungGrund | null;
+}
+
+/**
+ * Flags für die Oberfläche (ohne interne Art). `verweigerung` ist genau der
+ * Grund, mit dem die Operation (`verlange`) dieselbe Ablehnung als `403`
+ * meldet – eine Quelle für Kennzeichen und Schreibrecht.
+ */
+export function rechteFlags(r: HandlungsRechte): Record<keyof HandlungsRechte, RechtFlag> {
+  const out = {} as Record<keyof HandlungsRechte, RechtFlag>;
   for (const [k, v] of Object.entries(r) as [keyof HandlungsRechte, Recht][]) {
-    out[k] = { erlaubt: v.erlaubt, grund: v.grund };
+    out[k] = { erlaubt: v.erlaubt, grund: v.grund, verweigerung: v.verweigerung };
   }
   return out;
 }

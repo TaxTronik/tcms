@@ -122,7 +122,7 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
       expect(d.namen).toEqual([]);
       expect(JSON.stringify(d)).not.toContain('Kanzleiperson');
       expect(d.zurueckgewiesenVon).toBe(f.p.pruefer);
-      expect(d.rechte.nachtrag).toEqual({ erlaubt: true, grund: null });
+      expect(d.rechte.nachtrag).toEqual({ erlaubt: true, grund: null, verweigerung: null });
       expect(d.rechte.gegenzeichnen.erlaubt).toBe(false);
       expect(d.historisch).toBe(false);
       expect(d.stand).toBe('2026-10-16');
@@ -143,9 +143,14 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
       expect(alsBearbeiter.rechte.gegenzeichnen).toEqual({
         erlaubt: false,
         grund: 'Gegenzeichnung muss durch eine andere Person erfolgen (Vier-Augen-Prinzip)',
+        verweigerung: 'VIER_AUGEN',
       });
       const alsPruefer = await f.dienst(a.pruefer, (ctx) => ladeDurchfuehrung(ctx, ziel(did)));
-      expect(alsPruefer.rechte.gegenzeichnen).toEqual({ erlaubt: true, grund: null });
+      expect(alsPruefer.rechte.gegenzeichnen).toEqual({
+        erlaubt: true,
+        grund: null,
+        verweigerung: null,
+      });
       expect(alsPruefer.rechte.zurueckweisen.erlaubt).toBe(true);
       expect(alsPruefer.rechte.bearbeiten.erlaubt).toBe(false);
     });
@@ -168,7 +173,11 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
       );
       expect(d.historisch).toBe(true);
       for (const r of Object.values(d.rechte)) {
-        expect(r).toEqual({ erlaubt: false, grund: 'Änderungen nur im aktuellen Stand möglich' });
+        expect(r).toEqual({
+          erlaubt: false,
+          grund: 'Änderungen nur im aktuellen Stand möglich',
+          verweigerung: null,
+        });
       }
       // Am 15.10. existierten weder Nachweis noch Abschluss (fachliche Zeit = 16.10.).
       expect(d.nachweise).toHaveLength(0);

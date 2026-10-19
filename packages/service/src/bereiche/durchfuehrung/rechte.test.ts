@@ -77,10 +77,41 @@ describe('durchfuehrungsRechte', () => {
     });
   });
 
+  it('Flags tragen den Verweigerungsgrund der Rechtefunktion, ohne interne Art', () => {
+    const fremd = rechteFlags(durchfuehrungsRechte(lage({ akteur: kanzlei(id(99)) })));
+    expect(fremd.beginnen).toEqual({
+      erlaubt: false,
+      grund: 'Durchführung durch die zugewiesene Person oder ihre Vertretung',
+      verweigerung: 'DURCHFUEHREN',
+    });
+    const begonnen = rechteFlags(durchfuehrungsRechte(lage({ status: 'IN_DURCHFUEHRUNG' })));
+    expect(begonnen.beginnen).toEqual({
+      erlaubt: false,
+      grund: 'Bereits begonnen',
+      verweigerung: null,
+    });
+    expect(begonnen.bearbeiten).toEqual({ erlaubt: true, grund: null, verweigerung: null });
+    // Für jede Handlung: Flag = Rechtefunktion (erlaubt, Text, Grund), nie `art`.
+    const r = durchfuehrungsRechte(lage({ akteur: kontakt(GV) }));
+    const flags = rechteFlags(r);
+    for (const [k, v] of Object.entries(r) as [keyof typeof r, (typeof r)[keyof typeof r]][]) {
+      expect(flags[k]).toEqual({
+        erlaubt: v.erlaubt,
+        grund: v.grund,
+        verweigerung: v.verweigerung,
+      });
+      expect(flags[k]).not.toHaveProperty('art');
+    }
+  });
+
   it('historischer Stand sperrt jede Handlung', () => {
     const r = rechteFlags(durchfuehrungsRechte(lage({ historisch: true })));
     for (const x of Object.values(r)) {
-      expect(x).toEqual({ erlaubt: false, grund: 'Änderungen nur im aktuellen Stand möglich' });
+      expect(x).toEqual({
+        erlaubt: false,
+        grund: 'Änderungen nur im aktuellen Stand möglich',
+        verweigerung: null,
+      });
     }
   });
 
