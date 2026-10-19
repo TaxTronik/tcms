@@ -225,6 +225,28 @@ Header-Werte und Bodys). Fremde Mandanten und nicht kanonische Pfade ergeben `40
 `GET /v1/health` braucht nur das Dienst-Token, `GET /v1/ich` liefert den abgeleiteten Akteur
 (Vertragstest).
 
+**Endpunkte Programm, Beschreibung, Freigaben, Postausgang** (`…` = `/v1/mandanten/:mandantId`;
+Rechte prüft `packages/service`, Eingaben und Antworten in
+`packages/contract/src/bereiche/programm-beschreibung.ts`):
+
+| Methode | Pfad                                                   | Recht (sonst `404` bzw. `403` mit Grund)      |
+| ------- | ------------------------------------------------------ | --------------------------------------------- |
+| GET     | `/v1/nachrichten/offen?limit=`                         | Kanzleiperson mit `rol.adm` (tenantweit)      |
+| POST    | `/v1/nachrichten/:nachrichtId/zugestellt`              | wie oben; idempotent, löscht die Nachricht    |
+| GET     | `…/einrichtung?berufstraegerId=&bearbeitungId=&…`      | `kannLesen`                                   |
+| POST    | `…/einrichtung/entwurf`, `…/einrichtung/anlegen`       | `kannBearbeiten`; ein Programm je Mandant     |
+| GET     | `…/beschreibung?stand=`                                | `kannLesen`                                   |
+| POST    | `…/beschreibung/versionen`, `…/versionen/:id/…`        | `kannBearbeiten`; Review-Abschluss: 2. Person |
+| POST    | `…/freigaben/:freigabeId/neuadressierung`              | `kannBearbeiten` (TS-06, auditiert)           |
+| GET     | `…/kommunikation/freigaben?stand=`                     | `kannLesen`                                   |
+| GET     | `…/portal/freigaben`                                   | Mandantenkontakt mit aktiver Rolle            |
+| POST    | `…/portal/freigaben/:freigabeId/code` bzw. `freigeben` | adressierte gesetzliche Vertretung            |
+| POST    | `…/portal/freigaben/:freigabeId/kenntnisnahme`         | adressierte Person                            |
+
+Bestätigungscodes erreichen die Empfänger nur über den Postausgang (Adresse = Personen-ID); keine
+andere Antwort, kein Log und kein Audit enthält einen Code. Ein falscher Code ergibt `200` mit
+`freigegeben: false` (der Fehlversuch bleibt gezählt und protokolliert).
+
 Tests: `pnpm --filter @tcms/api test`. Die PostgreSQL-Tests laufen gegen eine Datenbank, die wie in
 Produktion aufgebaut ist (Bootstrap und Migration wie oben unter „Datenbank“), ausschließlich als
 Laufzeitrolle `tcms_app`:
@@ -244,7 +266,8 @@ mit diesen Rollen nicht startet.
 - **Anmeldung:** Die Demo-Oberfläche kennt nur die Personenauswahl (nie in Produktion). Im
   Zielbild meldet die kanzleikonsole an und ruft das Tax-CMS mit Dienst-Token und signierter
   Akteursbestätigung auf (ADR 0001 §3).
-- **E-Mail:** kein Versand; Nachrichten und Bestätigungscodes stehen im Entwicklungs-Postausgang.
+- **E-Mail:** kein Versand; Nachrichten und Bestätigungscodes stehen im Postausgang (Demo:
+  Entwicklungs-Postausgang; Dienst: Abholung durch die kanzleikonsole über `/v1/nachrichten`).
 - **Nachweisablage:** Demo: Dateisystem unter `.data/nachweise`, Pfad nur in der Form
   `<2 Hex>/<SHA-256>`, beim Lesen gegen den SHA-256 geprüft. Kein WORM-Speicher, kein Virenscan.
   Der Dienst speichert nur Verweise; Dateien nimmt die kanzleikonsole an (ADR 0001 §6).

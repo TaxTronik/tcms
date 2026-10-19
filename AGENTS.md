@@ -100,6 +100,18 @@ für KI-Werkzeuge.
 - `TCMS_DEMO_TODAY` wirkt nur über die Demo-Uhr in `apps/web`; Audit-
   Zeitstempel und Sicherheitsfristen (Codes) sind immer echte Zeit.
 
+## Freigaben und Postausgang (verbindlich)
+
+- Freigaben erteilt nur die adressierte Person (Vergleich der IDs), Freigaben mit Code nur eine
+  aktive gesetzliche Vertretung. Eine andere Person zieht keine Anforderung an sich; die Kanzlei
+  adressiert neu (eigene, auditierte Aktion, setzt Code und Fehlversuche zurück) – TS-06.
+- Bestätigungscodes: 6 Ziffern aus `randomInt`, nur ein an die Freigabe gebundener SHA-256 wird
+  gespeichert, 7 Tage gültig (echte Zeit), höchstens 5 Fehlversuche je Freigabe (gezählt unter
+  Zeilensperre, nie aus dem Audit), einmal verwendbar, Vergleich mit `timingSafeEqual`. Codes
+  stehen in keiner Antwort, keinem Log und keinem Audit-Detail – nur im Postausgang.
+- Nachrichten adressieren Empfänger über die Personen-ID (`tcms:<ZWECK>:<uuid>`), nie über Namen.
+- Freigegeben wird nur ein eingefrorener Inhalt, dessen SHA-256 zum gespeicherten Hash passt.
+
 ## Dienst und Authentifizierung (verbindlich, ADR 0001 §3)
 
 - Reihenfolge je Anfrage in `apps/api/src/app.ts`: Request-ID → Methode und
