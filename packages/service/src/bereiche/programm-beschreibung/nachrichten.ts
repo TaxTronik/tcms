@@ -249,15 +249,16 @@ async function veralteteCodes(
 
 /**
  * Offene Nachrichten des Tenants (älteste zuerst) zur Zustellung durch die
- * kanzleikonsole. Ausgeliefert wird nur, was geprüft ist: Jede Code-Nachricht
- * unter den Kandidaten und zusätzlich die ältesten
- * `MAX_CODE_PRUEFUNG_JE_ABRUF` offenen Code-Nachrichten werden gegen ihre
+ * kanzleikonsole. Ausgeliefert wird nur, was geprüft ist: Zuerst werden die
+ * ältesten `MAX_CODE_PRUEFUNG_JE_ABRUF` offenen Code-Nachrichten gegen ihre
  * Freigabe geprüft. Gilt der Code nicht mehr (Freigabe erledigt, Code
- * abgelaufen, ersetzt, gesperrt oder neu adressiert), wird die Nachricht
- * verworfen – `verworfenAm` gesetzt, `code` und `text` geleert, je Nachricht
- * ein Audit-Eintrag mit Grund (ohne Code) – und nicht ausgeliefert; der Abruf
- * liefert dann entsprechend weniger. Der Abruf wird protokolliert (IDs, kein
- * Text).
+ * abgelaufen, ersetzt, gesperrt, neu adressiert oder Freigabe eines anderen
+ * Mandanten), wird die Nachricht verworfen – `verworfenAm` gesetzt, `code` und
+ * `text` geleert, je Nachricht ein Audit-Eintrag mit Grund (ohne Code). Erst
+ * danach werden die Kandidaten gelesen; Code-Kandidaten außerhalb dieser
+ * Prüfung (nur bei sehr vielen offenen Codes) werden ebenso geprüft und
+ * gegebenenfalls nicht ausgeliefert (die Antwort enthält dann weniger als
+ * `limit`). Der Abruf wird protokolliert (IDs, kein Text).
  */
 export async function ladeOffeneNachrichten(
   ctx: SystemKontext,
@@ -270,40 +271,49 @@ export async function ladeOffeneNachrichten(
   const jetzt = new Date();
   const offen = { zugestelltAm: null, verworfenAm: null };
   const reihenfolge = [{ createdAt: 'asc' as const }, { id: 'asc' as const }];
+  const protokoll: Protokoll[] = [];
+  const geprueft = new Set<string>();
+  const ausgeschlossen = new Set<string>();
+  /** Prüft Code-Nachrichten und verwirft die veralteten (bedingt, mit Audit je Nachricht). */
+  async function pruefeUndVerwirf(zeilen: readonly CodeZeile[]): Promise<void> {
+    for (const z of zeilen) geprueft.add(z.id);
+    for (const v of await veralteteCodes(ctx.tx, zeilen, jetzt)) {
+      ausgeschlossen.add(v.id);
+      // Bedingt: Eine gleichzeitige Zustellung oder ein anderer Abruf verwirft nicht doppelt.
+      const r = await ctx.tx.nachricht.updateMany({
+        where: { id: v.id, ...offen },
+        data: { verworfenAm: jetzt, code: null, text: '' },
+      });
+      if (r.count !== 1) continue;
+      protokoll.push({
+        aktion: 'tcms.nachricht.verworfen',
+        objektTyp: 'Nachricht',
+        objektId: v.id,
+        programmId: null,
+        detail: { zweck: 'FREIGABE_CODE', empfaengerId: v.empfaengerId, grund: v.grund },
+      });
+    }
+  }
+  // 1. Die ältesten offenen Code-Nachrichten prüfen und verfallene leeren (Sparsamkeit).
+  await pruefeUndVerwirf(
+    await ctx.tx.nachricht.findMany({
+      where: { ...offen, zweck: 'FREIGABE_CODE' },
+      orderBy: reihenfolge,
+      take: MAX_CODE_PRUEFUNG_JE_ABRUF,
+      select: { id: true, mandantId: true, empfaengerId: true, daten: true, code: true },
+    }),
+  );
+  // 2. Kandidaten erst danach lesen: Verworfene belegen keinen Platz im Limit.
   const kandidaten = await ctx.tx.nachricht.findMany({
     where: offen,
     orderBy: reihenfolge,
     take: limit,
   });
-  const weitere = await ctx.tx.nachricht.findMany({
-    where: { ...offen, zweck: 'FREIGABE_CODE' },
-    orderBy: reihenfolge,
-    take: MAX_CODE_PRUEFUNG_JE_ABRUF,
-    select: { id: true, mandantId: true, empfaengerId: true, daten: true, code: true },
-  });
-  const zuPruefen = new Map<string, CodeZeile>();
-  for (const z of [...kandidaten.filter((k) => k.zweck === 'FREIGABE_CODE'), ...weitere]) {
-    zuPruefen.set(z.id, z);
-  }
-  const veraltet = await veralteteCodes(ctx.tx, [...zuPruefen.values()], jetzt);
-  const ausgeschlossen = new Set<string>();
-  const protokoll: Protokoll[] = [];
-  for (const v of veraltet) {
-    ausgeschlossen.add(v.id);
-    // Bedingt: Eine gleichzeitige Zustellung oder ein anderer Abruf verwirft nicht doppelt.
-    const r = await ctx.tx.nachricht.updateMany({
-      where: { id: v.id, ...offen },
-      data: { verworfenAm: jetzt, code: null, text: '' },
-    });
-    if (r.count !== 1) continue;
-    protokoll.push({
-      aktion: 'tcms.nachricht.verworfen',
-      objektTyp: 'Nachricht',
-      objektId: v.id,
-      programmId: null,
-      detail: { zweck: 'FREIGABE_CODE', empfaengerId: v.empfaengerId, grund: v.grund },
-    });
-  }
+  // 3. Code-Kandidaten außerhalb der Prüfung aus 1. (nur bei sehr vielen offenen Codes) prüfen:
+  //    Ausgeliefert wird nur Geprüftes.
+  await pruefeUndVerwirf(
+    kandidaten.filter((k) => k.zweck === 'FREIGABE_CODE' && !geprueft.has(k.id)),
+  );
   const nachrichten = kandidaten.filter((z) => !ausgeschlossen.has(z.id)).map(alsOffeneNachricht);
   if (nachrichten.length > 0) {
     protokoll.push({

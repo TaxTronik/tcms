@@ -12,6 +12,8 @@ import { akteure, legeMandantenAn, neueApiWelt, ok, senden } from './programm-be
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 const w = neueApiWelt();
+/** Code als eigenes Token (nicht als zufällige Ziffernfolge innerhalb einer ID oder eines Hashs). */
+const alsToken = (code: string) => new RegExp(`(?<![0-9a-z])${code}(?![0-9a-z])`);
 const a = akteure(w);
 
 describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
@@ -134,10 +136,10 @@ describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
         actorName: 'System: Zustellung kanzleikonsole',
       });
       expect(e.detail).toMatchObject({ systemakteur: true });
-      expect(JSON.stringify(e.detail)).not.toContain(code);
+      expect(JSON.stringify(e.detail)).not.toMatch(alsToken(code));
     }
     // Kein Code und kein Name im Log des Dienstes.
-    expect(w.t.logRoh.join('\n')).not.toContain(code);
+    expect(w.t.logRoh.join('\n')).not.toMatch(alsToken(code));
     expect(w.t.logRoh.join('\n')).not.toContain('Zustellung kanzleikonsole');
   });
 
@@ -204,7 +206,7 @@ describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
     const roh = await r.text();
     expect(r.status).toBe(200);
     expect(roh).not.toContain(verfallen);
-    expect(roh).not.toContain('987650');
+    expect(roh).not.toMatch(alsToken('987650'));
     const zeile = await mitTenant(w.T, (tx) =>
       tx.nachricht.findUniqueOrThrow({ where: { id: verfallen } }),
     );
@@ -217,7 +219,7 @@ describe.skipIf(!AKTIV)('Endpunkte Postausgang (App + PostgreSQL)', () => {
     );
     expect(audit).toHaveLength(1);
     expect(audit[0]!.detail).toMatchObject({ grund: 'FREIGABE_NICHT_OFFEN', systemakteur: true });
-    expect(JSON.stringify(audit)).not.toContain('987650');
-    expect(w.t.logRoh.join('\n')).not.toContain('987650');
+    expect(JSON.stringify(audit)).not.toMatch(alsToken('987650'));
+    expect(w.t.logRoh.join('\n')).not.toMatch(alsToken('987650'));
   });
 });

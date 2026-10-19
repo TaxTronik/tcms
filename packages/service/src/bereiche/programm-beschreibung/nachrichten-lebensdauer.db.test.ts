@@ -18,6 +18,24 @@ import { baueWelt, btA, im, imSystem, inWelt, kontakt, system, type Welt } from 
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 
+/**
+ * Alle Texte eines Audit-Details ohne IDs (cuid, UUID, SHA-256): Ziffernfolgen
+ * in IDs könnten zufällig einem Code gleichen, ohne einer zu sein.
+ */
+function ohneIds(wert: unknown): string {
+  const ID = /^(c[a-z0-9]{20,30}|[0-9a-f-]{36}|[0-9a-f]{64})$/;
+  const texte: string[] = [];
+  const sammle = (x: unknown): void => {
+    if (typeof x === 'string') {
+      if (!ID.test(x)) texte.push(x);
+    } else if (typeof x === 'number') texte.push(String(x));
+    else if (Array.isArray(x)) x.forEach(sammle);
+    else if (x && typeof x === 'object') Object.values(x).forEach(sammle);
+  };
+  sammle(wert);
+  return texte.join('\n');
+}
+
 describe.skipIf(!AKTIV)('Lebensdauer der Code-Nachrichten (Service, PostgreSQL)', () => {
   let w: Welt;
   let programmA = '';
@@ -75,7 +93,7 @@ describe.skipIf(!AKTIV)('Lebensdauer der Code-Nachrichten (Service, PostgreSQL)'
     const audit = await verworfenAudit(id);
     expect(audit).toHaveLength(1);
     expect(audit[0]!.detail).toMatchObject({ zweck: 'FREIGABE_CODE', grund, systemakteur: true });
-    expect(JSON.stringify(audit[0])).not.toContain(code);
+    expect(ohneIds(audit[0]!.detail)).not.toContain(code);
     // Ein weiterer Abruf verwirft nicht noch einmal.
     await abruf();
     expect(await verworfenAudit(id)).toHaveLength(1);
@@ -184,7 +202,7 @@ describe.skipIf(!AKTIV)('Lebensdauer der Code-Nachrichten (Service, PostgreSQL)'
     expect((await abruf()).nachrichten.map((x) => x.id)).toContain(n.id);
   });
 
-  it('begrenzte Prüfung je Abruf: Ungeprüftes wird nie ausgeliefert, der Rest beim nächsten Abruf geleert', async () => {
+  it('begrenzte Prüfung je Abruf: Code-Kandidaten außerhalb der Prüfung werden geprüft, nie ungeprüft ausgeliefert', async () => {
     const w2 = await baueWelt();
     const n = MAX_CODE_PRUEFUNG_JE_ABRUF + 1;
     const basis = Date.now() - 3_600_000;
@@ -206,13 +224,51 @@ describe.skipIf(!AKTIV)('Lebensdauer der Code-Nachrichten (Service, PostgreSQL)'
     const abrufW2 = () => imSystem(system(w2), (ctx) => ladeOffeneNachrichten(ctx, { limit: 1 }));
     const offen = () =>
       inWelt(w2, (tx) => tx.nachricht.count({ where: { zugestelltAm: null, verworfenAm: null } }));
-    expect(await abrufW2()).toEqual({ nachrichten: [] });
-    expect(await offen()).toBe(1);
+    // Die ältesten 1 000 prüft Schritt 1, der Kandidat Nr. 1 001 liegt außerhalb
+    // und wird vor der Auslieferung eigens geprüft.
     expect(await abrufW2()).toEqual({ nachrichten: [] });
     expect(await offen()).toBe(0);
     expect(await inWelt(w2, (tx) => tx.nachricht.count({ where: { code: { not: null } } }))).toBe(
       0,
     );
+  });
+
+  it('verworfene Codes belegen keinen Platz im Limit', async () => {
+    const w3 = await baueWelt();
+    const alt = await inWelt(w3, (tx) =>
+      legeNachrichtAn(tx, {
+        mandantId: w3.mandantA,
+        empfaengerId: w3.gv,
+        zweck: 'FREIGABE_CODE',
+        daten: {
+          freigabeId: 'ckunbekanntefreigabe0000',
+          art: 'RISIKOAKZEPTANZ',
+          titel: 'Verfallen',
+          version: null,
+          code: '246802',
+          gueltigBis: new Date(Date.now() + 86_400_000).toISOString(),
+          sha256: null,
+        },
+        betreff: 'B',
+        text: 'T',
+        erstelltAm: new Date(Date.now() - 60_000),
+      }),
+    );
+    const neu = await inWelt(w3, (tx) =>
+      legeNachrichtAn(tx, {
+        mandantId: w3.mandantA,
+        empfaengerId: w3.tcb,
+        zweck: 'FREIGABE_ANGEFORDERT',
+        daten: { freigabeId: 'ckfreigabe0000000000000y', art: 'ZIELE', titel: 'Z', version: null },
+        betreff: 'B',
+        text: 'T',
+      }),
+    );
+    const r = await imSystem(system(w3), (ctx) => ladeOffeneNachrichten(ctx, { limit: 1 }));
+    expect(r.nachrichten.map((n) => n.id)).toEqual([neu]);
+    expect(
+      await inWelt(w3, (tx) => tx.nachricht.findUniqueOrThrow({ where: { id: alt } })),
+    ).toMatchObject({ code: null, text: '' });
   });
 
   it('Nachrichten ohne Code bleiben unberührt; kein Code in irgendeinem Audit-Detail', async () => {
@@ -236,9 +292,12 @@ describe.skipIf(!AKTIV)('Lebensdauer der Code-Nachrichten (Service, PostgreSQL)'
     )
       .map((n) => /(\d{6})/.exec(n.text)?.[1])
       .filter((c): c is string => !!c);
-    const audit = JSON.stringify(
-      await inWelt(w, (tx) => tx.auditEvent.findMany({ select: { detail: true } })),
+    const audit = ohneIds(
+      await inWelt(w, (tx) =>
+        tx.auditEvent.findMany({ select: { detail: true, actorName: true } }),
+      ),
     );
+    expect(codes.length).toBeGreaterThan(0);
     for (const c of codes) expect(audit).not.toContain(c);
   });
 });
