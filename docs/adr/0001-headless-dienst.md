@@ -346,7 +346,9 @@ Stufe 2). Ein `Dockerfile` mit zwei Zielen, Basisimages per Digest gepinnt
   Laufzeitverbindung (`pruefeLaufzeitverbindung`) ab und nennt keine Werte;
   `SIGTERM` lässt laufende Anfragen höchstens 20 s zu Ende laufen.
   `TCMS_LOG_LEVEL` (`info|warn|error`) ist optional. `pnpm api` startet in der
-  Entwicklung weiter über `tsx` (devDependency).
+  Entwicklung weiter über `tsx` (devDependency). Pflichtvariablen:
+  `TCMS_SERVICE_TOKENS`, `TCMS_ACTOR_PUBLIC_KEYS`, `TCMS_CODE_SCHLUESSEL`
+  (unten) und `DATABASE_URL` (Rolle `tcms_app`).
 - **`tcms-migrate`** (`postgres:18-alpine`, ohne Node und Prisma-CLI, UID 70):
   `packages/db/betrieb/migrate.sh` ohne Argumente, idempotent, Abbruch bei jedem
   Fehler. (1) Bootstrap als Superuser (`TCMS_DB_SUPERUSER_URL`) aus
@@ -370,6 +372,41 @@ Stufe 2). Ein `Dockerfile` mit zwei Zielen, Basisimages per Digest gepinnt
   anhängen; ENABLE+FORCE RLS mit Policy auf allen Tabellen außer Ledger und
   `akteur_jti`. Kein Passwort steht je in einer Kommandozeile (URLs werden in der
   Shell zerlegt und als `PG*`-Umgebung übergeben) oder in der Ausgabe. Kein Seed.
+
+**Pflichtvariable `TCMS_CODE_SCHLUESSEL` (nur `tcms-api`, Hinweis H5 aus
+RT4).** Schlüssel der Bestätigungscodes: Gespeichert wird je Code nur ein an
+die Freigabe gebundener HMAC-SHA-256 und die daraus abgeleitete Kennung des
+Schlüssels (`codeSchluesselId`), nie der Schlüssel.
+
+- **Nur `tcms-api`:** nicht an `tcms-migrate`, nicht an den Healthcheck und
+  nicht an app oder worker der kanzleikonsole; nie im Image, in Build-Argumenten
+  (`pnpm image:pruefen` weist `SCHLUESSEL` in `ENV`/`ARG` ab), in Logs oder in der
+  Datenbank. Ablage in der geheimen `.env` (Modus 0600) bzw. als Secret.
+- **Format:** kommagetrennte Liste (Leerraum um die Kommas wird entfernt); je
+  Eintrag 32–512 Zeichen aus `A-Z a-z 0-9 - . _ ~ + /`, `=` nur am Ende,
+  mindestens 8 verschiedene Zeichen, kein Platzhalter, keine Dubletten, kein
+  Eintrag gleich einem Eintrag von `TCMS_SERVICE_TOKENS`. Der Eintrag wirkt als
+  UTF-8-Zeichenkette (nicht base64-dekodiert); anders kodiert ist es ein anderer
+  Schlüssel. Der erste Eintrag signiert neue Codes, alle prüfen.
+- **Erzeugung:** je Eintrag 32 Zufallsbytes, z. B. `openssl rand -base64 32`
+  oder `crypto.randomBytes(32).toString('base64url')`, unabhängig von den
+  Tokens; einmal beim Einrichten (`tcms setup`), idempotent – ein vorhandener
+  Schlüssel wird nie neu erzeugt, sonst laufen alle offenen Codes ab.
+- **Start:** Fehlt die Variable oder ist sie ungültig, endet der Dienst mit
+  Exit 1 und `TCMS_CODE_SCHLUESSEL: <Grund>` ohne Wert; das Startlog nennt nur
+  die Anzahl (`codeSchluessel: n`).
+- **Rotation mit Überlappung:** neuen Schlüssel vorn einfügen (`NEU,ALT`) und
+  `tcms-api` neu starten; frühestens nach 7 Tagen (Gültigkeit eines Codes) `ALT`
+  entfernen und erneut starten. Wird `ALT` früher entfernt, gelten seine offenen
+  Codes als abgelaufen (`409`, kein Fehlversuch) und müssen neu angefordert
+  werden (höchstens 5 je Freigabe und Kontakt in der Stunde, H1).
+- **Verlust oder Kompromittierung:** einen neuen Schlüssel ohne den alten setzen
+  und neu starten. Es gehen keine Daten verloren: offene Codes gelten als
+  abgelaufen, der nächste Abruf verwirft ihre Nachrichten (`CODE_ABGELAUFEN`),
+  Empfänger fordern neue Codes an. Bei Kompromittierung zusätzlich prüfen, ob
+  die Datenbank abgeflossen ist: Mit Schlüssel und `codeHash` sind die 10⁶
+  möglichen Codes offline prüfbar (online bleibt es bei 5 Fehlversuchen je
+  Freigabe).
 
 Migrationen laufen damit in einem getrennten, kurzlebigen Schritt als
 `tcms_owner`; der laufende Dienst kennt nur `DATABASE_URL` der Rolle

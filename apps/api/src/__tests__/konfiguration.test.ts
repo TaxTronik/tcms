@@ -72,6 +72,31 @@ describe('ladeKonfiguration', () => {
     }
   });
 
+  it('ADR 0001 §8 nennt jede Pflichtvariable, den Code-Schlüssel mit Format, Rotation und Verlust', () => {
+    const adr = readFileSync(
+      new URL('../../../../docs/adr/0001-headless-dienst.md', import.meta.url),
+      'utf8',
+    );
+    const betrieb = adr.slice(adr.indexOf('## 8. Betrieb'), adr.indexOf('## 9. '));
+    expect(betrieb.length).toBeGreaterThan(1000);
+    // Pflichtvariablen aus der Startprüfung selbst (fehlt → Problem), nicht aus einer Liste.
+    const pflicht = probleme({}).map((p) => p.split(':')[0]!);
+    expect(pflicht).toEqual(expect.arrayContaining(Object.keys(GUELTIG)));
+    for (const name of pflicht) expect(betrieb, name).toContain(`\`${name}\``);
+    const code = betrieb.slice(betrieb.indexOf('**Pflichtvariable `TCMS_CODE_SCHLUESSEL`'));
+    for (const teil of [
+      'nur `tcms-api`',
+      'nicht an `tcms-migrate`',
+      '32–512 Zeichen',
+      'openssl rand -base64 32',
+      '`NEU,ALT`',
+      '7 Tagen',
+      'Verlust oder Kompromittierung',
+    ]) {
+      expect(code, teil).toContain(teil);
+    }
+  });
+
   it('weist die Platzhalter der .env.example im Repo-Root ab', () => {
     const beispiel = envAusDatei(new URL('../../../../.env.example', import.meta.url).pathname);
     expect(Object.keys(beispiel)).toEqual(
