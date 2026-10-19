@@ -84,6 +84,87 @@ apps/web          Next.js 16 (App Router, Server Components, Server Actions)
 
 Verbindliche Arbeitsregeln (Audit, Vier-Augen, §-153, Stichtage, UI-Sprache): `AGENTS.md`.
 
+## Dienst (headless)
+
+`apps/api` ist der interne HTTP-Dienst für die kanzleikonsole (ADR 0001, Hono auf Node 24). Er hat
+keine Anmeldung: Jede Anfrage an `/v1/*` trägt ein Dienst-Token und eine Ed25519-signierte
+Akteursbestätigung (`X-TCMS-Akteur`), die an Methode, Pfad samt Query und Body-Hash gebunden ist.
+Signieren und Prüfen liegen in `packages/contract` (`signiereAkteur`, `pruefeAkteur`), damit beide
+Seiten denselben Code nutzen.
+
+```bash
+pnpm akteur:schluessel                 # Schlüsselpaar für die Akteursbestätigung (schreibt nichts)
+pnpm api                               # Dienst auf HOST:PORT, Standard 0.0.0.0:3200
+```
+
+| Variable                 | Inhalt                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------ |
+| `TCMS_SERVICE_TOKENS`    | Dienst-Tokens, kommagetrennt, je ≥ 32 Zeichen (z. B. `openssl rand -base64 48`)            |
+| `TCMS_ACTOR_PUBLIC_KEYS` | `kid=<base64 SPKI-DER>`, kommagetrennt, nur Ed25519 (Ausgabe von `pnpm akteur:schluessel`) |
+| `DATABASE_URL`           | Laufzeitrolle `tcms_app`; Start verweigert bei Superuser oder BYPASSRLS                    |
+| `HOST`, `PORT`           | Bindung, Standard `0.0.0.0` und `3200`; nur im internen Netz erreichbar machen             |
+
+Der Dienst prüft die Konfiguration beim Start und startet nicht bei fehlenden Werten, Platzhaltern
+(`apps/api/.env.example`), doppelten Einträgen oder anderen Schlüsseltypen; mit
+`NODE_ENV=production` auch nicht mit bekannten Standardpasswörtern. `TCMS_DEMO_TODAY` wirkt im Dienst
+nicht.
+
+**Rotation mit Überlappung**
+
+- Dienst-Token: neuen Token an `TCMS_SERVICE_TOKENS` anhängen und Dienst neu starten, kanzleikonsole
+  auf den neuen Token umstellen, alten Token entfernen und Dienst erneut starten.
+- Schlüssel: `pnpm akteur:schluessel`, öffentliche Zeile an `TCMS_ACTOR_PUBLIC_KEYS` anhängen und
+  Dienst neu starten, kanzleikonsole mit neuem `kid` und privatem Schlüssel signieren lassen, nach
+  mindestens 120 s (höchste Lebensdauer einer Bestätigung) den alten Eintrag entfernen.
+
+**Beispiel einer Anfrage (kanzleikonsole, Platzhalter statt Werten)**
+
+```ts
+import { randomBytes } from 'node:crypto';
+import { bodySha256, parsePrivatenSchluessel, signiereAkteur } from '@tcms/contract';
+
+const schluessel = { kid: '<kid>', privateKey: parsePrivatenSchluessel('<PKCS8 base64>') };
+const pfad = `/v1/mandanten/${mandantId}/<endpunkt>`; // kanonisch: keine `..`, `//`, `%2F`
+const body = new TextEncoder().encode(JSON.stringify(eingabe)); // genau diese Bytes senden
+const jetzt = Math.floor(Date.now() / 1000);
+const akteur = signiereAkteur(
+  {
+    iss: 'kanzleikonsole',
+    aud: 'tcms',
+    iat: jetzt,
+    exp: jetzt + 60,
+    jti: randomBytes(16).toString('base64url'),
+    tnt: tenantId,
+    sub: mitarbeiterId,
+    knd: 'KANZLEI',
+    nam: anzeigename,
+    rol: { adm: false, bt: true },
+    cli: { id: mandantId, bt: true, hb: false },
+    req: { m: 'POST', p: pfad, b: bodySha256(body) },
+  },
+  schluessel,
+);
+await fetch(`<interne-url>${pfad}`, {
+  method: 'POST',
+  headers: {
+    authorization: 'Bearer <dienst-token>',
+    'x-tcms-akteur': akteur,
+    'content-type': 'application/json',
+  },
+  body,
+});
+```
+
+Antworten: `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder? } }`. Jeder
+Fehler bei Token, Bestätigung oder `jti` ergibt dieselbe Antwort `401 NICHT_AUTHENTIFIZIERT`; der
+Grund steht nur im Log (JSON-Zeilen auf stdout, mit Request-ID, ohne Header-Werte und Bodys). Fremde
+Mandanten und nicht kanonische Pfade ergeben `404`. `GET /v1/health` braucht nur das Dienst-Token,
+`GET /v1/ich` liefert den abgeleiteten Akteur (Vertragstest).
+
+Tests: `pnpm --filter @tcms/api test`. Mit `TCMS_API_TEST_DATABASE_URL` (Superuser einer
+Test-Datenbank) laufen zusätzlich die PostgreSQL-Tests; sie legen dort `akteur_jti` und die
+NOLOGIN-Rolle `tcms_auth_test_app` an.
+
 ## Grenzen dieses Stands
 
 - **Anmeldung:** nur die Entwicklungs-Anmeldung per Personenauswahl. Für jeden Betrieb außerhalb

@@ -12,6 +12,7 @@
     "build": "pnpm --filter @tcms/web build",
     "start": "pnpm --filter @tcms/web start",
     "api": "pnpm --filter @tcms/api start",
+    "akteur:schluessel": "node scripts/akteur-schluessel.mjs",
     "typecheck": "pnpm -r --parallel run typecheck",
     "test": "pnpm -r run test",
     "db:generate": "pnpm --filter @tcms/db generate",
