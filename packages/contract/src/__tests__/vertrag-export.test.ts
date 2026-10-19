@@ -4,7 +4,7 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -101,6 +101,36 @@ describe('vertrag-export.mjs', () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/ungesicherte Änderungen/);
     expect(r.stdout).toBe('');
+  });
+
+  it('weist Symlinks und ausführbare Dateien im Vertrag ab (wie der Sync, RT2-T-02)', () => {
+    for (const art of ['symlink', 'ausfuehrbar']) {
+      const wurzel = repo(DATEIEN);
+      if (art === 'symlink') {
+        symlinkSync('../../../README.md', join(wurzel, 'packages/contract/src/leck.ts'));
+      } else {
+        chmodSync(join(wurzel, 'packages/contract/src/akteur.ts'), 0o755);
+      }
+      const git = (...a: string[]) =>
+        execFileSync('git', ['-C', wurzel, '-c', 'core.hooksPath=/dev/null', ...a], {
+          stdio: 'pipe',
+        });
+      git('add', '-A');
+      git(
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@example.invalid',
+        'commit',
+        '-q',
+        '-m',
+        art,
+      );
+      const r = exportiere(wurzel);
+      expect(r.code, art).toBe(1);
+      expect(r.stderr).toMatch(/keine normale Datei/);
+      expect(r.stdout).toBe('');
+    }
   });
 
   it('nimmt --repo an und weist unzulässige Argumente ab', () => {

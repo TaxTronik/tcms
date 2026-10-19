@@ -17,8 +17,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join, posix, resolve } from 'node:path';
+import { posix, resolve } from 'node:path';
 
 export const QUELL_PFAD = 'packages/contract/src';
 /** Wortgleich mit VENDOR_BESCHREIBUNG der kanzleikonsole (scripts/tcms/vendor-lib.mjs). */
@@ -72,23 +71,40 @@ if (git(wurzel, ['status', '--porcelain=v1', '--untracked-files=all']).trim() !=
 const commit = git(wurzel, ['rev-parse', 'HEAD']).trim();
 if (!/^[0-9a-f]{40}$/.test(commit)) fehler('HEAD ist kein vollständiger SHA-1');
 
-const dateien = git(wurzel, ['ls-files', '-z', '--', QUELL_PFAD])
+// Gehasht wird der Git-Blob des gemeldeten Commits (`git ls-tree` +
+// `git cat-file blob`), nie der Arbeitsbaum: skip-worktree/assume-unchanged
+// verbergen Abweichungen vor `git status` (Red Team RT2-T-02). Nur normale
+// Dateien (Modus 100644); Symlinks, ausführbare Dateien und Submodule brechen
+// ab – wie im Sync der kanzleikonsole (RT2-K-01).
+const baum = git(wurzel, ['ls-tree', '-r', '-z', '--full-tree', commit, '--', QUELL_PFAD])
   .split('\0')
   .filter(Boolean)
-  .map((p) => p.slice(QUELL_PFAD.length + 1))
-  .filter((p) => !istTestdatei(p))
-  .sort();
-if (dateien.length === 0) fehler(`${QUELL_PFAD} enthält keine Dateien`);
-for (const p of dateien)
-  if (!istSichererPfad(p)) fehler(`unzulässiger Dateiname unter ${QUELL_PFAD}`);
+  .map((zeile) => {
+    const tab = zeile.indexOf('\t');
+    const [modus, typ, objekt] = zeile.slice(0, tab).split(' ');
+    return { modus, typ, objekt, pfad: zeile.slice(tab + 1).slice(QUELL_PFAD.length + 1) };
+  })
+  .filter((e) => !istTestdatei(e.pfad))
+  .sort((a, b) => (a.pfad < b.pfad ? -1 : a.pfad > b.pfad ? 1 : 0));
+if (baum.length === 0) fehler(`${QUELL_PFAD} enthält keine Dateien`);
+for (const e of baum) {
+  if (!istSichererPfad(e.pfad)) fehler(`unzulässiger Dateiname unter ${QUELL_PFAD}`);
+  if (e.modus !== '100644' || e.typ !== 'blob' || !/^[0-9a-f]{40}$/.test(e.objekt)) {
+    fehler(`${QUELL_PFAD}/${e.pfad} ist keine normale Datei (Modus ${e.modus})`);
+  }
+}
 
 const ergebnis = {
   beschreibung: BESCHREIBUNG,
   quelle: { repo: args.repo, pfad: QUELL_PFAD, commit },
-  dateien: dateien.map((pfad) => ({
+  dateien: baum.map(({ pfad, objekt }) => ({
     pfad,
     sha256: createHash('sha256')
-      .update(readFileSync(join(wurzel, QUELL_PFAD, pfad)))
+      .update(
+        execFileSync('git', ['-C', wurzel, 'cat-file', 'blob', objekt], {
+          maxBuffer: 16 * 1024 * 1024,
+        }),
+      )
       .digest('hex'),
   })),
 };
