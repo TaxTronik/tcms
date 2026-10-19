@@ -9,6 +9,8 @@ export const FEHLER_STATUS = {
   NICHT_AUTHENTIFIZIERT: 401,
   NICHT_BERECHTIGT: 403,
   NICHT_GEFUNDEN: 404,
+  /** Pfad bekannt, Methode nicht (auch OPTIONS/HEAD); Antwort mit `Allow`. */
+  METHODE_NICHT_ERLAUBT: 405,
   KONFLIKT: 409,
   ZU_GROSS: 413,
   INTERN: 500,
