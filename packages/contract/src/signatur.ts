@@ -31,6 +31,7 @@ import {
   AkteurHeaderSchema,
   type AkteurClaims,
 } from './akteur';
+import { parseJsonObjektStrikt } from './json';
 
 /** Feste Gründe einer abgewiesenen Akteursbestätigung (nur für das Server-Log). */
 export const PRUEF_GRUENDE = [
@@ -80,7 +81,6 @@ export interface PruefOptionen {
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const ED25519_SIGNATUR_BYTES = 64;
-const UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 /** base64url(SHA-256(bytes)), 43 Zeichen ohne Padding. */
 export function bodySha256(bytes: Uint8Array): string {
@@ -132,7 +132,7 @@ export function pruefeAkteur(token: string, opts: PruefOptionen): PruefErgebnis 
   if (!hBytes || !pBytes || !sBytes || sBytes.length !== ED25519_SIGNATUR_BYTES) {
     return abgewiesen('STRUKTUR');
   }
-  const headerRoh = jsonObjekt(hBytes);
+  const headerRoh = parseJsonObjektStrikt(hBytes);
   if (!headerRoh) return abgewiesen('STRUKTUR');
   const header = AkteurHeaderSchema.safeParse(headerRoh);
   if (!header.success) return abgewiesen('HEADER');
@@ -153,7 +153,7 @@ export function pruefeAkteur(token: string, opts: PruefOptionen): PruefErgebnis 
   if (!signaturGueltig) return abgewiesen('SIGNATUR');
 
   // 5. Claims strikt (zod, unbekannte Felder abgewiesen).
-  const payloadRoh = jsonObjekt(pBytes);
+  const payloadRoh = parseJsonObjektStrikt(pBytes);
   if (!payloadRoh) return abgewiesen('PAYLOAD');
   const geparst = AkteurClaimsSchema.safeParse(payloadRoh);
   if (!geparst.success) return abgewiesen('CLAIMS');
@@ -178,7 +178,9 @@ export function pruefeAkteur(token: string, opts: PruefOptionen): PruefErgebnis 
  * Liest `TCMS_ACTOR_PUBLIC_KEYS`: `kid=<base64 SPKI-DER>`, kommagetrennt.
  * Wirft bei leerer Liste, leeren Einträgen, ungültigem kid, doppeltem kid oder
  * Schlüssel, nicht kanonischem base64 und jedem Schlüssel außer Ed25519.
- * Fehlermeldungen nennen Position und kid, nie Schlüsselmaterial.
+ * Fehlermeldungen nennen nur die Position, nie kid oder Schlüsselmaterial:
+ * Steht versehentlich Schlüsselmaterial an der Stelle des kid, darf es nicht im
+ * Start-Log landen.
  */
 export function parseSchluesselListe(env: string): Map<string, KeyObject> {
   if (typeof env !== 'string' || env.trim() === '') {
@@ -196,26 +198,26 @@ export function parseSchluesselListe(env: string): Map<string, KeyObject> {
     if (!AkteurHeaderSchema.shape.kid.safeParse(kid).success) {
       throw new Error(`Schlüsselliste: Eintrag ${nr} hat einen ungültigen kid`);
     }
-    if (ergebnis.has(kid)) throw new Error(`Schlüsselliste: kid ${kid} doppelt`);
+    if (ergebnis.has(kid)) throw new Error(`Schlüsselliste: Eintrag ${nr} hat einen doppelten kid`);
     const der = base64Strikt(eintrag.slice(trenner + 1));
-    if (!der) throw new Error(`Schlüsselliste: ${kid} ist kein kanonisches base64`);
+    if (!der) throw new Error(`Schlüsselliste: Eintrag ${nr} ist kein kanonisches base64`);
     let schluessel: KeyObject;
     try {
       schluessel = createPublicKey({ key: der, format: 'der', type: 'spki' });
     } catch {
-      throw new Error(`Schlüsselliste: ${kid} ist kein öffentlicher Schlüssel (SPKI-DER)`);
+      throw new Error(`Schlüsselliste: Eintrag ${nr} ist kein öffentlicher Schlüssel (SPKI-DER)`);
     }
     if (!istEd25519(schluessel, 'public')) {
-      throw new Error(`Schlüsselliste: ${kid} ist kein Ed25519-Schlüssel`);
+      throw new Error(`Schlüsselliste: Eintrag ${nr} ist kein Ed25519-Schlüssel`);
     }
     // Rundreise: genau die kanonische SPKI-Kodierung, keine angehängten Bytes.
     if (!schluessel.export({ format: 'der', type: 'spki' }).equals(der)) {
-      throw new Error(`Schlüsselliste: ${kid} ist keine kanonische SPKI-Kodierung`);
+      throw new Error(`Schlüsselliste: Eintrag ${nr} ist keine kanonische SPKI-Kodierung`);
     }
     const fingerabdruck = der.toString('base64');
     if (material.has(fingerabdruck)) {
       throw new Error(
-        `Schlüsselliste: Schlüssel von ${kid} ist bereits unter anderem kid gelistet`,
+        `Schlüsselliste: Schlüssel von Eintrag ${nr} ist bereits unter anderem kid gelistet`,
       );
     }
     material.add(fingerabdruck);
@@ -277,57 +279,4 @@ function base64Strikt(text: string): Buffer | null {
   if (text.length === 0 || text.length % 4 !== 0 || !BASE64.test(text)) return null;
   const bytes = Buffer.from(text, 'base64');
   return bytes.toString('base64') === text ? bytes : null;
-}
-
-/**
- * UTF-8 (strikt, BOM bleibt Fehler) → JSON → nur Objekte ohne doppelte
- * Schlüssel und ohne `__proto__`.
- */
-function jsonObjekt(bytes: Buffer): Record<string, unknown> | null {
-  let text: string;
-  let wert: unknown;
-  try {
-    text = UTF8.decode(bytes);
-    wert = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (typeof wert !== 'object' || wert === null || Array.isArray(wert)) return null;
-  if (!schluesselEindeutig(text)) return null;
-  return wert as Record<string, unknown>;
-}
-
-/**
- * Prüft die Schlüssel aller Objekte eines bereits gültigen JSON-Texts:
- * - keine doppelten Schlüssel (`JSON.parse` behält stillschweigend den letzten
- *   Wert), dekodiert verglichen, damit `"sub"` und `"sub"` gleich sind;
- * - kein `__proto__`: `JSON.parse` legt es als eigene Eigenschaft an, und zod
- *   meldet es im strikten Modus nicht als unbekanntes Feld.
- */
-function schluesselEindeutig(text: string): boolean {
-  const stapel: (Set<string> | null)[] = [];
-  let i = 0;
-  while (i < text.length) {
-    const zeichen = text[i];
-    if (zeichen === '"') {
-      let ende = i + 1;
-      while (ende < text.length && text[ende] !== '"') ende += text[ende] === '\\' ? 2 : 1;
-      const literal = text.slice(i, ende + 1);
-      i = ende + 1;
-      let k = i;
-      while (text[k] === ' ' || text[k] === '\t' || text[k] === '\n' || text[k] === '\r') k++;
-      const objekt = stapel[stapel.length - 1];
-      if (text[k] === ':' && objekt) {
-        const schluessel = JSON.parse(literal) as string;
-        if (schluessel === '__proto__' || objekt.has(schluessel)) return false;
-        objekt.add(schluessel);
-      }
-      continue;
-    }
-    if (zeichen === '{') stapel.push(new Set());
-    else if (zeichen === '[') stapel.push(null);
-    else if (zeichen === '}' || zeichen === ']') stapel.pop();
-    i++;
-  }
-  return true;
 }

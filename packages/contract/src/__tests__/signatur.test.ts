@@ -381,7 +381,7 @@ describe('pruefeAkteur – Payload und Claims', () => {
   it('weist __proto__ in Payload und Header ab (zod strikt meldet es nicht)', () => {
     const json = JSON.stringify(claims());
     expect(grund(roh(HEADER, json.replace('{', '{"__proto__":{"adm":true},')))).toBe('PAYLOAD');
-    expect(grund(roh(HEADER, json.replace('{', String.raw`{"__proto__":1,`)))).toBe('PAYLOAD');
+    expect(grund(roh(HEADER, json.replace('{', String.raw`{"\u005f_proto__":1,`)))).toBe('PAYLOAD');
     const rol = json.replace('"adm":true', '"adm":true,"__proto__":null');
     expect(grund(roh(HEADER, rol))).toBe('PAYLOAD');
     const h = `{"alg":"EdDSA","typ":"${AKTEUR_TYP}","kid":"kk-a","__proto__":{}}`;
@@ -535,7 +535,7 @@ describe('parseSchluesselListe', () => {
     const x = X25519.publicKey;
     for (const k of [rsa, ec, x]) {
       expect(() => parseSchluesselListe(`kk-a=${spki(a.publicKey)},kk-x=${spki(k)}`)).toThrow(
-        /kk-x ist kein Ed25519-Schlüssel/,
+        /Eintrag 2 ist kein Ed25519-Schlüssel/,
       );
     }
   });
@@ -558,7 +558,8 @@ describe('parseSchluesselListe', () => {
 
   it('weist ungültige kid, fehlendes = und nicht kanonisches base64 ab', () => {
     const k = spki(a.publicKey);
-    expect(() => parseSchluesselListe(k)).toThrow(/ungültigen kid|Form/);
+    // Je nach Zufallsschlüssel scheitert das an der Form, am kid oder am base64.
+    expect(() => parseSchluesselListe(k)).toThrow(/Schlüsselliste: Eintrag 1/);
     expect(() => parseSchluesselListe(`=${k}`)).toThrow(/Form/);
     expect(() => parseSchluesselListe(`kk a=${k}`)).toThrow(/kid/);
     expect(() => parseSchluesselListe(`kk-a=${k.replace(/=+$/, '')}`)).toThrow(/base64/);
@@ -587,6 +588,29 @@ describe('parseSchluesselListe', () => {
       Buffer.from([0, 0, 0]),
     ]);
     expect(() => parseSchluesselListe(`kk-a=${der.toString('base64')}`)).toThrow();
+  });
+
+  it('nennt nie den kid: auch nicht, wenn dort versehentlich Schlüsselmaterial steht', () => {
+    // PKCS8 ohne '+' und '/' passt auf das kid-Muster.
+    let privat = '';
+    for (let i = 0; i < 200 && !/^[A-Za-z0-9]+$/.test(privat); i++) {
+      privat = generateKeyPairSync('ed25519')
+        .privateKey.export({ format: 'der', type: 'pkcs8' })
+        .toString('base64');
+    }
+    expect(privat).toMatch(/^[A-Za-z0-9]{64}$/);
+    for (const liste of [
+      `${privat}=`,
+      `${privat}=x`,
+      `kk-a=${spki(a.publicKey)},${privat}=${spki(b.publicKey)},${privat}=${spki(b.publicKey)}`,
+    ]) {
+      try {
+        parseSchluesselListe(liste);
+        expect.unreachable();
+      } catch (e) {
+        expect(String(e)).not.toContain(privat.slice(16, 48));
+      }
+    }
   });
 
   it('nennt in Fehlermeldungen kein Schlüsselmaterial', () => {

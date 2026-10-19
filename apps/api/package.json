@@ -1,0 +1,25 @@
+{
+  "name": "@tcms/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.4",
+    "@tcms/contract": "workspace:*",
+    "hono": "4.13.13",
+    "pg": "8.20.0",
+    "tsx": "4.21.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@types/pg": "8.15.6",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  }
+}

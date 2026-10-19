@@ -173,6 +173,40 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
 
+  apps/api:
+    dependencies:
+      '@hono/node-server':
+        specifier: 2.1.4
+        version: 2.1.4(hono@4.13.13)
+      '@tcms/contract':
+        specifier: workspace:*
+        version: link:../../packages/contract
+      hono:
+        specifier: 4.13.13
+        version: 4.13.13
+      pg:
+        specifier: 8.20.0
+        version: 8.20.0
+      tsx:
+        specifier: 4.21.0
+        version: 4.21.0
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 24.10.1
+        version: 24.10.1
+      '@types/pg':
+        specifier: 8.15.6
+        version: 8.15.6
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: 4.1.11
+        version: 4.1.11(@types/node@24.10.1)(vite@8.3.4(@types/node@24.10.1))
+
   apps/web:
     dependencies:
       '@fontsource-variable/inter':
@@ -464,6 +498,12 @@ packages:
 
   '@fontsource-variable/inter@5.2.8':
     resolution: {integrity: sha512-kOfP2D+ykbcX/P3IFnokOhVRNoTozo5/JxhAIVYLpea/UBmCQ/YWPBfWIDuBImXX/15KH+eKh4xpEUyS2sQQGQ==}
+
+  '@hono/node-server@2.1.4':
+    resolution: {integrity: sha512-2g1qeHl4BduwDn6L8nkAvDrPUWPMlkQ//a5NhP/zIyaXKMjZNRV+cG9Csu+BiJFf6+68pqzjf4Hi5sJGKHuS1g==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      hono: ^4 || ^5.0.0-0
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -1288,6 +1328,10 @@ packages:
   graphmatch@1.1.1:
     resolution: {integrity: sha512-5ykVn/EXM1hF0XCaWh05VbYvEiOL2lY1kBxZtaYsyvjp7cmWOU1XsAdfQBwClraEofXDT197lFbXOEVMHpvQOg==}
 
+  hono@4.13.13:
+    resolution: {integrity: sha512-CQ46U0ZkAGmbT/4UxdzzGJpacP2IeKgY4a5/tOI9AABbpOMfK739wfDXmv1usCk+3RkKj1hQy4/fjhiwa2xlrA==}
+    engines: {node: '>=16.9.0'}
+
   iconv-lite@0.7.3:
     resolution: {integrity: sha512-IKXpvIzjnC9XTAUbVBcMfGS0EPaIXtW6v+zr+RRp+hqULEpo0owZax6wyRwPOJbWbzjYspQwusTsfVr0ifh4uQ==}
     engines: {node: '>=0.10.0'}
@@ -1915,6 +1959,10 @@ snapshots:
     optional: true
 
   '@fontsource-variable/inter@5.2.8': {}
+
+  '@hono/node-server@2.1.4(hono@4.13.13)':
+    dependencies:
+      hono: 4.13.13
 
   '@img/colour@1.1.0':
     optional: true
@@ -2672,6 +2720,8 @@ snapshots:
   grammex@3.1.13: {}
 
   graphmatch@1.1.1: {}
+
+  hono@4.13.13: {}
 
   iconv-lite@0.7.3:
     dependencies:
