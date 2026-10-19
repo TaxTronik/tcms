@@ -174,8 +174,11 @@ export async function ladeLaender(ctx: DienstKontext, eingabe: LaenderLesen): Pr
   const heute = heuteDatum(ctx.uhr);
   const { stand, historisch } = leseStand(x.stand, heute);
   const ende = tagesende(stand);
-  const kopf = { stand: isoTag(stand), historisch };
   const programm = await programmVon(ctx.tx, mandantId);
+  // Wie die Schreiboperationen (`sperreZumErfassen`: `kannBearbeiten`); im
+  // historischen Stand und ohne Programm `false`.
+  const rechte = { bearbeiten: !historisch && !!programm && darfLaenderErfassen(ctx, mandantId) };
+  const kopf = { stand: isoTag(stand), historisch, rechte };
   if (!programm)
     return { ...kopf, programmId: null, historie: [], feststellungen: [], bezuege: [], namen: [] };
 
@@ -464,10 +467,15 @@ function vorpruefung(ctx: DienstKontext, mandantId: string, datenstandIso: strin
   return datenstand;
 }
 
+/** Recht zum Erfassen: einzige Quelle für die Schreiboperationen und `rechte.bearbeiten`. */
+function darfLaenderErfassen(ctx: DienstKontext, mandantId: string): boolean {
+  return kannBearbeiten(ctx.akteur, mandantId);
+}
+
 /** In der Transaktion: Mandant sichtbar, Bearbeitungsrecht, Programm gesperrt (TS-05). */
 async function sperreZumErfassen(ctx: DienstKontext, mandantId: string): Promise<string> {
   await pruefeMandant(ctx.tx, mandantId);
-  if (!kannBearbeiten(ctx.akteur, mandantId)) throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
+  if (!darfLaenderErfassen(ctx, mandantId)) throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
   return sperreProgramm(ctx.tx, mandantId);
 }
 

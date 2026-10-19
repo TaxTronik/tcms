@@ -21,7 +21,7 @@
 // =============================================================================
 
 import { z } from 'zod';
-import { PflichtattributLueckeSchema, StandSchema } from './lesepfade';
+import { BearbeitenRechteSchema, PflichtattributLueckeSchema, StandSchema } from './lesepfade';
 import { FreigabeZustellungSchema } from './zustellung';
 
 // -----------------------------------------------------------------------------
@@ -607,6 +607,8 @@ export const RisikoEintragSchema = z
 export const RisikenListeSchema = z
   .object({
     ...lesestand,
+    /** Risiken bearbeiten (Neubewertung, Übersteuerung, Freigabe …): wie die Schreiboperationen. */
+    rechte: BearbeitenRechteSchema,
     appetit: KlasseSchema,
     /** Wirksamkeitszeitraum begonnen: Netto (Betrieb) ist maßgeblich. */
     betriebAktiv: z.boolean(),
@@ -828,6 +830,8 @@ export const KontrolleEintragSchema = z
 export const KontrollenListeSchema = z
   .object({
     ...lesestand,
+    /** Kontrollen bearbeiten (Design, Abweichung, Zuständigkeiten): wie die Schreiboperationen. */
+    rechte: BearbeitenRechteSchema,
     wirksamAb: zeitpunkt.nullable(),
     kontrollen: z.array(KontrolleEintragSchema),
     namen,

@@ -60,10 +60,31 @@ export function pruefeStaffLesen(a: Akteur, mandantId: string): void {
   if (a.art !== 'KANZLEI' || !kannLesen(a, mandantId)) throw new DienstFehler('NICHT_GEFUNDEN');
 }
 
+/**
+ * Bearbeitungsrecht des Bereichs: einzige Quelle für die Schreiboperationen
+ * (`pruefeBearbeiten`) und das Kennzeichen der Lese-Antworten (`bearbeitenRechte`).
+ */
+function darfBearbeiten(a: Akteur, mandantId: string): boolean {
+  return kannBearbeiten(a, mandantId);
+}
+
 /** Bearbeiten: wie Lesen, zusätzlich `kannBearbeiten` (sonst NICHT_BERECHTIGT mit Grund). */
 export function pruefeBearbeiten(a: Akteur, mandantId: string): void {
   pruefeStaffLesen(a, mandantId);
-  if (!kannBearbeiten(a, mandantId)) throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
+  if (!darfBearbeiten(a, mandantId)) throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
+}
+
+/**
+ * Kennzeichen `rechte.bearbeiten` für Risikoinventar und Kontrollmatrix: wie
+ * `pruefeBearbeiten`; im historischen Stand (Regel 6) und ohne Programm (die
+ * Schreiboperationen fänden nichts) `false`.
+ */
+export function bearbeitenRechte(
+  a: Akteur,
+  mandantId: string,
+  k: { historisch: boolean; programm: unknown },
+): { bearbeiten: boolean } {
+  return { bearbeiten: !k.historisch && k.programm != null && darfBearbeiten(a, mandantId) };
 }
 
 export interface ProgrammRef {

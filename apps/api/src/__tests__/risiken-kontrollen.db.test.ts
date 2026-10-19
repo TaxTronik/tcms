@@ -149,6 +149,19 @@ describe.skipIf(!AKTIV)('API risiken-kontrollen gegen PostgreSQL', () => {
     const l = await risiken();
     expect(l.risiken).toHaveLength(a.risiken.size);
     expect(l.namen).toEqual({});
+    // Kennzeichen wie die Schreiboperationen: zuständige BT ja, Leser nein, historisch nein.
+    expect(l.rechte).toEqual({ bearbeiten: true });
+    for (const [pfad, schema] of [
+      ['/risiken', RisikenListeSchema],
+      ['/kontrollen', KontrollenListeSchema],
+    ] as const) {
+      const leser = await rufe('GET', p(a, pfad), wer(a, 'leser'));
+      expect(erwarte(schema, leser.antwort).rechte, pfad).toEqual({ bearbeiten: false });
+      const alt = await rufe('GET', p(a, `${pfad}?stand=2026-06-30`), wer(a, 'bt'));
+      expect(erwarte(schema, alt.antwort).rechte, pfad).toEqual({ bearbeiten: false });
+      const hb = await rufe('GET', p(a, pfad), wer(a, 'hb'));
+      expect(erwarte(schema, hb.antwort).rechte, pfad).toEqual({ bearbeiten: true });
+    }
     const id = l.risiken[0]!.id;
     const d = await rufe('GET', p(a, `/risiken/${id}?stand=2026-06-30`), wer(a, 'hb'));
     expect(d.status).toBe(200);

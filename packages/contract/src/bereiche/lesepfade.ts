@@ -459,6 +459,20 @@ const stammdatenRechte = z
   })
   .strict();
 
+/**
+ * Kennzeichen „bearbeiten" der Lese-Antworten eines Bereichs (Risikoinventar,
+ * Kontrollmatrix, Länder-Monitor): Der Dienst rechnet es mit derselben
+ * Rechtefunktion wie die Schreiboperationen dieses Bereichs (`kannBearbeiten`);
+ * im historischen Stand und ohne Programm `false`. Ein falsches `true` öffnet
+ * nichts: Jede Schreiboperation prüft erneut.
+ */
+export const BearbeitenRechteSchema = z
+  .object({
+    bearbeiten: z.boolean(),
+  })
+  .strict();
+export type BearbeitenRechte = z.infer<typeof BearbeitenRechteSchema>;
+
 /** Rechte des Akteurs für diesen Mandanten als Kennzeichen für die Oberfläche (ADR 0001 §5). */
 const kontextRechte = z
   .object({

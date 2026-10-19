@@ -5,6 +5,7 @@
 // genau eine) und keine vertraulichen Feststellungen im Länderbezug.
 // =============================================================================
 
+import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { LaenderSchema, type Akteur, type LandEingabe } from '@tcms/contract';
 import { fuegeLandHinzu, ladeLaender, speichereLandStaende } from './laender';
@@ -14,6 +15,7 @@ import {
   eindeutig,
   fehlerVon,
   genauEinerKonflikt,
+  kanzlei,
   gleichzeitig,
   im,
   inTenant,
@@ -282,5 +284,53 @@ describe.skipIf(!AKTIV)('Länder-Monitor gegen PostgreSQL', () => {
     const nachher = await lies();
     expect(nachher).toEqual(vorher);
     expect(JSON.stringify(nachher)).not.toContain(geheim.id);
+  });
+
+  it('rechte.bearbeiten = Ergebnis der Schreiboperation (Stände erfassen); historisch und ohne Programm false', async () => {
+    await hinzu(A.hb, land('MT'), '2026-10-01');
+    const gesehen = new Set<boolean>();
+    for (const [wer, a] of Object.entries({
+      zbt: A.zbt,
+      admin: A.admin,
+      adminOhneBt: A.adminOhneBt,
+      hb: A.hb,
+      leser: A.leser,
+    })) {
+      const l = await im(a, (ctx) => ladeLaender(ctx, { mandantId: w.mandant }));
+      let tatsaechlich = true;
+      try {
+        await staende(a, [land('MT')], '2026-10-16');
+      } catch (e) {
+        expect(await fehlerVon(Promise.reject(e))).toMatchObject({
+          code: 'NICHT_BERECHTIGT',
+          grund: 'BEARBEITEN',
+        });
+        tatsaechlich = false;
+      }
+      expect(l.rechte.bearbeiten, wer).toBe(tatsaechlich);
+      gesehen.add(tatsaechlich);
+    }
+    expect(gesehen).toEqual(new Set([true, false]));
+    const alt = await im(A.zbt, (ctx) =>
+      ladeLaender(ctx, { mandantId: w.mandant, stand: '2026-09-01' }),
+    );
+    expect(alt.rechte).toEqual({ bearbeiten: false });
+    // Mandant ohne Programm: nichts zu erfassen (Schreiben → NICHT_GEFUNDEN).
+    const ohne = randomUUID();
+    await inTenant(w, (tx) =>
+      tx.mandant.create({ data: { id: ohne, name: 'Ohne Programm', rechtsform: 'KapG' } }),
+    );
+    const zbtOhne = kanzlei(w.tenant, w.p.zbt, ohne, { bt: true, zustaendig: true });
+    const leer = await im(zbtOhne, (ctx) => ladeLaender(ctx, { mandantId: ohne }));
+    expect(leer).toMatchObject({ programmId: null, rechte: { bearbeiten: false } });
+    expect(
+      (
+        await fehlerVon(
+          im(zbtOhne, (ctx) =>
+            fuegeLandHinzu(ctx, { mandantId: ohne, datenstand: '2026-10-01', land: land('MT') }),
+          ),
+        )
+      ).code,
+    ).toBe('NICHT_GEFUNDEN');
   });
 });

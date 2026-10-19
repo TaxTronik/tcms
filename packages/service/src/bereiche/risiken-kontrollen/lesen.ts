@@ -54,7 +54,15 @@ import {
 } from '../../kern/tcms-kontext';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import { zustellungenDerFreigaben } from '../../kern/zustellung';
-import { iso, kanonisch, namenFuer, pruefeEingabe, pruefeStaffLesen, tag } from './gemeinsam';
+import {
+  bearbeitenRechte,
+  iso,
+  kanonisch,
+  namenFuer,
+  pruefeEingabe,
+  pruefeStaffLesen,
+  tag,
+} from './gemeinsam';
 import { aenderungenGegen, antragAnzeige, type KontrolleStandRoh } from './planung';
 
 /** Höchstzahl Audit-Einträge je Objekt in der Detailansicht. */
@@ -319,6 +327,7 @@ export async function ladeRisiken(
   );
   return {
     ...lesestand(k),
+    rechte: bearbeitenRechte(ctx.akteur, k.mandant.id, k),
     appetit: k.appetit,
     betriebAktiv: betriebAktiv(k),
     risiken,
@@ -561,6 +570,7 @@ export async function ladeKontrollen(
   const kontrollen = k.kontrollen.map((x) => kontrolleEintrag(x, staende.get(x.id) ?? [], fj));
   return {
     ...lesestand(k),
+    rechte: bearbeitenRechte(ctx.akteur, k.mandant.id, k),
     wirksamAb: iso(k.programm?.wirksamAb),
     kontrollen,
     namen: await namenFuer(ctx, kontrollen.flatMap(personenDerKontrolle)),

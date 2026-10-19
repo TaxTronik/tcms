@@ -19,7 +19,7 @@
 // =============================================================================
 
 import { z } from 'zod';
-import { StandSchema } from './lesepfade';
+import { BearbeitenRechteSchema, StandSchema } from './lesepfade';
 
 // ---------------------------------------------------------------------------
 // Bausteine
@@ -820,6 +820,8 @@ export const LaenderSchema = z
     stand: TagSchema,
     historisch: z.boolean(),
     programmId: z.string().nullable(),
+    /** Länder aufnehmen und Stände erfassen: wie die Schreiboperationen (`kannBearbeiten`). */
+    rechte: BearbeitenRechteSchema,
     /** Stände je Land bis zum Stichtag, neueste zuerst. */
     historie: z.array(z.object({ land: z.string(), staende: z.array(LandStandSchema) }).strict()),
     /** Nicht vertrauliche Feststellungen mit Länderbezug. */

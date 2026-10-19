@@ -301,6 +301,9 @@ abgeschlossener Durchführungen) und `entfallen`. Feststellungen gehen nicht ein
 Rechte-Kennzeichen für die Oberfläche berechnet der Dienst mit denselben Rechtefunktionen wie die
 Schreiboperationen: Kontext `rechte` (`bearbeiten`, `wuerdigen`) und `mandant.rechte.bearbeiten` (Anker
 pflegen), beide im historischen Stand `false`; `GET …/kontakte` liefert `rechte.bearbeiten` (Rollen setzen).
+Risikoinventar (`GET …/risiken`), Kontrollmatrix (`GET …/kontrollen`) und Länder-Monitor (`GET …/laender`)
+tragen `rechte: { bearbeiten }` aus derselben Quelle wie ihre Schreiboperationen (`kannBearbeiten`), im
+historischen Stand und ohne Programm `false`.
 Die Durchführung (Kanzlei und Portal-Aufgabe) liefert je Handlung `{ erlaubt, grund, verweigerung }`:
 `verweigerung` ist der `grund` des `403`, den die Operation liefern würde, `null` bei Erlaubnis oder wenn
 nur der Zustand entgegensteht (`409`).

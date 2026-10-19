@@ -74,7 +74,12 @@ describe.skipIf(!AKTIV)('API Länder-Monitor gegen PostgreSQL', () => {
 
   it('Antwort ist vertragskonform; Stichtag in der Query', async () => {
     const l = await rufe(HB, 'GET', `${B}/laender?stand=2026-10-01`);
-    expect(LaenderSchema.parse(l.json['daten']).historisch).toBe(true);
+    const alt = LaenderSchema.parse(l.json['daten']);
+    expect(alt.historisch).toBe(true);
+    // Kennzeichen wie die Schreiboperationen; im historischen Stand nie.
+    expect(alt.rechte).toEqual({ bearbeiten: false });
+    const heute = LaenderSchema.parse((await rufe(HB, 'GET', `${B}/laender`)).json['daten']);
+    expect(heute.rechte).toEqual({ bearbeiten: true });
   });
 
   it('Länderbezüge je Land: Ereignisse, die das Land nennen; vertrauliche Feststellungen nie', async () => {
