@@ -9,7 +9,8 @@
 // unbekannte ID, Objekt eines anderen Mandanten: immer NICHT_GEFUNDEN.
 // Ergebnisse sind JSON (ISO-Strings, Listen); Personen nur als IDs, Namen
 // über `ctx.personen` (im Dienst leer). Vertrauliche Feststellungen sind für
-// Nicht-Beteiligte maskiert (`kannVertraulichLesen`).
+// Nicht-Beteiligte maskiert (`kannVertraulichLesen`): nur ID, Nummer und
+// Status wie im dedizierten Lesepfad, ohne Titel und Schwere (RT-01).
 // =============================================================================
 
 import {
@@ -27,7 +28,6 @@ import {
 } from '@tcms/contract';
 import { addTage, fmtDatum, isoDatum, statusAm, type AnzeigeStatus } from '@tcms/domain';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
-import { VERTRAULICH_MASKE } from '../../kern/tcms-kontext';
 import type { DienstKontext } from '../../kontext';
 import { gleicheId, kannVertraulichLesen } from '../../rechte';
 import { ladeLage, pruefeEingabe, pruefeLeserecht, type Lage } from './lage';
@@ -365,19 +365,22 @@ export async function ladeDurchfuehrung(
 
   const feststellungen = feststellungenRoh
     .filter((f) => f.erfasstAm.getTime() <= g.ende.getTime())
-    .map((f) => {
+    .map((f): DurchfuehrungDetail['feststellungen'][number] => {
       const beteiligte = [
         f.erfasstVon,
         f.p153EntschiedenVon,
         f.verwerfenBeantragtVon,
         ...f.massnahmen.map((m) => m.verantwortlich),
       ].filter((x): x is string => !!x);
-      const sichtbar =
-        !f.vertraulich || kannVertraulichLesen(ctx.akteur, lage.mandantId, beteiligte);
+      if (f.vertraulich && !kannVertraulichLesen(ctx.akteur, lage.mandantId, beteiligte)) {
+        // Positivliste wie im dedizierten Lesepfad (Fachkonzept §13, RT-01).
+        return { maskiert: true, id: f.id, nummer: f.nummer, status: f.status, vertraulich: true };
+      }
       return {
+        maskiert: false,
         id: f.id,
         nummer: f.nummer,
-        titel: sichtbar ? f.titel : VERTRAULICH_MASKE.titel,
+        titel: f.titel,
         status: f.status,
         schwere: f.schwere,
         vertraulich: f.vertraulich,

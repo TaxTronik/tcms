@@ -238,7 +238,7 @@ und Zuständigkeit ergänzt die kanzleikonsole):
 
 | Methode | Pfad                                                         | Recht                                                                  |
 | ------- | ------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| GET     | `/v1/mandanten/:mandantId/kontext?stand=`                    | Kanzleiperson mit `cli`; vertrauliche Feststellungen maskiert          |
+| GET     | `/v1/mandanten/:mandantId/kontext?stand=`                    | Kanzleiperson mit `cli`; vertrauliche Feststellungen maskiert (RT-01)  |
 | POST    | `/v1/portfolio`                                              | Kanzleiperson; Body `{ mandantIds, bt?, hb? }` (≤ 5 000, ADR §3.3)     |
 | POST    | `/v1/arbeitskorb`                                            | wie Portfolio; Zuständigkeit nur aus `bt`/`hb` der Liste               |
 | GET     | `/v1/mandanten/:mandantId/portal/uebersicht`                 | Mandantenkontakt mit aktiver Rolle (`portal: true`)                    |
@@ -294,7 +294,11 @@ antwortet der Dienst mit `409 KONFLIKT`; gleichzeitige Entscheidungen wirken gen
 **Feststellungen, Ereignisse, Portal-Meldung, Länder-Monitor** (Pfade unter
 `/v1/mandanten/{mandantId}`; Vertrag in `packages/contract/src/bereiche/feststellungen-ereignisse.ts`).
 Lesende Endpunkte nehmen `?stand=YYYY-MM-DD`, schreibende nie (TS-07). Vertrauliche Feststellungen
-liefert der Dienst für Nicht-Beteiligte nur maskiert (`maskiert: true`, Nummer und Status).
+liefert der Dienst für Nicht-Beteiligte nur maskiert (`maskiert: true`, Nummer und Status) – in jeder
+Antwort gleich (Feststellungen, Kontext, Kontrollen, Durchführung, Ereignis): keine Steuerwirkung,
+keine §-153-Angaben, keine Schwere. Kennzahlen (Portfolio, Lücken) zählen vertrauliche Feststellungen
+nur, wo die Zahl aus Sichtbarem folgt (Status, Zahl der Maßnahmen); §-153 und Schwere zählen nur
+lesbare (RT-01).
 
 | Methode | Pfad                                                                      | Recht                                                                                           |
 | ------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |

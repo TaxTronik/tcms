@@ -437,18 +437,33 @@ export const DurchfuehrungDetailSchema = z
     entfallenVon: PersonId.nullable(),
     entfallenFreigegebenVon: PersonId.nullable(),
     nachtragZuId: z.string().nullable(),
-    /** Verknüpfte Feststellungen; vertrauliche für Nicht-Beteiligte maskiert. */
+    /**
+     * Verknüpfte Feststellungen; vertrauliche für Nicht-Beteiligte maskiert
+     * (`maskiert: true`: nur Nummer und Status, kein Titel, keine Schwere – RT-01).
+     */
     feststellungen: z.array(
-      z
-        .object({
-          id: z.string(),
-          nummer: z.string(),
-          titel: z.string(),
-          status: z.string(),
-          schwere: KlasseSchema,
-          vertraulich: z.boolean(),
-        })
-        .strict(),
+      z.discriminatedUnion('maskiert', [
+        z
+          .object({
+            maskiert: z.literal(false),
+            id: z.string(),
+            nummer: z.string(),
+            titel: z.string(),
+            status: z.string(),
+            schwere: KlasseSchema,
+            vertraulich: z.boolean(),
+          })
+          .strict(),
+        z
+          .object({
+            maskiert: z.literal(true),
+            id: z.string(),
+            nummer: z.string(),
+            status: z.string(),
+            vertraulich: z.literal(true),
+          })
+          .strict(),
+      ]),
     ),
     risiken: z.array(z.object({ id: z.string(), code: z.string(), titel: z.string() }).strict()),
     letzte: z.array(DurchfuehrungKurzSchema),

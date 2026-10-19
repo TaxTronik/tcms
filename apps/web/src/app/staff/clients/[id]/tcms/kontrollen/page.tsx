@@ -321,10 +321,12 @@ export default async function Kontrollmatrix({
                               <Link
                                 href={mitStand(`${basis}/feststellungen/${f.id}`)}
                                 className="text-11"
-                                style={{ color: f.p153Offen ? '#b42318' : undefined }}
+                                style={{
+                                  color: !f.maskiert && f.p153Offen ? '#b42318' : undefined,
+                                }}
                               >
                                 → {f.nummer}
-                                {f.p153Offen ? ' (§ 153 offen)' : ''}
+                                {!f.maskiert && f.p153Offen ? ' (§ 153 offen)' : ''}
                               </Link>
                             ) : null}
                           </div>

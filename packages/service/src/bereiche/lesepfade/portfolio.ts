@@ -81,11 +81,18 @@ export function portfolioZeile(ctx: TcmsKontext, akteur: Akteur, heute: Date): Z
       (x.anzeige === 'GEPLANT' && tageZwischen(heute, x.faelligAm) <= 14),
   ).length;
   const zurGegenzeichnung = d.filter((x) => x.anzeige === 'ZUR_GEGENZEICHNUNG').length;
+  // Vertrauliche Feststellungen (RT-01): Der Status ist auch maskiert sichtbar,
+  // offene Feststellungen zählen daher alle. Schwere und offene §-153-Würdigung
+  // sind Inhalt und zählen nur lesbare – sonst verriete die Differenz zu den
+  // sichtbaren Einträgen Schwere bzw. Steuerwirkung einer vertraulichen
+  // Feststellung (auch über `prioritaet` und `handlungsbedarf`).
   const offeneF = ctx.feststellungen.filter(
     (f) => f.status !== 'GESCHLOSSEN' && f.status !== 'VERWORFEN',
   );
-  const hochOffen = offeneF.filter((f) => f.schwere === 'HOCH' || f.schwere === 'KRITISCH').length;
-  const p153Offen = ctx.feststellungen.filter((f) => f.p153Offen).length;
+  const hochOffen = offeneF.filter(
+    (f) => !f.maskiert && (f.schwere === 'HOCH' || f.schwere === 'KRITISCH'),
+  ).length;
+  const p153Offen = ctx.feststellungen.filter((f) => !f.maskiert && f.p153Offen).length;
   const ereignisseNeu = ctx.ereignisse.filter((e) => e.status === 'NEU').length;
   const ueberAppetit = ctx.risiken.filter((r) => r.ueberAppetit).length;
   // Prüflast im Folgemonat (wie Cockpit); ohne geplante Durchführungen keine.

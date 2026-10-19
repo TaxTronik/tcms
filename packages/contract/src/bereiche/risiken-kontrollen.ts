@@ -713,10 +713,23 @@ export const KontrollDurchfuehrungSchema = z
     abgeschlossenAm: zeitpunkt.nullable(),
     nachweise: z.number().int(),
     mindestNachweise: z.number().int(),
-    /** Feststellung aus dieser Durchführung (Nummer ist nicht vertraulich). */
+    /**
+     * Feststellung aus dieser Durchführung (Nummer ist nicht vertraulich). Bei
+     * einer vertraulichen Feststellung, an der der Akteur nicht beteiligt ist,
+     * ohne §-153-Kennzeichen (`maskiert: true`, RT-01).
+     */
     feststellung: z
-      .object({ id: z.string(), nummer: z.string(), p153Offen: z.boolean() })
-      .strict()
+      .discriminatedUnion('maskiert', [
+        z
+          .object({
+            maskiert: z.literal(false),
+            id: z.string(),
+            nummer: z.string(),
+            p153Offen: z.boolean(),
+          })
+          .strict(),
+        z.object({ maskiert: z.literal(true), id: z.string(), nummer: z.string() }).strict(),
+      ])
       .nullable(),
   })
   .strict();

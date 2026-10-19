@@ -98,6 +98,55 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
         expect(r.status, q).toBe(400);
       }
     });
+
+    it('RT-01: vertrauliche Feststellung für Nicht-Beteiligte nur mit Nummer und Status', async () => {
+      // Eine Talwind-Feststellung, an der Thomas nicht beteiligt ist, vorübergehend vertraulich.
+      const f = await mitTenant(DEMO_TENANT_ID, async (tx) => {
+        const kandidaten = await tx.feststellung.findMany({
+          where: { programm: { mandantId: DEMO_IDS.talwind }, vertraulich: false },
+          include: { massnahmen: { select: { verantwortlich: true } } },
+          orderBy: { nummer: 'asc' },
+        });
+        const x = kandidaten.find(
+          (k) =>
+            ![
+              k.erfasstVon,
+              k.p153EntschiedenVon,
+              k.verwerfenBeantragtVon,
+              ...k.massnahmen.map((m) => m.verantwortlich),
+            ].includes(DEMO_IDS.thomas),
+        )!;
+        await tx.feststellung.update({ where: { id: x.id }, data: { vertraulich: true } });
+        return x;
+      });
+      try {
+        // Thomas: Berufsträger mit Bezug auf Talwind, weder Admin noch zuständig.
+        const r = await bestaetigtSenden(app(), {
+          ziel: pfad,
+          claims: anna({
+            sub: DEMO_IDS.thomas,
+            rol: { adm: false, bt: true },
+            cli: { id: DEMO_IDS.talwind, bt: false, hb: false },
+          }),
+        });
+        expect(r.status).toBe(200);
+        const roh = await r.text();
+        const daten = KontextAntwortSchema.parse((JSON.parse(roh) as { daten: unknown }).daten);
+        expect(daten.feststellungen.find((x) => x.id === f.id)).toEqual({
+          maskiert: true,
+          id: f.id,
+          nummer: f.nummer,
+          vertraulich: true,
+          status: f.status,
+          erfasstAm: f.erfasstAm.toISOString(),
+        });
+        expect(roh).not.toContain(f.titel);
+      } finally {
+        await mitTenant(DEMO_TENANT_ID, (tx) =>
+          tx.feststellung.update({ where: { id: f.id }, data: { vertraulich: false } }),
+        );
+      }
+    });
   });
 
   describe('GET /v1/mandanten/:mandantId/portal/uebersicht', () => {

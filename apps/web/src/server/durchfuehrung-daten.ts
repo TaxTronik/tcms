@@ -196,7 +196,18 @@ export interface DurchfuehrungDetail {
   nachweise: NachweisZeile[];
   /** Nachweise, die nach dem Stichtag hochgeladen wurden (ausgeblendet). */
   nachweiseAusgeblendet: number;
-  feststellungen: { id: string; nummer: string; titel: string; status: string; schwere: Klasse }[];
+  /** Verknüpfte Feststellungen; vertrauliche für Nicht-Beteiligte ohne Titel und Schwere (RT-01). */
+  feststellungen: (
+    | {
+        maskiert: false;
+        id: string;
+        nummer: string;
+        titel: string;
+        status: string;
+        schwere: Klasse;
+      }
+    | { maskiert: true; id: string; nummer: string; status: string }
+  )[];
   risiken: { id: string; code: string; titel: string }[];
   letzte: DurchfuehrungKurz[];
   nachtraege: DurchfuehrungKurz[];
@@ -294,13 +305,18 @@ function alsDetail(d: DienstDetail | DienstAufgabe): DurchfuehrungDetail {
       hochgeladenAm: zeit(n.hochgeladenAm),
     })),
     nachweiseAusgeblendet: d.nachweiseAusgeblendet,
-    feststellungen: (kanzlei?.feststellungen ?? []).map((f) => ({
-      id: f.id,
-      nummer: f.nummer,
-      titel: f.titel,
-      status: f.status,
-      schwere: f.schwere,
-    })),
+    feststellungen: (kanzlei?.feststellungen ?? []).map((f) =>
+      f.maskiert
+        ? { maskiert: true as const, id: f.id, nummer: f.nummer, status: f.status }
+        : {
+            maskiert: false as const,
+            id: f.id,
+            nummer: f.nummer,
+            titel: f.titel,
+            status: f.status,
+            schwere: f.schwere,
+          },
+    ),
     risiken: kanzlei?.risiken ?? [],
     letzte: (kanzlei?.letzte ?? []).map(kurz),
     nachtraege: (kanzlei?.nachtraege ?? []).map(kurz),

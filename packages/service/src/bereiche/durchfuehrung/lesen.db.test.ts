@@ -177,7 +177,7 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
       expect(d.feststellungen).toHaveLength(0);
     });
 
-    it('vertrauliche Feststellung: Titel für Nicht-Beteiligte maskiert', async () => {
+    it('vertrauliche Feststellung: für Nicht-Beteiligte nur Nummer und Status (RT-01)', async () => {
       await f.tx((tx) =>
         tx.feststellung.updateMany({
           where: { durchfuehrungId: abgeschlossen },
@@ -188,15 +188,25 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
         const kollege = await f.dienst(a.kollege, (ctx) =>
           ladeDurchfuehrung(ctx, ziel(abgeschlossen)),
         );
-        expect(kollege.feststellungen[0]).toMatchObject({
-          titel: 'Vertrauliche Feststellung',
-          vertraulich: true,
-        });
+        // Positivliste wie im dedizierten Lesepfad: kein Titel, keine Schwere.
+        const m = kollege.feststellungen[0]!;
+        expect(Object.keys(m).sort()).toEqual([
+          'id',
+          'maskiert',
+          'nummer',
+          'status',
+          'vertraulich',
+        ]);
+        expect(m).toMatchObject({ maskiert: true, vertraulich: true });
         expect(JSON.stringify(kollege)).not.toContain('Differenz Clearingkonto');
-        // Erfassende Person (Prüfer) und zuständige BT sehen den Titel.
+        // Erfassende Person (Prüfer) und zuständige BT sehen Titel und Schwere.
         for (const wer of [a.pruefer, a.bt]) {
           const d = await f.dienst(wer, (ctx) => ladeDurchfuehrung(ctx, ziel(abgeschlossen)));
-          expect(d.feststellungen[0]!.titel).toBe('Differenz Clearingkonto');
+          expect(d.feststellungen[0]).toMatchObject({
+            maskiert: false,
+            titel: 'Differenz Clearingkonto',
+          });
+          expect(d.feststellungen[0]).toHaveProperty('schwere');
         }
       } finally {
         await f.tx((tx) =>

@@ -2,7 +2,14 @@
 // fehlende Teile werden erkannt; Abschnitte werden streng gelesen.
 import { describe, expect, it } from 'vitest';
 import { ABSCHNITTE } from '@tcms/domain';
-import { baueSnapshot, normalisiereAbschnitte, pruefeSnapshot, snapshotHash } from './bausteine';
+import type { FeststellungSicht, TcmsKontext } from '../../kern/tcms-kontext';
+import {
+  baueBausteine,
+  baueSnapshot,
+  normalisiereAbschnitte,
+  pruefeSnapshot,
+  snapshotHash,
+} from './bausteine';
 
 const satz = {
   TEILBEREICH: null,
@@ -56,5 +63,67 @@ describe('Snapshot', () => {
     expect(n.map((a) => a.key)).toEqual(ABSCHNITTE.map((a) => a.key));
     expect(n.find((a) => a.key === 'kultur')?.bloecke).toEqual([{ typ: 'text', text: '' }]);
     expect(n.find((a) => a.key === 'ziele')?.bloecke).toEqual([{ typ: 'text', text: '' }]);
+  });
+});
+
+describe('Baustein FESTSTELLUNGEN (RT-01)', () => {
+  const erfasstAm = new Date('2026-10-01T09:00:00Z');
+  const lesbar = (id: string, vertraulich: boolean): FeststellungSicht => ({
+    maskiert: false,
+    id,
+    nummer: `F-${id}`,
+    titel: `Titel ${id}`,
+    sachverhalt: 'Sachverhalt',
+    quelle: 'HINWEIS',
+    quelleText: 'Hinweis',
+    klasse: 'STEUERLICHER_FEHLER',
+    schwere: 'HOCH',
+    auswirkung: 'JA',
+    status: 'IN_WUERDIGUNG',
+    vertraulich,
+    beteiligte: [],
+    p153Entscheidung: null,
+    p153Offen: true,
+    massnahmenOffen: 0,
+    massnahmen: 0,
+    aeltesteFrist: null,
+    erfasstAm,
+    risikoCodes: [],
+  });
+  const k = {
+    programm: null,
+    profil: null,
+    kontaktRollen: [],
+    teilbereich: null,
+    appetit: 'MITTEL',
+    ziele: [],
+    risiken: [],
+    kontrollen: [],
+    laenderStand: null,
+    fernverkaeufeLfd: 0,
+    fernverkaeufeVorjahr: 0,
+    schwelle: { label: '—' },
+    laender: [],
+    stand: new Date('2026-10-19T00:00:00Z'),
+    feststellungen: [
+      lesbar('offen', false),
+      lesbar('vertraulich-beteiligt', true),
+      {
+        maskiert: true,
+        id: 'maskiert',
+        nummer: 'F-maskiert',
+        vertraulich: true,
+        status: 'IN_WUERDIGUNG',
+        erfasstAm,
+      },
+    ],
+  } as unknown as TcmsKontext;
+
+  it('enthält nie vertrauliche Feststellungen – weder maskierte noch für Beteiligte lesbare', () => {
+    const b = baueBausteine(k, {
+      name: () => '—',
+      verantwortung: { berufstraeger: null, bearbeitung: null },
+    });
+    expect(b.FESTSTELLUNGEN.feststellungen.map((f) => f.nummer)).toEqual(['F-offen']);
   });
 });

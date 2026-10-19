@@ -96,8 +96,10 @@ export default async function Pruefung({
     ? ctx.kontrollen.filter((k) => k.frequenz.turnus !== 'KEIN' && !mitDurchf.has(k.id))
     : [];
   const ueberfaellig = ctx.durchfuehrungen.filter((d) => d.anzeige === 'UEBERFAELLIG').length;
+  // Schwere und §-153 nur aus lesbaren Feststellungen (RT-01: maskierte ohne Inhalt).
   const hochOffen = ctx.feststellungen.filter(
     (f) =>
+      !f.maskiert &&
       (f.schwere === 'HOCH' || f.schwere === 'KRITISCH') &&
       f.status !== 'GESCHLOSSEN' &&
       f.status !== 'VERWORFEN',
@@ -107,7 +109,7 @@ export default async function Pruefung({
   );
   const risikenOhneFreigabe = ctx.risiken.filter((r) => r.freigabe !== 'FREIGEGEBEN').length;
   const ohneDesign = ctx.kontrollen.filter((k) => k.design === 'NICHT_BEURTEILT').length;
-  const p153 = ctx.feststellungen.filter((f) => f.p153Offen).length;
+  const p153 = ctx.feststellungen.filter((f) => !f.maskiert && f.p153Offen).length;
 
   const luecken: {
     text: string;

@@ -35,7 +35,7 @@ import {
   verantwortlicheAendern,
 } from '@/server/actions/kontrollen';
 import { personName, type KontrolleView, type PersonKurz } from '@/server/kontext';
-import type { KontrolleDetail } from '@/server/kontrollen-daten';
+import type { FeststellungJeDurchfuehrung, KontrolleDetail } from '@/server/kontrollen-daten';
 import { zweitePerson } from '@tcms/service';
 import type { StaffSeite } from '@/server/seite';
 import { kurzName } from '../risiken/labels';
@@ -129,7 +129,7 @@ export function KontrolleDrawer({
   seite: StaffSeite;
   kontrolle: KontrolleView;
   detail: KontrolleDetail | null;
-  feststellungJeDurchfuehrung: Map<string, { id: string; nummer: string; p153Offen: boolean }>;
+  feststellungJeDurchfuehrung: FeststellungJeDurchfuehrung;
   sperre: string | null;
   risikoHref: (id: string) => string;
 }) {

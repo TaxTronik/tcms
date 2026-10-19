@@ -12,12 +12,7 @@ import { mitTenant } from '@tcms/db';
 import { DEMO_IDS, DEMO_MANDANTEN, DEMO_TENANT_ID } from '@tcms/db/demo';
 import { verweisAblage } from '../ablage';
 import { imDienst, type PersonenVerzeichnis, type Uhr } from '../kontext';
-import {
-  jeAktuellerKontext,
-  ladeKontext,
-  VERTRAULICH_MASKE,
-  type TcmsKontext,
-} from './tcms-kontext';
+import { jeAktuellerKontext, ladeKontext, type TcmsKontext } from './tcms-kontext';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 
@@ -219,25 +214,27 @@ describe.skipIf(!AKTIV)('Tax-CMS-Kontext gegen PostgreSQL', () => {
     const offen = (await lade(anna, { mandantId: DEMO_IDS.talwind })).feststellungen.find(
       (f) => f.id === vertraulichId,
     );
-    expect(offen?.titel).toBe(vertraulichTitel);
-    expect(offen?.vertraulich).toBe(true);
+    expect(offen).toMatchObject({ maskiert: false, titel: vertraulichTitel, vertraulich: true });
 
     const maskiert = (await lade(thomas, { mandantId: DEMO_IDS.talwind })).feststellungen.find(
       (f) => f.id === vertraulichId,
     );
-    expect(maskiert).toMatchObject({
-      vertraulich: true,
-      titel: VERTRAULICH_MASKE.titel,
-      sachverhalt: '',
-      quelleText: 'vertraulich',
-      risikoCodes: [],
-    });
+    // Nur die Felder des dedizierten Lesepfads (RT-01).
+    expect(Object.keys(maskiert ?? {}).sort()).toEqual([
+      'erfasstAm',
+      'id',
+      'maskiert',
+      'nummer',
+      'status',
+      'vertraulich',
+    ]);
+    expect(maskiert).toMatchObject({ maskiert: true, vertraulich: true });
 
     // Mandantenkontakte sind nie Beteiligte im Sinne von `kannVertraulichLesen`.
     const portal = (
       await lade(kontakt(DEMO_IDS.jana, DEMO_IDS.talwind), { mandantId: DEMO_IDS.talwind })
     ).feststellungen.find((f) => f.id === vertraulichId);
-    expect(portal?.titel).toBe(VERTRAULICH_MASKE.titel);
+    expect(portal).toMatchObject({ maskiert: true });
   });
 
   it('jeAktuellerKontext: je Mandant derselbe Kontext wie ladeKontext, auch über Blockgrenzen', async () => {
@@ -270,9 +267,9 @@ describe.skipIf(!AKTIV)('Tax-CMS-Kontext gegen PostgreSQL', () => {
       expect(ohneNamen(k)).toEqual(ohneNamen(einzeln.get(k.mandant.id)!));
     }
     const talwind = block.find((k) => k.mandant.id === DEMO_IDS.talwind)!;
-    expect(talwind.feststellungen.find((f) => f.id === vertraulichId)?.titel).toBe(
-      VERTRAULICH_MASKE.titel,
-    );
+    expect(talwind.feststellungen.find((f) => f.id === vertraulichId)).toMatchObject({
+      maskiert: true,
+    });
   });
 
   it('jeAktuellerKontext: ohne Leserecht und fremde Mandanten entfallen', async () => {

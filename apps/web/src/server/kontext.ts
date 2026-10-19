@@ -22,6 +22,8 @@ export type {
   BeschreibungView,
   DurchfuehrungView,
   EreignisView,
+  FeststellungMaskiert,
+  FeststellungSicht,
   FeststellungView,
   KennzahlDef,
   KontrolleView,

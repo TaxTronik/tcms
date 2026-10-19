@@ -21,7 +21,11 @@ import {
   tageZwischen,
   type AnzeigeStatus,
 } from '@tcms/domain';
-import { jeAktuellerKontext, type TcmsKontext } from '../../kern/tcms-kontext';
+import {
+  jeAktuellerKontext,
+  type FeststellungView,
+  type TcmsKontext,
+} from '../../kern/tcms-kontext';
 import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import {
@@ -307,7 +311,10 @@ export async function ladeArbeitskorb(
     }
 
     // ---- §-153-Würdigungen ----
-    const p153 = c.feststellungen.filter((f) => f.p153Offen);
+    // Nur lesbare Feststellungen (RT-01): Maskierte tragen keine Steuerwirkung.
+    // Wer zuständig ist (BT oder Hauptbearbeitung), gehört ohnehin zum Kreis
+    // der Beteiligten (`kannVertraulichLesen`) und sieht alle.
+    const p153 = c.feststellungen.filter((f): f is FeststellungView => !f.maskiert && f.p153Offen);
     if (p153.length > 0) {
       if (kannWuerdigen(nutzer, m.id) && zustaendig) {
         for (const f of p153) {

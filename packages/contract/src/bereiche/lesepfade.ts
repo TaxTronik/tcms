@@ -285,8 +285,19 @@ const kontrolleSicht = z
   })
   .strict();
 
-const feststellungSicht = z
+const feststellungStatus = z.enum([
+  'ERFASST',
+  'IN_WUERDIGUNG',
+  'MASSNAHMEN_OFFEN',
+  'NACHKONTROLLE',
+  'GESCHLOSSEN',
+  'VERWORFEN',
+]);
+
+/** Feststellung, die der Akteur lesen darf (nicht vertraulich oder beteiligt). */
+const feststellungLesbar = z
   .object({
+    maskiert: z.literal(false),
     id: objektId,
     nummer: text(50),
     titel: text(500),
@@ -296,14 +307,7 @@ const feststellungSicht = z
     klasse: z.enum(['DESIGNMANGEL', 'DURCHFUEHRUNGSMANGEL', 'STEUERLICHER_FEHLER', 'HINWEIS']),
     schwere: klasse,
     auswirkung: z.enum(['JA', 'NEIN', 'UNKLAR']),
-    status: z.enum([
-      'ERFASST',
-      'IN_WUERDIGUNG',
-      'MASSNAHMEN_OFFEN',
-      'NACHKONTROLLE',
-      'GESCHLOSSEN',
-      'VERWORFEN',
-    ]),
+    status: feststellungStatus,
     vertraulich: z.boolean(),
     beteiligte: z.array(personId),
     p153Entscheidung: z
@@ -317,6 +321,28 @@ const feststellungSicht = z
     risikoCodes: z.array(text(50)),
   })
   .strict();
+
+/**
+ * Vertrauliche Feststellung für Nicht-Beteiligte (Fachkonzept §13, RT-01):
+ * dieselbe Information wie der Lesepfad `GET …/feststellungen` mit
+ * `maskiert: true` – Nummer, Status, Erfassung; keine Steuerwirkung, keine
+ * §-153-Angaben, keine Schwere, Klasse, Maßnahmen oder Beteiligten.
+ */
+const feststellungMaskiert = z
+  .object({
+    maskiert: z.literal(true),
+    id: objektId,
+    nummer: text(50),
+    vertraulich: z.literal(true),
+    status: feststellungStatus,
+    erfasstAm: zeitpunkt,
+  })
+  .strict();
+
+const feststellungSicht = z.discriminatedUnion('maskiert', [
+  feststellungLesbar,
+  feststellungMaskiert,
+]);
 
 const ereignisSicht = z
   .object({

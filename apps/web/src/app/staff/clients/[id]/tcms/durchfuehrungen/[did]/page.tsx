@@ -305,7 +305,7 @@ export default async function Kontrolldurchfuehrung({
               style={{ textDecoration: 'none' }}
             >
               <Icon name="FileCheck" className="tx-icon-xs" /> Verknüpfte Feststellung {f.nummer} ·{' '}
-              {seite.ctx.feststellungen.find((x) => x.id === f.id)?.titel ?? 'Feststellung'}
+              {f.maskiert ? 'Vertrauliche Feststellung' : f.titel}
             </Link>
           ))}
         </div>

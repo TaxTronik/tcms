@@ -7,7 +7,10 @@
 // Rechte (TS-03, ADR 0001 §3.3/§5): Der Lader prüft selbst `kannLesen` für den
 // Akteur des Dienstkontexts. Fremder Mandant, fremder Tenant, unbekannte ID:
 // immer `NICHT_GEFUNDEN` (kein Existenz-Orakel). Vertrauliche Feststellungen
-// sind für Nicht-Beteiligte bereits maskiert (`kannVertraulichLesen`).
+// sind für Nicht-Beteiligte bereits maskiert (`kannVertraulichLesen`): Sie
+// enthalten nur, was auch der dedizierte Lesepfad zeigt (`maskiert: true`,
+// Nummer, Status, Erfassung – RT-01), und Kennzahlen leiten aus ihnen keine
+// Inhalte (Steuerwirkung, §-153, Schwere) ab.
 //
 // Personen: Das Ergebnis enthält nur IDs der kanzleikonsole; Anzeigenamen
 // kommen über `ctx.personen` (im Dienst leer). Zuständigkeit (BT,
@@ -192,7 +195,9 @@ export interface DurchfuehrungView {
   schluessel: boolean;
 }
 
+/** Feststellung, die der Akteur lesen darf (nicht vertraulich oder beteiligt). */
 export interface FeststellungView {
+  maskiert: false;
   id: string;
   nummer: string;
   titel: string;
@@ -220,6 +225,25 @@ export interface FeststellungView {
   erfasstAm: Date;
   risikoCodes: string[];
 }
+
+/**
+ * Vertrauliche Feststellung für Nicht-Beteiligte (Fachkonzept §13, RT-01):
+ * dieselbe Information wie der dedizierte Lesepfad (`ladeFeststellungen`,
+ * `maskiert: true`) – Nummer, Status und Erfassungszeitpunkt. Kein Titel,
+ * keine Steuerwirkung, keine §-153-Angaben, keine Schwere oder Klasse, keine
+ * Maßnahmen-Zähler oder Fristen, keine Risikocodes und keine Beteiligten.
+ */
+export interface FeststellungMaskiert {
+  maskiert: true;
+  id: string;
+  nummer: string;
+  vertraulich: true;
+  status: FeststellungView['status'];
+  erfasstAm: Date;
+}
+
+/** Feststellung im Kontext: lesbar oder maskiert (diskriminiert über `maskiert`). */
+export type FeststellungSicht = FeststellungView | FeststellungMaskiert;
 
 export interface EreignisView {
   id: string;
@@ -348,7 +372,8 @@ export interface TcmsKontext {
   }[];
   kontrollen: KontrolleView[];
   durchfuehrungen: DurchfuehrungView[];
-  feststellungen: FeststellungView[];
+  /** Vertrauliche Feststellungen für Nicht-Beteiligte maskiert (RT-01). */
+  feststellungen: FeststellungSicht[];
   ereignisse: EreignisView[];
   laender: LandView[];
   schwelle: SchwellenErgebnis;
@@ -466,8 +491,8 @@ export async function ladeKontext(
     orderBy: { createdAt: 'desc' },
     include: PROGRAMM_INHALT,
   });
-  const k = berechne({ heute, stand, historisch }, mandant, kontakte, programm);
-  return vollende(ctx, ctx.akteur, k, true);
+  const k = berechne({ heute, stand, historisch }, ctx.akteur, mandant, kontakte, programm);
+  return vollende(ctx, k, true);
 }
 
 /** Zugang zu einem Mandanten in einem mandantenübergreifenden Lesepfad. */
@@ -530,18 +555,24 @@ export async function jeAktuellerKontext(
       const akteur = zugangJe.get(m.id)!;
       const k = berechne(
         { heute, stand: heute, historisch: false },
+        akteur,
         m,
         kontakte.filter((x) => x.mandantId === m.id),
         programmJe.get(m.id) ?? null,
       );
-      fn(await vollende(ctx, akteur, k, false), akteur);
+      fn(await vollende(ctx, k, false), akteur);
     }
   }
 }
 
-/** Berechnet den Kontext aus den Rohdaten (rein, ohne Datenbank). */
+/**
+ * Berechnet den Kontext aus den Rohdaten (rein, ohne Datenbank). `akteur`
+ * bestimmt nur die Sicht auf vertrauliche Feststellungen (Maskierung und die
+ * daraus abgeleiteten Kennzahlen), nie Rechte zum Laden.
+ */
 function berechne(
   zeit: { heute: Date; stand: Date; historisch: boolean },
+  akteur: Akteur,
   mandant: MandantRoh,
   kontakte: readonly KontaktRoh[],
   programm: ProgrammRoh | null,
@@ -894,7 +925,7 @@ function berechne(
     }));
 
   // ---- Feststellungen ----
-  const feststellungen: FeststellungView[] = programm.feststellungen
+  const alleFeststellungen: FeststellungView[] = programm.feststellungen
     .filter((f) => {
       if (f.erfasstAm.getTime() > ende.getTime()) {
         ausgeblendet++;
@@ -917,6 +948,7 @@ function berechne(
           ? 'NACHKONTROLLE'
           : f.status;
       return {
+        maskiert: false as const,
         id: f.id,
         nummer: f.nummer,
         titel: f.titel,
@@ -947,6 +979,15 @@ function berechne(
       };
     })
     .sort((a, b) => b.nummer.localeCompare(a.nummer));
+  // Vertraulichkeit (Fachkonzept §13, RT-01): Nicht-Beteiligte sehen nur, was
+  // der dedizierte Lesepfad zeigt. Maskiert wird hier im Service, bevor eine
+  // Sicht oder Kennzahl entsteht – nicht erst in der Oberfläche.
+  const feststellungen: FeststellungSicht[] = alleFeststellungen.map((f) =>
+    !f.vertraulich || kannVertraulichLesen(akteur, mandant.id, f.beteiligte)
+      ? f
+      : maskiereFeststellung(f),
+  );
+  const lesbareFeststellungen = feststellungen.filter((f): f is FeststellungView => !f.maskiert);
 
   // ---- Ereignisse ----
   const ereignisse: EreignisView[] = programm.ereignisse
@@ -1152,10 +1193,15 @@ function berechne(
     kontrollenOhneVertretung: kontrollen.filter(
       (k) => !k.vertretungId || k.vertretungId === k.durchfuehrendId,
     ).length,
-    feststellungenOhneMassnahme: feststellungen.filter(
+    // Kennzahlen (RT-01): Status und Zahl der Maßnahmen zeigt auch der
+    // dedizierte Lesepfad für maskierte Feststellungen (Status, Wiedervorlagen),
+    // daher zählen hier alle. Die offene §-153-Würdigung verrät dagegen die
+    // Steuerwirkung und zählt nur lesbare Feststellungen – sonst ergäbe die
+    // Differenz zu den sichtbaren Einträgen den Inhalt einer vertraulichen.
+    feststellungenOhneMassnahme: alleFeststellungen.filter(
       (f) => f.massnahmen === 0 && f.status !== 'VERWORFEN' && f.status !== 'GESCHLOSSEN',
     ).length,
-    p153Offen: feststellungen.filter((f) => f.p153Offen).length,
+    p153Offen: lesbareFeststellungen.filter((f) => f.p153Offen).length,
     zusatz:
       kultur && kultur.design === 'NICHT_BEURTEILT'
         ? { kultur: ['Kenntnisnahme Steuerrichtlinie (K-EC-22) ohne Designbeurteilung'] }
@@ -1227,25 +1273,31 @@ function berechne(
   };
 }
 
-/** Anzeige einer vertraulichen Feststellung für Nicht-Beteiligte (Fachkonzept §13). */
-export const VERTRAULICH_MASKE = {
-  titel: 'Vertrauliche Feststellung',
-  sachverhalt: '',
-  quelleText: 'vertraulich',
-  risikoCodes: [] as string[],
-  /** Wer beteiligt ist, gehört selbst zum vertraulichen Inhalt. */
-  beteiligte: [] as string[],
-} as const;
+/**
+ * Maskierte Sicht einer vertraulichen Feststellung (RT-01). Ausdrückliche
+ * Positivliste der Felder des dedizierten Lesepfads: Ein neues Feld der
+ * Feststellung gelangt so nie ungeplant in die maskierte Sicht.
+ */
+export function maskiereFeststellung(
+  f: Pick<FeststellungView, 'id' | 'nummer' | 'status' | 'erfasstAm'>,
+): FeststellungMaskiert {
+  return {
+    maskiert: true,
+    id: f.id,
+    nummer: f.nummer,
+    vertraulich: true,
+    status: f.status,
+    erfasstAm: f.erfasstAm,
+  };
+}
 
 /**
- * Letzter Schritt jedes Ladens: vertrauliche Feststellungen für Nicht-Beteiligte
- * maskieren (`kannVertraulichLesen`, im Service statt in der Oberfläche) und
- * die Anzeigenamen der genannten Personen über `ctx.personen` auflösen.
- * Beteiligte maskierter Feststellungen werden dabei nicht aufgelöst.
+ * Letzter Schritt jedes Ladens: die Anzeigenamen der genannten Personen über
+ * `ctx.personen` auflösen. Maskierte Feststellungen nennen keine Personen
+ * (wer beteiligt ist, gehört selbst zum vertraulichen Inhalt).
  */
 async function vollende(
   ctx: DienstKontext,
-  akteur: Akteur,
   k: TcmsKontext,
   mitNamen: boolean,
 ): Promise<TcmsKontext> {
@@ -1253,13 +1305,7 @@ async function vollende(
   const merke = (...liste: (string | null | undefined)[]) => {
     for (const id of liste) if (id) ids.add(id);
   };
-  const feststellungen = k.feststellungen.map((f) => {
-    if (f.vertraulich && !kannVertraulichLesen(akteur, k.mandant.id, f.beteiligte)) {
-      return { ...f, ...VERTRAULICH_MASKE, risikoCodes: [], beteiligte: [] };
-    }
-    merke(...f.beteiligte);
-    return f;
-  });
+  for (const f of k.feststellungen) if (!f.maskiert) merke(...f.beteiligte);
   merke(...k.kontaktRollen.map((r) => r.kontaktId));
   for (const z of k.ziele) merke(z.freigegebenVon);
   for (const r of k.risiken) {
@@ -1285,7 +1331,7 @@ async function vollende(
     mitNamen && ids.size > 0
       ? await ctx.personen.namen([...ids].sort())
       : new Map<string, string>();
-  return { ...k, feststellungen, namen };
+  return { ...k, namen };
 }
 
 function stripD(

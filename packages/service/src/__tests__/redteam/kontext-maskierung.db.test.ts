@@ -61,9 +61,12 @@ describe.skipIf(!AKTIV)('RT-01 kontext maskiert vertrauliche Feststellungen unvo
     const eintrag = k.feststellungen.find((x) => x.id === f.id);
     expect(eintrag, 'vertrauliche Feststellung erscheint im Kontext').toBeDefined();
 
-    // Teilmaskierung ist aktiv (Titel ersetzt) – das belegt, dass der leser
-    // als Nicht-Beteiligter gilt.
-    expect(eintrag!.titel).toBe('Vertrauliche Feststellung');
+    // Maskierung ist aktiv – das belegt, dass der leser als Nicht-Beteiligter
+    // gilt. (Angepasste Annahme, tcms-rtfix: Nach dem Fix ist die maskierte
+    // Sicht eine eigene Variante `maskiert: true` ohne Titel statt eines
+    // Ersatztitels; das Schutzziel unten ist unverändert.)
+    expect(eintrag).toMatchObject({ maskiert: true });
+    expect(eintrag as Record<string, unknown>).not.toHaveProperty('titel');
 
     // Gegenprobe: der dedizierte Lesepfad maskiert dieselbe Feststellung für
     // denselben Akteur vollständig (keine Würdigung, keine Steuerwirkung).
@@ -76,13 +79,16 @@ describe.skipIf(!AKTIV)('RT-01 kontext maskiert vertrauliche Feststellungen unvo
     // SICHERE ERWARTUNG: Auch der Kontext darf einem Nicht-Beteiligten weder die
     // §-153-Würdigungsentscheidung noch die steuerliche Auswirkung einer
     // vertraulichen Feststellung verraten.
+    const roh = eintrag as Record<string, unknown>;
     expect(
-      eintrag!.p153Entscheidung,
+      roh['p153Entscheidung'] ?? null,
       'Leak: §-153-Entscheidung einer vertraulichen Feststellung an Nicht-Beteiligte',
     ).toBeNull();
     expect(
-      eintrag!.auswirkung,
+      roh['auswirkung'],
       'Leak: steuerliche Auswirkung einer vertraulichen Feststellung an Nicht-Beteiligte',
     ).not.toBe('JA');
+    expect(roh).not.toHaveProperty('p153Entscheidung');
+    expect(roh).not.toHaveProperty('auswirkung');
   });
 });

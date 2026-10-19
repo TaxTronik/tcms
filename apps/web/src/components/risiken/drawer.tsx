@@ -40,7 +40,7 @@ import {
   uebersteuerungBeantragen,
   uebersteuerungEntscheiden,
 } from '@/server/actions/risiken';
-import { personName, type RisikoView } from '@/server/kontext';
+import { personName, type FeststellungView, type RisikoView } from '@/server/kontext';
 import type { AkzeptanzView, NeuBewertenHinweis, RisikoDetail } from '@/server/risiken-daten';
 import { zweitePerson } from '@tcms/service';
 import type { StaffSeite } from '@/server/seite';
@@ -153,7 +153,10 @@ export function RisikoDrawer({
     uebersteuerungen.find((u) => u.sicht === sicht && u.status === 'FREIGEGEBEN');
   const offeneU = uebersteuerungen.filter((u) => u.status === 'BEANTRAGT');
   const ereignisse = ctx.ereignisse.filter((e) => e.folgen.some((f) => f.ziel === r.code));
-  const feststellungen = ctx.feststellungen.filter((f) => f.risikoCodes.includes(r.code));
+  // Maskierte vertrauliche Feststellungen nennen keine Risikocodes (RT-01, Service).
+  const feststellungen = ctx.feststellungen.filter(
+    (f): f is FeststellungView => !f.maskiert && f.risikoCodes.includes(r.code),
+  );
   const offeneAkzeptanz = akzeptanzen.find((a) => a.status === 'OFFEN');
   const gesetzlicheVertreter = ctx.mandantPersonen.filter(
     (p) => p.mandantRolle === 'GESETZLICHER_VERTRETER',

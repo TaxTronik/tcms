@@ -24,7 +24,8 @@ export default async function MandantTcmsLayout({
   if (!ctx) notFound();
   const ueberfaellig = ctx.durchfuehrungen.filter((d) => d.anzeige === 'UEBERFAELLIG').length;
   const neu = ctx.ereignisse.filter((e) => e.status === 'NEU').length;
-  const p153 = ctx.feststellungen.filter((f) => f.p153Offen).length;
+  // Maskierte vertrauliche Feststellungen tragen keine Steuerwirkung (RT-01, Service).
+  const p153 = ctx.feststellungen.filter((f) => !f.maskiert && f.p153Offen).length;
   const basis = `/staff/clients/${id}/tcms`;
   return (
     <div className="page">

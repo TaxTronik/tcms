@@ -1,4 +1,5 @@
 import 'server-only';
+import type { KontrollDurchfuehrung } from '@tcms/contract';
 import { isoDatum } from '@tcms/domain';
 import { ladeKontrolle, ladeKontrollen } from '@tcms/service';
 import type { TcmsKontext } from './kontext';
@@ -54,9 +55,10 @@ export interface KontrolleDetail {
   abweichungBeantragtAm: Date | null;
 }
 
+/** Feststellung je Durchführung; vertrauliche für Nicht-Beteiligte ohne §-153-Kennzeichen (RT-01). */
 export type FeststellungJeDurchfuehrung = Map<
   string,
-  { id: string; nummer: string; p153Offen: boolean }
+  NonNullable<KontrollDurchfuehrung['feststellung']>
 >;
 
 export interface KontrollenZusatz {

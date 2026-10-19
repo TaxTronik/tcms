@@ -389,9 +389,14 @@ export async function ladeRisiko(ctx: DienstKontext, eingabe: RisikoLesen): Prom
 // Kontrollen
 // -----------------------------------------------------------------------------
 
-type FeststellungJe = Map<string, { id: string; nummer: string; p153Offen: boolean }>;
+type FeststellungJe = Map<string, NonNullable<KontrollDurchfuehrung['feststellung']>>;
 
-/** Feststellungen je Quell-Durchführung (für „mit Befund → F-…"). */
+/**
+ * Feststellungen je Quell-Durchführung (für „mit Befund → F-…"). Die Nummer
+ * ist nicht vertraulich; ob die §-153-Würdigung offen ist, verrät dagegen die
+ * Steuerwirkung und steht nur bei lesbaren Feststellungen (RT-01). Fehlt die
+ * Feststellung im Kontext des Akteurs, gilt sie als maskiert (fail closed).
+ */
 async function feststellungenJeDurchfuehrung(tx: Tx, k: TcmsKontext): Promise<FeststellungJe> {
   const out: FeststellungJe = new Map();
   if (!k.programm) return out;
@@ -403,14 +408,17 @@ async function feststellungenJeDurchfuehrung(tx: Tx, k: TcmsKontext): Promise<Fe
     },
     select: { id: true, nummer: true, durchfuehrungId: true },
   });
-  const offen = new Map(k.feststellungen.map((f) => [f.id, f.p153Offen]));
-  for (const f of liste)
-    if (f.durchfuehrungId)
-      out.set(f.durchfuehrungId, {
-        id: f.id,
-        nummer: f.nummer,
-        p153Offen: offen.get(f.id) ?? false,
-      });
+  const sicht = new Map(k.feststellungen.map((f) => [f.id, f]));
+  for (const f of liste) {
+    if (!f.durchfuehrungId) continue;
+    const s = sicht.get(f.id);
+    out.set(
+      f.durchfuehrungId,
+      s && !s.maskiert
+        ? { maskiert: false, id: f.id, nummer: f.nummer, p153Offen: s.p153Offen }
+        : { maskiert: true, id: f.id, nummer: f.nummer },
+    );
+  }
   return out;
 }
 

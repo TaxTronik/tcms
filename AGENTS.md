@@ -119,6 +119,13 @@ für KI-Werkzeuge.
   Mandantenkontakte nur mit aktiver `MandantKontaktRolle`.
 - Fremde Mandanten und Objekte: `404` bzw. „nicht gefunden", nie ein Hinweis
   auf ihre Existenz.
+- Vertrauliche Feststellungen (Fachkonzept §13): Für Personen ohne
+  `kannVertraulichLesen` ist jede Ausgabe eine eigene Variante
+  `maskiert: true` mit genau den Feldern des dedizierten Lesepfads (Nummer,
+  Status, Erfassung, Wiedervorlagen) – als Positivliste gebaut, nie durch
+  Überschreiben einzelner Felder. Kennzahlen dürfen vertrauliche
+  Feststellungen nur zählen, wo die Zahl aus Sichtbarem folgt (Status, Zahl
+  der Maßnahmen); Steuerwirkung, §-153 und Schwere zählen nur lesbare (RT-01).
 - `TCMS_DEMO_TODAY` wirkt nur über die Demo-Uhr in `apps/web`; Audit-
   Zeitstempel und Sicherheitsfristen (Codes) sind immer echte Zeit.
 - Objekt-IDs aus Pfad oder Body gehören nur dann zur Anfrage, wenn das Objekt

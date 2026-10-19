@@ -62,7 +62,7 @@ describe.skipIf(!AKTIV)('leseKontext gegen PostgreSQL', () => {
     expect(falsch.code).toBe('UNGUELTIG');
   });
 
-  it('vertraulich: Titel, Sachverhalt und Beteiligte maskiert', async () => {
+  it('vertraulich: nur Nummer, Status und Erfassung wie der dedizierte Lesepfad (RT-01)', async () => {
     const f = await mitTenant(DEMO_TENANT_ID, async (tx) => {
       // Eine Feststellung aus dem Seed (Nummernkreis 2026, erfasst bis zum Demo-Tag), damit
       // Daten anderer Testläufe auf derselben Datenbank die Auswahl nicht verschieben.
@@ -87,16 +87,20 @@ describe.skipIf(!AKTIV)('leseKontext gegen PostgreSQL', () => {
       ]).not.toContain(DEMO_IDS.thomas);
       const a = await im(thomas, (ctx) => leseKontext(ctx, { mandantId: DEMO_IDS.talwind }));
       const m = a.feststellungen.find((x) => x.id === f.id)!;
-      expect(m).toMatchObject({
-        titel: 'Vertrauliche Feststellung',
-        sachverhalt: '',
-        quelleText: 'vertraulich',
-        risikoCodes: [],
-        beteiligte: [],
+      expect(m).toEqual({
+        maskiert: true,
+        id: f.id,
+        nummer: f.nummer,
+        vertraulich: true,
+        status: f.status,
+        erfasstAm: f.erfasstAm.toISOString(),
       });
       expect(JSON.stringify(a)).not.toContain(f.titel);
       const sichtbar = await im(anna, (ctx) => leseKontext(ctx, { mandantId: DEMO_IDS.talwind }));
-      expect(sichtbar.feststellungen.find((x) => x.id === f.id)!.titel).toBe(f.titel);
+      expect(sichtbar.feststellungen.find((x) => x.id === f.id)).toMatchObject({
+        maskiert: false,
+        titel: f.titel,
+      });
     } finally {
       await mitTenant(DEMO_TENANT_ID, (tx) =>
         tx.feststellung.update({ where: { id: f.id }, data: { vertraulich: false } }),

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import {
   EREIGNIS_QUELLE_LABEL,
   ereignistyp,
+  FESTSTELLUNG_STATUS_LABEL,
   fmtDatum,
   fmtDatumKurz,
   fmtEurGanz,
@@ -21,7 +22,7 @@ import { RiskHeatmap } from '@/components/ui/heatmap';
 import { Leerzustand } from '@/components/ui/leer';
 import { BarRows, Donut, PhasenStepper, SchwellenGauge } from '@/components/ui/visual';
 import { TcmsKopf } from '@/components/tcms/kopf';
-import { personKurzname } from '@/server/kontext';
+import { personKurzname, type FeststellungView } from '@/server/kontext';
 import { ladeStaffSeite } from '@/server/seite';
 
 export const metadata = { title: 'Mandanten-Cockpit' };
@@ -78,7 +79,8 @@ export default async function Cockpit({
     );
   }
 
-  const p153 = ctx.feststellungen.filter((f) => f.p153Offen);
+  // Maskierte vertrauliche Feststellungen (RT-01) nennen nur Nummer und Status.
+  const p153 = ctx.feststellungen.filter((f): f is FeststellungView => !f.maskiert && f.p153Offen);
   const ueberAppetit = ctx.risiken.filter((r) => r.ueberAppetit).length;
   const faellige = ctx.durchfuehrungen
     .filter(
@@ -451,34 +453,53 @@ export default async function Cockpit({
             <Leerzustand icon="CheckCheck" text="Keine offenen Feststellungen." />
           ) : (
             <div>
-              {offeneF.map((f) => (
-                <Link
-                  key={f.id}
-                  href={mitStand(`${basis}/feststellungen/${f.id}`)}
-                  className="list-row"
-                  style={{ textDecoration: 'none' }}
-                >
-                  <span
-                    className={`kpi-chip ${f.schwere === 'HOCH' || f.schwere === 'KRITISCH' ? 'chip-red' : 'chip-amber'}`}
+              {offeneF.map((f) =>
+                f.maskiert ? (
+                  <Link
+                    key={f.id}
+                    href={mitStand(`${basis}/feststellungen/${f.id}`)}
+                    className="list-row"
+                    style={{ textDecoration: 'none' }}
                   >
-                    <Icon name={f.p153Offen ? 'Flame' : 'FileCheck'} />
-                  </span>
-                  <div className="grow">
-                    <div className="text-sm font-m">
-                      {f.nummer} · {f.titel}
+                    <span className="kpi-chip chip-gray">
+                      <Icon name="Lock" />
+                    </span>
+                    <div className="grow">
+                      <div className="text-sm font-m">{f.nummer} · Vertrauliche Feststellung</div>
+                      <div className="text-11 text-muted mt-1">
+                        {FESTSTELLUNG_STATUS_LABEL[f.status]} · Inhalt nur für Beteiligte sichtbar
+                      </div>
                     </div>
-                    <div className="text-11 text-muted mt-1">
-                      {KLASSE_LABEL[f.schwere]} ·{' '}
-                      {f.p153Offen
-                        ? '§-153-Würdigung offen'
-                        : f.p153Entscheidung
-                          ? `entschieden: ${P153_LABEL[f.p153Entscheidung]}`
-                          : 'ohne §-153-Bezug'}{' '}
-                      · Quelle {f.quelleText}
+                  </Link>
+                ) : (
+                  <Link
+                    key={f.id}
+                    href={mitStand(`${basis}/feststellungen/${f.id}`)}
+                    className="list-row"
+                    style={{ textDecoration: 'none' }}
+                  >
+                    <span
+                      className={`kpi-chip ${f.schwere === 'HOCH' || f.schwere === 'KRITISCH' ? 'chip-red' : 'chip-amber'}`}
+                    >
+                      <Icon name={f.p153Offen ? 'Flame' : 'FileCheck'} />
+                    </span>
+                    <div className="grow">
+                      <div className="text-sm font-m">
+                        {f.nummer} · {f.titel}
+                      </div>
+                      <div className="text-11 text-muted mt-1">
+                        {KLASSE_LABEL[f.schwere]} ·{' '}
+                        {f.p153Offen
+                          ? '§-153-Würdigung offen'
+                          : f.p153Entscheidung
+                            ? `entschieden: ${P153_LABEL[f.p153Entscheidung]}`
+                            : 'ohne §-153-Bezug'}{' '}
+                        · Quelle {f.quelleText}
+                      </div>
                     </div>
-                  </div>
-                </Link>
-              ))}
+                  </Link>
+                ),
+              )}
             </div>
           )}
         </div>

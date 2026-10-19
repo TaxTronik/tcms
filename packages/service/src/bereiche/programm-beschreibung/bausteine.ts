@@ -25,7 +25,7 @@ import {
   type BausteinArt,
 } from '@tcms/domain';
 import { kanonisch, sha256 } from '@tcms/domain/audit';
-import type { TcmsKontext } from '../../kern/tcms-kontext';
+import type { FeststellungView, TcmsKontext } from '../../kern/tcms-kontext';
 
 // Übersetzungsprüfung: Abschnitte des Vertrags = Abschnitte der Domain.
 type Gleich<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
@@ -168,9 +168,11 @@ export function baueBausteine(k: TcmsKontext, o: BausteinOptionen): BausteinSatz
       })),
     },
     FESTSTELLUNGEN: {
-      // Vertrauliche Feststellungen und §-153-Details gehören nicht in die Beschreibung.
+      // Vertrauliche Feststellungen und §-153-Details gehören nicht in die
+      // Beschreibung – auch nicht für Beteiligte (maskierte sind immer vertraulich).
       feststellungen: k.feststellungen
-        .filter((f) => !f.vertraulich && f.status !== 'GESCHLOSSEN' && f.status !== 'VERWORFEN')
+        .filter((f): f is FeststellungView => !f.maskiert && !f.vertraulich)
+        .filter((f) => f.status !== 'GESCHLOSSEN' && f.status !== 'VERWORFEN')
         .map((f) => ({
           nummer: f.nummer,
           titel: f.titel,
