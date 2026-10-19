@@ -6,10 +6,12 @@ import { setzeVertraulich } from '@/server/actions/feststellungen';
 
 /** Schalter „vertraulich" (nur Berufsträger; gesperrt sichtbar mit Grund). */
 export function VertraulichSchalter({
+  mandantId,
   id,
   wert,
   gesperrtGrund,
 }: {
+  mandantId: string;
   id: string;
   wert: boolean;
   gesperrtGrund: string | null;
@@ -21,6 +23,7 @@ export function VertraulichSchalter({
   useEffect(() => setAn(wert), [wert, state]);
   return (
     <form ref={ref} action={action}>
+      <input type="hidden" name="mandantId" value={mandantId} />
       <input type="hidden" name="id" value={id} />
       <input type="hidden" name="wert" value={an ? '1' : '0'} />
       <label

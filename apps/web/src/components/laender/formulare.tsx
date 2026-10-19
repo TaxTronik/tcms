@@ -137,11 +137,11 @@ function StandFeld({ heute, min, ip }: { heute: string; min?: string; ip: string
 
 /** Neuer Stand für ein Land (im Drawer). */
 export function LandStandForm({
-  programmId,
+  mandantId,
   land,
   heute,
 }: {
-  programmId: string;
+  mandantId: string;
   land: LandView;
   heute: string;
 }) {
@@ -152,7 +152,7 @@ export function LandStandForm({
       className="col"
       style={{ gap: 10 }}
     >
-      <input type="hidden" name="programmId" value={programmId} />
+      <input type="hidden" name="mandantId" value={mandantId} />
       <input type="hidden" name="land" value={land.land} />
       <StandFeld heute={heute} min={isoDatum(land.stand)} ip="drawer" />
       <Felder w={land} heute={heute} ip="drawer" />
@@ -173,12 +173,12 @@ export function LandStandForm({
 
 /** Sammelerfassung: alle Länder zu einem Stand. */
 export function SammelErfassung({
-  programmId,
+  mandantId,
   laender,
   heute,
   zurueck,
 }: {
-  programmId: string;
+  mandantId: string;
   laender: LandView[];
   heute: string;
   zurueck: string;
@@ -190,7 +190,7 @@ export function SammelErfassung({
       className="card mt-4"
       style={{ overflow: 'hidden' }}
     >
-      <input type="hidden" name="programmId" value={programmId} />
+      <input type="hidden" name="mandantId" value={mandantId} />
       <div className="card-header" style={{ flexWrap: 'wrap', gap: 12 }}>
         <span className="card-title">Länderdaten erfassen</span>
         <span className="row-s" style={{ gap: 8 }}>
@@ -330,11 +330,11 @@ export function SammelErfassung({
 
 /** Weiteres EU-Land in den Monitor aufnehmen. */
 export function LandHinzufuegenForm({
-  programmId,
+  mandantId,
   vorhanden,
   heute,
 }: {
-  programmId: string;
+  mandantId: string;
   vorhanden: string[];
   heute: string;
 }) {
@@ -346,7 +346,7 @@ export function LandHinzufuegenForm({
         <span className="text-xs text-muted">{frei.length} EU-Länder noch nicht im Monitor</span>
       </div>
       <AktionsForm action={landHinzufuegen} key="land-neu" className="p-4 col" style={{ gap: 10 }}>
-        <input type="hidden" name="programmId" value={programmId} />
+        <input type="hidden" name="mandantId" value={mandantId} />
         <div className="row-wrap" style={{ gap: 16, alignItems: 'flex-end' }}>
           <div>
             <label className="label-sm" htmlFor="land-neu-code">

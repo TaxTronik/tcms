@@ -42,7 +42,6 @@ import {
 } from '@/server/actions/feststellungen';
 import { KEIN_RECHT, NUR_BERUFSTRAEGER } from '@/server/aktion';
 import {
-  istBeteiligt,
   kontrollCode,
   ladeFeststellungDetail,
   P153_ERLAEUTERUNG,
@@ -67,7 +66,8 @@ export default async function FeststellungDetailSeite({
   const seite = await ladeStaffSeite(id, await searchParams);
   const { ctx, basis, mitStand, nutzer } = seite;
   if (!ctx.programm) notFound();
-  const f = await ladeFeststellungDetail(ctx.programm.id, fid, ctx.stand, ctx.historisch);
+  // Service-Lader: Rechte, Stichtag und Vertraulichkeit prüft der Service.
+  const f = await ladeFeststellungDetail(id, fid, seite.standIso);
   if (!f) notFound();
 
   const zurueck = (
@@ -76,18 +76,8 @@ export default async function FeststellungDetailSeite({
     </Link>
   );
 
-  const beteiligt = istBeteiligt(
-    nutzer,
-    {
-      erfasstVon: f.erfasstVon,
-      p153EntschiedenVon: f.p153?.von ?? null,
-      verwerfenBeantragtVon: f.verwerfen?.beantragtVon ?? null,
-      massnahmenVerantwortlich: f.massnahmen.map((m) => m.verantwortlich),
-    },
-    ctx.mandant.id,
-  );
-  // Zugriff: vertraulich zum Stichtag ODER heute – sonst ließe sich der aktuelle Inhalt über einen frühen Stichtag lesen.
-  if ((f.vertraulich || f.vertraulichAktuell) && !beteiligt) {
+  // Vertraulich (zum Stichtag oder heute) und nicht beteiligt: der Service liefert nur die Nummer.
+  if (f.maskiert) {
     return (
       <>
         <TcmsKopf seite={seite} />
@@ -271,7 +261,9 @@ export default async function FeststellungDetailSeite({
               ) : null}
             </span>
             <AktionsForm action={schalteFeststellungWeiter} className="row-s">
+              <input type="hidden" name="mandantId" value={id} />
               <input type="hidden" name="id" value={f.id} />
+              <input type="hidden" name="von" value={f.status} />
               <Gesperrt
                 grund={
                   sperre ?? (schritt.blockiert ? `Noch nicht möglich: ${schritt.blockiert}` : null)
@@ -305,7 +297,7 @@ export default async function FeststellungDetailSeite({
                   titel="Würdigung: Schwere, Auswirkung, Ursache"
                   hinweis="Bei steuerlicher Auswirkung „ja“ oder „unklar“ startet der §-153-Pfad. Nach dokumentierter Würdigung ist die Auswirkung nicht mehr änderbar."
                   action={aktualisiereWuerdigung}
-                  felder={{ id: f.id }}
+                  felder={{ mandantId: id, id: f.id }}
                   disabled={!kannAendern}
                   disabledGrund={sperre ?? undefined}
                 >
@@ -463,7 +455,7 @@ export default async function FeststellungDetailSeite({
                     titel="Betroffene Erklärung erfassen"
                     hinweis="§-153-Pfad Schritt 1: Steuerart, Land, Zeitraum, geschätzte Auswirkung."
                     action={fuegeErklaerungHinzu}
-                    felder={{ feststellungId: f.id }}
+                    felder={{ mandantId: id, feststellungId: f.id }}
                     disabled={!kannAendern}
                     disabledGrund={sperre ?? undefined}
                   >
@@ -571,7 +563,7 @@ export default async function FeststellungDetailSeite({
                   titel="Maßnahme anlegen"
                   hinweis="Die Wiedervorlage-Nummer wird kanzleiweit fortlaufend vergeben."
                   action={legeMassnahmeAn}
-                  felder={{ feststellungId: f.id }}
+                  felder={{ mandantId: id, feststellungId: f.id }}
                   bestaetigen="Anlegen"
                   disabled={!kannAendern}
                   disabledGrund={sperre ?? undefined}
@@ -693,7 +685,7 @@ export default async function FeststellungDetailSeite({
                             titel={`Maßnahme #${m.wiedervorlageNr} erledigen`}
                             hinweis={m.beschreibung}
                             action={erledigeMassnahme}
-                            felder={{ id: m.id }}
+                            felder={{ mandantId: id, id: m.id }}
                             bestaetigen="Als erledigt dokumentieren"
                             disabled={!darfErledigen}
                             disabledGrund={
@@ -731,7 +723,9 @@ export default async function FeststellungDetailSeite({
           {/* §-153-Block */}
           {p153Pfad ? (
             <P153Block
+              mandantId={id}
               feststellungId={f.id}
+              bisher={f.p153?.entscheidung ?? null}
               optionen={P153_OPTIONEN.map((o) => ({
                 wert: o,
                 titel:
@@ -814,7 +808,7 @@ export default async function FeststellungDetailSeite({
                     titel="Nachkontrolle anlegen"
                     hinweis="Legt eine außerplanmäßige Durchführung der gewählten Kontrolle an und verknüpft sie mit der Feststellung."
                     action={legeNachkontrolleAn}
-                    felder={{ feststellungId: f.id }}
+                    felder={{ mandantId: id, feststellungId: f.id }}
                     bestaetigen="Anlegen und verknüpfen"
                     disabled={!kannAendern || !nkMoeglich}
                     disabledGrund={sperre ?? 'Nachkontrolle ab Status „Maßnahmen offen“'}
@@ -973,6 +967,7 @@ export default async function FeststellungDetailSeite({
                   <div className="text-xs mt-1">{f.verwerfen.begruendung}</div>
                   <div className="row-s mt-2" style={{ flexWrap: 'wrap' }}>
                     <AktionsForm action={bestaetigeVerwerfen}>
+                      <input type="hidden" name="mandantId" value={id} />
                       <input type="hidden" name="id" value={f.id} />
                       <Gesperrt
                         blass
@@ -998,6 +993,7 @@ export default async function FeststellungDetailSeite({
                       </Gesperrt>
                     </AktionsForm>
                     <AktionsForm action={lehneVerwerfenAb}>
+                      <input type="hidden" name="mandantId" value={id} />
                       <input type="hidden" name="id" value={f.id} />
                       <Gesperrt grund={sperre}>
                         <SubmitButton className="btn-secondary btn-tiny" disabled={!kannAendern}>
@@ -1017,7 +1013,7 @@ export default async function FeststellungDetailSeite({
                   titel={`${f.nummer} verwerfen`}
                   hinweis="Nur mit Begründung; eine zweite Person bestätigt."
                   action={beantrageVerwerfen}
-                  felder={{ id: f.id }}
+                  felder={{ mandantId: id, id: f.id }}
                   bestaetigen="Verwerfen beantragen"
                   gefahr
                   begruendungMin={30}
@@ -1032,6 +1028,7 @@ export default async function FeststellungDetailSeite({
                 style={{ borderTop: '1px solid rgb(var(--border-subtle) / 0.4)', paddingTop: 10 }}
               >
                 <VertraulichSchalter
+                  mandantId={id}
                   id={f.id}
                   wert={f.vertraulich}
                   gesperrtGrund={

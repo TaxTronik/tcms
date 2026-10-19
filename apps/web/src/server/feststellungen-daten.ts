@@ -1,24 +1,27 @@
 import 'server-only';
-import type { Akteur } from '@tcms/contract';
-import type { Tx } from '@tcms/db';
+import { DienstFehler, type Akteur, type FeststellungDetail as DienstDetail } from '@tcms/contract';
+import type { AnzeigeStatus, FeststellungStatus, Paragraph153Entscheidung } from '@tcms/domain';
 import {
-  FESTSTELLUNG_STATUS_LABEL,
-  P153_LABEL,
-  statusAm,
-  type AnzeigeStatus,
-  type FeststellungStatus,
-  type Paragraph153Entscheidung,
-} from '@tcms/domain';
-import { kannVertraulichLesen } from '@tcms/service';
-import { lies } from './demo';
-import { auditGrenze, tagesende } from './zeit';
+  EINGABE_UNGUELTIG,
+  imDienst,
+  ladeFeststellung,
+  ladeFeststellungen,
+  type DienstKontext,
+} from '@tcms/service';
+import { aktualisiereMandant } from './aktion';
+import { DEMO_PORTS } from './demo';
+import type { Ergebnis } from './ergebnis';
+import { demoAkteur } from './sitzung';
 
 // =============================================================================
-// Detaildaten für S10 (Feststellungen und Maßnahmen), die der Kontext nicht
-// enthält: Maßnahmen mit Wiedervorlage, Nachkontrolle, Verlauf aus dem
-// Audit-Log, Beteiligte für vertrauliche Feststellungen. Dazu die
-// transaktionsgebundenen Helfer für Nummernkreise.
+// Demo-Anbindung S10 (Feststellungen und Maßnahmen) an @tcms/service: Lader
+// (Liste, Detail) im Dienstkontext der angemeldeten Person, Umrechnung der
+// JSON-Antwort (ISO-Strings) in die Anzeigeform der Seiten, Anzeigekonstanten
+// und der gemeinsame Aufruf für Server Actions (`dienstAktion`). Rechte,
+// Vertraulichkeit und Stichtag behandelt ausschließlich der Service.
 // =============================================================================
+
+export { p153Abschliessend } from '@tcms/service';
 
 export const FESTSTELLUNG_STATUS_BADGE: Record<FeststellungStatus, string> = {
   ERFASST: 'badge-gray',
@@ -48,58 +51,81 @@ export const P153_OPTIONEN: readonly Paragraph153Entscheidung[] = [
   'UEBERGABE',
 ];
 
-/** Eine Entscheidung „weitere Klärung" ist nicht abschließend und erlaubt eine Folgeentscheidung. */
-export function p153Abschliessend(e: Paragraph153Entscheidung | null | undefined): boolean {
-  return e != null && e !== 'WEITERE_KLAERUNG';
-}
-
 /** Kontrollcode aus einem Quelltext wie „K-EC-05 September 2026". */
 export function kontrollCode(text: string): string | null {
   return /K-EC-\d{2}/.exec(text)?.[0] ?? null;
 }
 
 // ----------------------------------------------------------------------------
-// Vertraulichkeit (Fachkonzept §13: vertrauliche Feststellungen nur für Beteiligte)
+// Aufruf des Service aus Server Actions
 // ----------------------------------------------------------------------------
 
-export interface BeteiligteFakten {
-  erfasstVon: string;
-  p153EntschiedenVon: string | null;
-  verwerfenBeantragtVon?: string | null;
-  massnahmenVerantwortlich: string[];
+const PRUEFEN = 'Bitte die Eingaben prüfen.';
+
+/** Text eines Formularfelds (leer, wenn nicht vorhanden oder keine Zeichenkette). */
+export function feld(fd: FormData, name: string): string {
+  const v = fd.get(name);
+  return typeof v === 'string' ? v : '';
+}
+
+/** Leeres Feld → nicht angegeben. */
+export function optional(fd: FormData, name: string): string | undefined {
+  const v = feld(fd, name).trim();
+  return v ? v : undefined;
 }
 
 /**
- * Beteiligt sind: Admin/Partner, zuständige:r Berufsträger:in, Hauptbearbeitung,
- * die erfassende Person, die würdigende Person und Maßnahmen-Verantwortliche –
- * jeweils mit Bezug zum Mandanten (`kannVertraulichLesen`, @tcms/service).
+ * Führt eine Fachoperation im Dienstkontext des Akteurs aus (eine Transaktion
+ * im Tenant des Akteurs) und übersetzt Dienstfehler in eine Meldung für das
+ * Formular. `ungueltig` ersetzt die allgemeine Meldung bei Schemafehlern durch
+ * den bisherigen Formulartext; fachliche Meldungen des Service bleiben.
  */
-export function istBeteiligt(a: Akteur, f: BeteiligteFakten, mandantId: string): boolean {
-  const beteiligte = [
-    f.erfasstVon,
-    f.p153EntschiedenVon,
-    f.verwerfenBeantragtVon,
-    ...f.massnahmenVerantwortlich,
-  ].filter((x): x is string => !!x);
-  return kannVertraulichLesen(a, mandantId, beteiligte);
+export async function dienstAufruf<T>(
+  akteur: Akteur,
+  fn: (ctx: DienstKontext) => Promise<T>,
+  texte: { ungueltig?: string; nichtGefunden?: string } = {},
+): Promise<{ wert: T } | { fehler: string }> {
+  try {
+    return {
+      wert: await imDienst(akteur, DEMO_PORTS, fn, { timeoutMs: 30_000, maxWaitMs: 10_000 }),
+    };
+  } catch (e) {
+    if (!(e instanceof DienstFehler)) throw e;
+    if (e.code === 'UNGUELTIG' && e.message === EINGABE_UNGUELTIG) {
+      return { fehler: texte.ungueltig ?? PRUEFEN };
+    }
+    if (e.message !== e.code) return { fehler: e.message };
+    if (e.code === 'NICHT_GEFUNDEN') return { fehler: texte.nichtGefunden ?? 'Nicht gefunden.' };
+    if (e.code === 'KONFLIKT') return { fehler: 'Der Stand hat sich geändert. Bitte neu laden.' };
+    return { fehler: PRUEFEN };
+  }
+}
+
+/** `dienstAufruf` für Actions mit Rückmeldung; nach Erfolg werden die Seiten des Mandanten neu geladen. */
+export async function dienstAktion<T>(
+  akteur: Akteur,
+  mandantId: string,
+  fn: (ctx: DienstKontext) => Promise<T>,
+  ok: (wert: T) => string,
+  texte: { ungueltig?: string; nichtGefunden?: string } = {},
+): Promise<Ergebnis> {
+  const r = await dienstAufruf(akteur, fn, texte);
+  if ('fehler' in r) return r;
+  aktualisiereMandant(mandantId);
+  return { ok: ok(r.wert) };
+}
+
+/** Eingabe aus Formularwerten; Typ und Inhalt prüft der Service mit dem Contract-Schema. */
+export function eingabe<T>(x: Record<string, unknown>): T {
+  return x as T;
 }
 
 // ----------------------------------------------------------------------------
-// Liste
+// Lader (Anzeigeform mit Date)
 // ----------------------------------------------------------------------------
 
-export interface FeststellungListenZusatz {
-  id: string;
-  erfasstVon: string;
-  durchfuehrungId: string | null;
-  ereignisId: string | null;
-  p153EntschiedenVon: string | null;
-  p153EntschiedenAm: Date | null;
-  p153Frist: Date | null;
-  p153Entscheidung: Paragraph153Entscheidung | null;
-  verwerfenOffen: boolean;
-  massnahmen: MassnahmeZeile[];
-}
+const datum = (iso: string) => new Date(iso.length === 10 ? `${iso}T00:00:00Z` : iso);
+const datumOderNull = (iso: string | null | undefined) => (iso ? datum(iso) : null);
 
 export interface MassnahmeZeile {
   id: string;
@@ -108,95 +134,129 @@ export interface MassnahmeZeile {
   beschreibung: string;
   verantwortlich: string;
   frist: Date;
-  /** Status zum Stichtag. */
   status: 'OFFEN' | 'ERLEDIGT';
   erledigtAm: Date | null;
   erledigtVon: string | null;
   createdAt: Date;
 }
 
-function massnahmeAm(
-  m: {
-    id: string;
-    feststellungId: string;
-    wiedervorlageNr: number;
-    beschreibung: string;
-    verantwortlich: string;
-    frist: Date;
-    status: 'OFFEN' | 'ERLEDIGT';
-    erledigtAm: Date | null;
-    erledigtVon: string | null;
-    createdAt: Date;
-  },
-  ende: Date,
-): MassnahmeZeile | null {
-  if (m.createdAt.getTime() > ende.getTime()) return null;
-  const erledigt =
-    m.status === 'ERLEDIGT' && m.erledigtAm != null && m.erledigtAm.getTime() <= ende.getTime();
+export interface P153Stand {
+  entscheidung: Paragraph153Entscheidung;
+  begruendung: string | null;
+  frist: Date | null;
+  von: string | null;
+  am: Date;
+}
+
+export type FeststellungListenZeile =
+  | {
+      maskiert: false;
+      id: string;
+      nummer: string;
+      titel: string;
+      quelle: 'KONTROLLE' | 'EREIGNIS' | 'STICHPROBE' | 'HINWEIS' | 'AUSSENPRUEFUNG';
+      quelleText: string;
+      klasse: 'DESIGNMANGEL' | 'DURCHFUEHRUNGSMANGEL' | 'STEUERLICHER_FEHLER' | 'HINWEIS';
+      schwere: 'GERING' | 'MITTEL' | 'HOCH' | 'KRITISCH';
+      auswirkung: 'JA' | 'NEIN' | 'UNKLAR';
+      status: FeststellungStatus;
+      vertraulich: boolean;
+      p153: P153Stand | null;
+      p153Offen: boolean;
+      verwerfenOffen: boolean;
+      massnahmenOffen: number;
+      massnahmenGesamt: number;
+      aeltesteFrist: Date | null;
+      massnahmen: MassnahmeZeile[];
+    }
+  | {
+      maskiert: true;
+      id: string;
+      nummer: string;
+      vertraulich: true;
+      status: FeststellungStatus;
+      massnahmen: Pick<
+        MassnahmeZeile,
+        'id' | 'feststellungId' | 'wiedervorlageNr' | 'frist' | 'status'
+      >[];
+    };
+
+function massnahme(m: {
+  id: string;
+  feststellungId: string;
+  wiedervorlageNr: number;
+  beschreibung: string;
+  verantwortlich: string;
+  frist: string;
+  status: 'OFFEN' | 'ERLEDIGT';
+  erledigtAm: string | null;
+  erledigtVon: string | null;
+  createdAt: string;
+}): MassnahmeZeile {
   return {
-    id: m.id,
-    feststellungId: m.feststellungId,
-    wiedervorlageNr: m.wiedervorlageNr,
-    beschreibung: m.beschreibung,
-    verantwortlich: m.verantwortlich,
-    frist: m.frist,
-    status: erledigt ? 'ERLEDIGT' : 'OFFEN',
-    erledigtAm: erledigt ? m.erledigtAm : null,
-    erledigtVon: erledigt ? m.erledigtVon : null,
-    createdAt: m.createdAt,
+    ...m,
+    frist: datum(m.frist),
+    erledigtAm: datumOderNull(m.erledigtAm),
+    createdAt: datum(m.createdAt),
   };
 }
 
-export async function ladeFeststellungListe(
-  programmId: string,
-  stand: Date,
-): Promise<Map<string, FeststellungListenZusatz>> {
-  const ende = tagesende(stand);
-  const roh = await lies((tx) =>
-    tx.feststellung.findMany({
-      where: { programmId },
-      select: {
-        id: true,
-        erfasstVon: true,
-        durchfuehrungId: true,
-        ereignisId: true,
-        p153EntschiedenVon: true,
-        p153EntschiedenAm: true,
-        p153Frist: true,
-        p153Entscheidung: true,
-        verwerfenBeantragtVon: true,
-        verwerfenBestaetigtVon: true,
-        status: true,
-        massnahmen: { orderBy: { wiedervorlageNr: 'asc' } },
-      },
-    }),
-  );
-  const out = new Map<string, FeststellungListenZusatz>();
-  for (const f of roh) {
-    const entschieden =
-      f.p153EntschiedenAm != null && f.p153EntschiedenAm.getTime() <= ende.getTime();
-    out.set(f.id, {
-      id: f.id,
-      erfasstVon: f.erfasstVon,
-      durchfuehrungId: f.durchfuehrungId,
-      ereignisId: f.ereignisId,
-      p153EntschiedenVon: entschieden ? f.p153EntschiedenVon : null,
-      p153EntschiedenAm: entschieden ? f.p153EntschiedenAm : null,
-      p153Frist: entschieden ? f.p153Frist : null,
-      p153Entscheidung: entschieden ? f.p153Entscheidung : null,
-      verwerfenOffen:
-        !!f.verwerfenBeantragtVon && !f.verwerfenBestaetigtVon && f.status !== 'VERWORFEN',
-      massnahmen: f.massnahmen
-        .map((m) => massnahmeAm(m, ende))
-        .filter((m): m is MassnahmeZeile => !!m),
-    });
-  }
-  return out;
+function p153(p: NonNullable<Extract<DienstDetail, { maskiert: false }>['p153']>): P153Stand {
+  return { ...p, frist: datumOderNull(p.frist), am: datum(p.am) };
 }
 
-// ----------------------------------------------------------------------------
-// Detail
-// ----------------------------------------------------------------------------
+/**
+ * Feststellungen eines Mandanten zum Stichtag für die angemeldete Person;
+ * vertrauliche sind für Nicht-Beteiligte bereits im Service maskiert.
+ * Ohne Sitzung, ohne Leserecht oder ohne Programm: leere Liste.
+ */
+export async function ladeFeststellungListe(
+  mandantId: string,
+  standIso: string,
+): Promise<FeststellungListenZeile[]> {
+  const akteur = await demoAkteur(mandantId);
+  if (!akteur) return [];
+  try {
+    const l = await imDienst(akteur, DEMO_PORTS, (ctx) =>
+      ladeFeststellungen(ctx, { mandantId, stand: standIso }),
+    );
+    return l.feststellungen.map((f): FeststellungListenZeile => {
+      if (f.maskiert) {
+        return {
+          maskiert: true,
+          id: f.id,
+          nummer: f.nummer,
+          vertraulich: true,
+          status: f.status,
+          massnahmen: f.massnahmen.map((m) => ({ ...m, frist: datum(m.frist) })),
+        };
+      }
+      return {
+        maskiert: false,
+        id: f.id,
+        nummer: f.nummer,
+        titel: f.titel,
+        quelle: f.quelle,
+        quelleText: f.quelleText,
+        klasse: f.klasse,
+        schwere: f.schwere,
+        auswirkung: f.auswirkung,
+        status: f.status,
+        vertraulich: f.vertraulich,
+        p153: f.p153 ? p153(f.p153) : null,
+        p153Offen: f.p153Offen,
+        verwerfenOffen: f.verwerfenOffen,
+        massnahmenOffen: f.massnahmenOffen,
+        massnahmenGesamt: f.massnahmenGesamt,
+        aeltesteFrist: datumOderNull(f.aeltesteFrist),
+        massnahmen: f.massnahmen.map(massnahme),
+      };
+    });
+  } catch (e) {
+    if (e instanceof DienstFehler && e.code === 'NICHT_GEFUNDEN') return [];
+    throw e;
+  }
+}
 
 export interface VerlaufEintrag {
   id: number;
@@ -205,424 +265,85 @@ export interface VerlaufEintrag {
   text: string;
 }
 
-export interface FeststellungDetail {
-  id: string;
-  programmId: string;
-  nummer: string;
-  titel: string;
-  sachverhalt: string;
-  quelle: 'KONTROLLE' | 'EREIGNIS' | 'STICHPROBE' | 'HINWEIS' | 'AUSSENPRUEFUNG';
-  quelleText: string;
-  klasse: 'DESIGNMANGEL' | 'DURCHFUEHRUNGSMANGEL' | 'STEUERLICHER_FEHLER' | 'HINWEIS';
-  schwere: 'GERING' | 'MITTEL' | 'HOCH' | 'KRITISCH';
-  auswirkung: 'JA' | 'NEIN' | 'UNKLAR';
-  ursache: string | null;
-  /** Status zum Stichtag. */
-  status: FeststellungStatus;
-  vertraulich: boolean;
-  /** Aktueller Vertraulichkeitsstatus (unabhängig vom Stichtag) – für die Zugriffsprüfung. */
-  vertraulichAktuell: boolean;
-  p153: {
-    entscheidung: Paragraph153Entscheidung;
-    begruendung: string | null;
-    frist: Date | null;
-    von: string | null;
-    am: Date;
-  } | null;
-  durchfuehrung: { id: string; kontrolleId: string; code: string; periodeLabel: string } | null;
-  ereignis: { id: string; nummer: string; typ: string; titel: string } | null;
-  nachkontrolle: {
-    id: string;
-    kontrolleId: string;
-    code: string;
-    titel: string;
-    periodeLabel: string;
-    faelligAm: Date;
-    anzeige: AnzeigeStatus;
-    ausserplanmaessig: boolean;
-  } | null;
-  verwerfen: { begruendung: string; beantragtVon: string; bestaetigtVon: string | null } | null;
-  erfasstVon: string;
-  erfasstAm: Date;
-  geschlossenAm: Date | null;
-  risiken: { id: string; code: string }[];
-  erklaerungen: {
-    id: string;
-    steuerart: string;
-    land: string;
-    zeitraum: string;
-    auswirkungEur: number | null;
-  }[];
-  massnahmen: (MassnahmeZeile & { nachweis: string | null })[];
-  verlauf: VerlaufEintrag[];
-}
+type Sichtbar = Extract<DienstDetail, { maskiert: false }>;
 
-const MANUELL_AKTIONEN = [
-  'tcms.feststellung.erfasst',
-  'tcms.feststellung.status',
-  'tcms.feststellung.geschlossen',
-  'tcms.feststellung.p153_entschieden',
-  'tcms.feststellung.wuerdigung',
-  'tcms.feststellung.erklaerung',
-  'tcms.feststellung.nachkontrolle',
-  'tcms.feststellung.verwerfen_beantragt',
-  'tcms.feststellung.verwerfen_bestaetigt',
-  'tcms.feststellung.verwerfen_abgelehnt',
-  'tcms.feststellung.vertraulich',
-  'tcms.massnahme.angelegt',
-  'tcms.massnahme.erledigt',
-];
-
-function s(v: unknown): string {
-  return typeof v === 'string' ? v : v == null ? '' : String(v);
-}
-
-/** Lesbarer Verlaufstext zu einem Audit-Eintrag. */
-export function verlaufText(aktion: string, d: Record<string, unknown>): string {
-  const status = (x: unknown) => FESTSTELLUNG_STATUS_LABEL[x as FeststellungStatus] ?? s(x);
-  switch (aktion) {
-    case 'tcms.feststellung.erfasst':
-      return d['quelle']
-        ? `Feststellung erfasst (Quelle: ${s(d['quelle'])})`
-        : 'Feststellung erfasst';
-    case 'tcms.feststellung.status':
-      return d['von']
-        ? `Status ${status(d['von'])} → ${status(d['nach'])}`
-        : `Status auf „${status(d['nach'])}" gesetzt`;
-    case 'tcms.feststellung.geschlossen':
-      return 'Feststellung geschlossen';
-    case 'tcms.feststellung.p153_entschieden': {
-      const e = d['entscheidung'] as Paragraph153Entscheidung | undefined;
-      return `§-153-Würdigung dokumentiert: ${e ? P153_LABEL[e].replace(' bis …', '') : '—'}${d['frist'] ? ` (Frist ${s(d['frist']).split('-').reverse().join('.')})` : ''}`;
-    }
-    case 'tcms.feststellung.wuerdigung':
-      return 'Würdigungsangaben aktualisiert (Schwere, Auswirkung, Ursache)';
-    case 'tcms.feststellung.erklaerung':
-      return `Betroffene Erklärung erfasst: ${s(d['steuerart'])} · ${s(d['land'])} · ${s(d['zeitraum'])}`;
-    case 'tcms.feststellung.nachkontrolle':
-      return `Nachkontrolle angelegt: ${s(d['kontrolle'])} (fällig ${s(d['faelligAm']).split('-').reverse().join('.')})`;
-    case 'tcms.feststellung.verwerfen_beantragt':
-      return 'Verwerfen beantragt';
-    case 'tcms.feststellung.verwerfen_bestaetigt':
-      return 'Verwerfen bestätigt (zweite Person)';
-    case 'tcms.feststellung.verwerfen_abgelehnt':
-      return 'Antrag auf Verwerfen abgelehnt';
-    case 'tcms.feststellung.vertraulich':
-      return d['vertraulich'] ? 'als vertraulich markiert' : 'Vertraulichkeit aufgehoben';
-    case 'tcms.massnahme.angelegt':
-      return `Maßnahme #${s(d['wiedervorlageNr'])} angelegt${d['beschreibung'] ? `: ${s(d['beschreibung'])}` : ''}`;
-    case 'tcms.massnahme.erledigt':
-      return `Maßnahme #${s(d['wiedervorlageNr'])} erledigt`;
-    default:
-      return aktion;
-  }
-}
-
-const RANG: FeststellungStatus[] = [
-  'ERFASST',
-  'IN_WUERDIGUNG',
-  'MASSNAHMEN_OFFEN',
-  'NACHKONTROLLE',
-  'GESCHLOSSEN',
-];
-
-function begrenzeStatus(
-  s: FeststellungStatus,
-  x: { p153Offen: boolean; massnahmen: number; offen: number; nachkontrolleOhneBefund: boolean },
-): FeststellungStatus {
-  let max = 4;
-  if (x.p153Offen || x.massnahmen === 0) max = Math.min(max, 1);
-  if (x.offen > 0) max = Math.min(max, 2);
-  if (!x.nachkontrolleOhneBefund) max = Math.min(max, 3);
-  const r = RANG.indexOf(s);
-  return r > max ? RANG[max]! : s;
-}
-
-/** Status zum Stichtag: spätere Statuswechsel aus dem Audit-Log zurückrechnen. */
-function statusZumStand(
-  aktuell: FeststellungStatus,
-  ereignisseNachStand: { aktion: string; detail: Record<string, unknown> }[],
-  geschlossenNach: boolean,
-): FeststellungStatus {
-  const erster = ereignisseNachStand.find(
-    (e) =>
-      e.aktion === 'tcms.feststellung.status' ||
-      e.aktion === 'tcms.feststellung.verwerfen_bestaetigt',
-  );
-  if (erster && typeof erster.detail['von'] === 'string')
-    return erster.detail['von'] as FeststellungStatus;
-  if (aktuell === 'GESCHLOSSEN' && geschlossenNach) return 'NACHKONTROLLE';
-  return aktuell;
-}
-
-export async function ladeFeststellungDetail(
-  programmId: string,
-  fid: string,
-  stand: Date,
-  historisch = false,
-): Promise<FeststellungDetail | null> {
-  const ende = tagesende(stand);
-  // Audit-Zeitstempel sind echte Zeit; Vergleiche mit Audit-Einträgen über auditGrenze.
-  const auditEnde = auditGrenze(stand);
-  const { f, ereignis, audits } = await lies(async (tx) => {
-    const f = await tx.feststellung.findFirst({
-      where: { id: fid, programmId },
-      include: {
-        risiken: { include: { risiko: { select: { id: true, code: true } } } },
-        erklaerungen: true,
-        massnahmen: { orderBy: { wiedervorlageNr: 'asc' } },
-        durchfuehrung: { include: { kontrolle: { select: { code: true } } } },
-        nachkontrolle: {
-          include: {
-            kontrolle: { select: { code: true } },
-            kontrolleStand: { select: { titel: true } },
-          },
-        },
-      },
+export type FeststellungDetail =
+  | { maskiert: true; id: string; nummer: string }
+  | (Omit<
+      Sichtbar,
+      | 'erfasstAm'
+      | 'geschlossenAm'
+      | 'p153'
+      | 'massnahmen'
+      | 'verlauf'
+      | 'nachkontrolle'
+      | 'namen'
+      | 'stand'
+      | 'historisch'
+    > & {
+      erfasstAm: Date;
+      geschlossenAm: Date | null;
+      p153: P153Stand | null;
+      massnahmen: (MassnahmeZeile & { nachweis: string | null })[];
+      nachkontrolle:
+        | (Omit<NonNullable<Sichtbar['nachkontrolle']>, 'faelligAm'> & {
+            faelligAm: Date;
+            anzeige: AnzeigeStatus;
+          })
+        | null;
+      verlauf: VerlaufEintrag[];
     });
-    if (!f) return { f: null, ereignis: null, audits: [] };
-    const ereignis = f.ereignisId
-      ? await tx.ereignis.findUnique({
-          where: { id: f.ereignisId },
-          select: { id: true, nummer: true, typ: true, titel: true },
-        })
-      : null;
-
-    const audits = await tx.auditEvent.findMany({
-      where: {
-        OR: [
-          { objektTyp: 'Feststellung', objektId: f.id },
-          { objektTyp: 'Massnahme', objektId: { in: f.massnahmen.map((m) => m.id) } },
-        ],
-      },
-      orderBy: { seq: 'asc' },
-    });
-    return { f, ereignis, audits };
-  });
-  if (!f || f.erfasstAm.getTime() > ende.getTime()) return null;
-  const detail = (x: (typeof audits)[number]) => (x.detail ?? {}) as Record<string, unknown>;
-  const nachStand = audits
-    .filter((a) => a.at.getTime() > auditEnde.getTime())
-    .map((a) => ({ aktion: a.aktion, detail: detail(a) }));
-  const status = statusZumStand(
-    f.status,
-    nachStand,
-    !!f.geschlossenAm && f.geschlossenAm.getTime() > ende.getTime(),
-  );
-
-  const nachweisJe = new Map<string, string>();
-  for (const a of audits) {
-    if (a.aktion === 'tcms.massnahme.erledigt' && a.at.getTime() <= auditEnde.getTime())
-      nachweisJe.set(a.objektId, s(detail(a)['nachweis']) || '');
-  }
-
-  const p153Gilt =
-    f.p153Entscheidung != null &&
-    f.p153EntschiedenAm != null &&
-    f.p153EntschiedenAm.getTime() <= ende.getTime();
-  // Vertraulichkeit zum Stichtag aus dem jüngsten Vertraulich-Eintrag bis zum Stand.
-  const vertraulichEintraege = audits.filter((a) => a.aktion === 'tcms.feststellung.vertraulich');
-  const bisStand = vertraulichEintraege.filter((a) => a.at.getTime() <= auditEnde.getTime()).at(-1);
-  const ersterNach = vertraulichEintraege.find((a) => a.at.getTime() > auditEnde.getTime());
-  const vertraulich = bisStand
-    ? detail(bisStand)['vertraulich'] === true
-    : ersterNach
-      ? detail(ersterNach)['vertraulich'] !== true
-      : f.vertraulich;
-
-  const nk = f.nachkontrolle;
-  const nachkontrolleSichtbar =
-    nk && !(nk.ausserplanmaessig && nk.createdAt.getTime() > ende.getTime());
-
-  const letzterAntrag = audits
-    .filter((a) => a.aktion === 'tcms.feststellung.verwerfen_beantragt')
-    .at(-1);
-  const verwerfenSichtbar =
-    !!f.verwerfenBeantragtVon &&
-    !!f.verwerfenBegruendung &&
-    (!letzterAntrag || letzterAntrag.at.getTime() <= auditEnde.getTime());
-
-  const massnahmenAmStand = f.massnahmen
-    .map((m) => massnahmeAm(m, ende))
-    .filter((m): m is MassnahmeZeile => !!m);
-  const nkAnzeige =
-    nk && nachkontrolleSichtbar
-      ? statusAm(
-          {
-            status: nk.status,
-            periodeBis: nk.periodeBis,
-            faelligAm: nk.faelligAm,
-            begonnenAm: nk.begonnenAm,
-            eingereichtAm: nk.eingereichtAm,
-            abgeschlossenAm: nk.abgeschlossenAm,
-            entfallenAm: nk.entfallenAm,
-          },
-          stand,
-        )
-      : null;
-  // Historischer Stand ohne protokollierte Statuswechsel (z. B. Seed-Daten): Status
-  // auf das begrenzen, was die Fakten zum Stichtag zulassen.
-  const statusHist =
-    historisch && status !== 'VERWORFEN'
-      ? begrenzeStatus(status, {
-          p153Offen:
-            (f.auswirkung === 'JA' || f.auswirkung === 'UNKLAR') &&
-            !(p153Gilt && p153Abschliessend(f.p153Entscheidung)),
-          massnahmen: massnahmenAmStand.length,
-          offen: massnahmenAmStand.filter((m) => m.status === 'OFFEN').length,
-          nachkontrolleOhneBefund: nkAnzeige === 'OHNE_BEFUND',
-        })
-      : status;
-
-  return {
-    id: f.id,
-    programmId: f.programmId,
-    nummer: f.nummer,
-    titel: f.titel,
-    sachverhalt: f.sachverhalt,
-    quelle: f.quelle,
-    quelleText: f.quelleText,
-    klasse: f.klasse,
-    schwere: f.schwere,
-    auswirkung: f.auswirkung,
-    ursache: f.ursache,
-    status: statusHist,
-    vertraulich,
-    vertraulichAktuell: f.vertraulich,
-    p153: p153Gilt
-      ? {
-          entscheidung: f.p153Entscheidung!,
-          begruendung: f.p153Begruendung,
-          frist: f.p153Frist,
-          von: f.p153EntschiedenVon,
-          am: f.p153EntschiedenAm!,
-        }
-      : null,
-    durchfuehrung: f.durchfuehrung
-      ? {
-          id: f.durchfuehrung.id,
-          kontrolleId: f.durchfuehrung.kontrolleId,
-          code: f.durchfuehrung.kontrolle.code,
-          periodeLabel: f.durchfuehrung.periodeLabel,
-        }
-      : null,
-    ereignis,
-    nachkontrolle:
-      nk && nachkontrolleSichtbar
-        ? {
-            id: nk.id,
-            kontrolleId: nk.kontrolleId,
-            code: nk.kontrolle.code,
-            titel: nk.kontrolleStand.titel,
-            periodeLabel: nk.periodeLabel,
-            faelligAm: nk.faelligAm,
-            ausserplanmaessig: nk.ausserplanmaessig,
-            anzeige: statusAm(
-              {
-                status: nk.status,
-                periodeBis: nk.periodeBis,
-                faelligAm: nk.faelligAm,
-                begonnenAm: nk.begonnenAm,
-                eingereichtAm: nk.eingereichtAm,
-                abgeschlossenAm: nk.abgeschlossenAm,
-                entfallenAm: nk.entfallenAm,
-              },
-              stand,
-            ),
-          }
-        : null,
-    verwerfen:
-      verwerfenSichtbar && f.verwerfenBeantragtVon && f.verwerfenBegruendung
-        ? {
-            begruendung: f.verwerfenBegruendung,
-            beantragtVon: f.verwerfenBeantragtVon,
-            bestaetigtVon: status === 'VERWORFEN' ? f.verwerfenBestaetigtVon : null,
-          }
-        : null,
-    erfasstVon: f.erfasstVon,
-    erfasstAm: f.erfasstAm,
-    geschlossenAm:
-      f.geschlossenAm && f.geschlossenAm.getTime() <= ende.getTime() ? f.geschlossenAm : null,
-    risiken: f.risiken
-      .map((r) => ({ id: r.risiko.id, code: r.risiko.code }))
-      .sort((a, b) => a.code.localeCompare(b.code)),
-    erklaerungen: f.erklaerungen.map((e) => ({
-      id: e.id,
-      steuerart: e.steuerart,
-      land: e.land,
-      zeitraum: e.zeitraum,
-      auswirkungEur: e.auswirkungEur == null ? null : Number(e.auswirkungEur),
-    })),
-    massnahmen: f.massnahmen
-      .map((m) => massnahmeAm(m, ende))
-      .filter((m): m is MassnahmeZeile => !!m)
-      .map((m) => ({
-        ...m,
-        nachweis: m.status === 'ERLEDIGT' ? (nachweisJe.get(m.id) ?? null) : null,
-      })),
-    verlauf: audits
-      .filter((a) => a.at.getTime() <= auditEnde.getTime() && MANUELL_AKTIONEN.includes(a.aktion))
-      .map((a) => ({
-        id: a.seq,
-        at: a.at,
-        actorName: a.actorName,
-        text: verlaufText(a.aktion, detail(a)),
-      }))
-      .reverse(),
-  };
-}
-
-// ----------------------------------------------------------------------------
-// Nummernkreise und Anlagen innerhalb einer Transaktion
-// ----------------------------------------------------------------------------
-
-export { naechsteFeststellungsnummer, naechsteWiedervorlageNr } from './nummern';
-
-function utcTag(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-}
 
 /**
- * Legt eine außerplanmäßige Durchführung mit dem aktuell gültigen Kontrollstand
- * an (Muster: Seed `baueProgramm`). Periode = Tag der Anlage, damit sie sofort fällig ist.
+ * Detail einer Feststellung zum Stichtag (Service-Lader). Für Nicht-Beteiligte
+ * einer vertraulichen Feststellung liefert der Service nur Nummer und
+ * Kennzeichen (`maskiert`). Nicht vorhanden oder kein Zugriff: null.
  */
-export async function legeAusserplanmaessigeDurchfuehrungAn(
-  tx: Tx,
-  a: {
-    kontrolleId: string;
-    faelligAm: Date;
-    anlass: string;
-    label: string;
-    ereignisFolgeId?: string | null;
-    zeitpunkt: Date;
-  },
-): Promise<{ id: string; code: string }> {
-  const k = await tx.kontrolle.findUnique({
-    where: { id: a.kontrolleId },
-    include: { staende: true },
-  });
-  if (!k) throw new Error('Kontrolle nicht gefunden');
-  const t = a.zeitpunkt.getTime();
-  const stand = k.staende
-    .filter(
-      (x) => x.gueltigAb.getTime() <= t && (x.gueltigBis == null || x.gueltigBis.getTime() > t),
-    )
-    .sort((x, y) => y.gueltigAb.getTime() - x.gueltigAb.getTime())[0];
-  if (!stand) throw new Error('Kein gültiger Kontrollstand');
-  const tag = utcTag(a.zeitpunkt);
-  const d = await tx.durchfuehrung.create({
-    data: {
-      kontrolleId: k.id,
-      kontrolleStandId: stand.id,
-      periodeLabel: a.label,
-      periodeVon: tag,
-      periodeBis: tag,
-      faelligAm: a.faelligAm,
-      ausserplanmaessig: true,
-      anlass: a.anlass,
-      ereignisFolgeId: a.ereignisFolgeId ?? null,
-      createdAt: a.zeitpunkt,
-    },
-  });
-  return { id: d.id, code: k.code };
+export async function ladeFeststellungDetail(
+  mandantId: string,
+  fid: string,
+  standIso: string,
+): Promise<FeststellungDetail | null> {
+  const akteur = await demoAkteur(mandantId);
+  if (!akteur || !/^[a-z0-9]{16,40}$/.test(fid)) return null;
+  let d: DienstDetail;
+  try {
+    d = await imDienst(akteur, DEMO_PORTS, (ctx) =>
+      ladeFeststellung(ctx, { mandantId, feststellungId: fid, stand: standIso }),
+    );
+  } catch (e) {
+    if (e instanceof DienstFehler && (e.code === 'NICHT_GEFUNDEN' || e.code === 'UNGUELTIG'))
+      return null;
+    throw e;
+  }
+  if (d.maskiert) return { maskiert: true, id: d.id, nummer: d.nummer };
+  const namen = new Map(d.namen.map((n) => [n.id, n.name]));
+  const {
+    stand: _s,
+    historisch: _h,
+    namen: _n,
+    erfasstAm,
+    geschlossenAm,
+    p153: p,
+    massnahmen,
+    nachkontrolle,
+    verlauf,
+    ...rest
+  } = d;
+  return {
+    ...rest,
+    erfasstAm: datum(erfasstAm),
+    geschlossenAm: datumOderNull(geschlossenAm),
+    p153: p ? p153(p) : null,
+    massnahmen: massnahmen.map((m) => ({ ...massnahme(m), nachweis: m.nachweis })),
+    nachkontrolle: nachkontrolle
+      ? { ...nachkontrolle, faelligAm: datum(nachkontrolle.faelligAm) }
+      : null,
+    verlauf: verlauf.map((v) => ({
+      id: v.seq,
+      at: datum(v.at),
+      actorName: (v.actorId && namen.get(v.actorId)) || '—',
+      text: v.text,
+    })),
+  };
 }

@@ -19,7 +19,6 @@ import {
   risikenZumLand,
 } from '@/server/laender-daten';
 import { NUR_AKTUELL, ladeStaffSeite } from '@/server/seite';
-import { tagesende } from '@/server/zeit';
 
 export const metadata = { title: 'Länder-Monitor' };
 
@@ -52,7 +51,7 @@ export default async function LaenderMonitor({
     );
   }
 
-  const detail = await ladeLaenderDetail(ctx, tagesende(ctx.stand));
+  const detail = await ladeLaenderDetail(id, seite.standIso);
   const erfassen = eins(sp['erfassen']) === '1' && darfBearbeiten;
   const landCode = eins(sp['land']);
   const auswahl = ctx.laender.find((l) => l.land === landCode) ?? null;
@@ -142,14 +141,14 @@ export default async function LaenderMonitor({
         <>
           {ctx.laender.length ? (
             <SammelErfassung
-              programmId={ctx.programm.id}
+              mandantId={id}
               laender={ctx.laender}
               heute={seite.heuteIso}
               zurueck={`${basis}/laender`}
             />
           ) : null}
           <LandHinzufuegenForm
-            programmId={ctx.programm.id}
+            mandantId={id}
             vorhanden={ctx.laender.map((l) => l.land)}
             heute={seite.heuteIso}
           />
@@ -350,11 +349,7 @@ export default async function LaenderMonitor({
                 kontrollen={kontrollenZumLand(ctx, risiken)}
                 formular={
                   darfBearbeiten ? (
-                    <LandStandForm
-                      programmId={ctx.programm!.id}
-                      land={auswahl}
-                      heute={seite.heuteIso}
-                    />
+                    <LandStandForm mandantId={id} land={auswahl} heute={seite.heuteIso} />
                   ) : (
                     <button type="button" className="btn-primary" disabled title={gesperrt}>
                       <Icon name="Save" className="tx-icon-xs" /> Neuen Stand speichern

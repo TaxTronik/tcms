@@ -86,7 +86,10 @@ für KI-Werkzeuge.
    Optionen sind gleichrangig, ohne Vorauswahl und ohne Empfehlung. Auch die
    Einstufung „keine steuerliche Auswirkung" beim Anlegen ist eine
    Würdigungsentscheidung: ohne `kannWuerdigen` entsteht die Feststellung als
-   „unklar" (`auswirkungBeimAnlegen`, TS-04).
+   „unklar" (`auswirkungBeimAnlegen`, TS-04). Im Service entsteht jede
+   Feststellung über `legeFeststellungAn` (manuell, Ereignisfolge,
+   Gegenzeichnung), das diese Regel anwendet; die §-153-Entscheidung hat keinen
+   Standardwert und nennt die bisher gesehene Entscheidung (`bisher`).
 6. Historische Stichtage (`?stand=YYYY-MM-DD`) sind schreibgeschützt.
    Mutationen sind dort deaktiviert.
 7. Keine KI-Entscheidungen. Vorschläge (z. B. Risikovorschlag aus dem
@@ -111,8 +114,9 @@ für KI-Werkzeuge.
   Zeitstempel und Sicherheitsfristen (Codes) sind immer echte Zeit.
 - Objekt-IDs aus Pfad oder Body gehören nur dann zur Anfrage, wenn das Objekt
   zum Programm des Mandanten der Anfrage gehört (RLS trennt nur Tenants);
-  sonst „nicht gefunden". Prüfung und Änderung laufen unter Zeilensperre in
-  derselben Transaktion, Änderungen als bedingtes Update (TS-05).
+  sonst „nicht gefunden". Prüfung und Änderung laufen unter Zeilensperre
+  (`SELECT … FOR UPDATE`) in derselben Transaktion, Änderungen als bedingtes
+  Update (TS-05).
 - Nachweise sind Verweise der kanzleikonsole (Dokument-ID als UUID, SHA-256):
   eine Dokument-ID gehört zu genau einem Mandanten und einem Inhalt; Entfernen
   löscht nur den Verweis, der vollständige Verweis bleibt im Audit.

@@ -27,6 +27,8 @@ const KLEIN = { padding: '4px 8px', fontSize: 12 } as const;
 
 /** Zeile eines Folgevorschlags in der Mehrfachauswahl (innerhalb des Formulars „Folgen anlegen"). */
 export function VorschlagZeile({
+  mandantId,
+  ereignisId,
   f,
   personen,
   standardZustaendig,
@@ -39,6 +41,8 @@ export function VorschlagZeile({
   sperrGrund,
   erste,
 }: {
+  mandantId: string;
+  ereignisId: string;
   f: FolgeDetail;
   personen: PersonOption[];
   standardZustaendig: string;
@@ -188,7 +192,7 @@ export function VorschlagZeile({
         titel={`Folge verwerfen: ${f.artLabel}${f.ziel ? ` ${f.ziel}` : ''}`}
         hinweis="Ein Ereignis ist erst erledigt, wenn jede Folge erledigt oder begründet verworfen ist."
         action={verwerfeFolge}
-        felder={{ id: f.id }}
+        felder={{ mandantId, ereignisId, id: f.id }}
         bestaetigen="Verwerfen"
         gefahr
         begruendungMin={30}
@@ -201,6 +205,8 @@ export function VorschlagZeile({
 
 /** Angelegte, erledigte oder verworfene Folge mit verknüpftem Objekt. */
 export function FolgeZeile({
+  mandantId,
+  ereignisId,
   f,
   basis,
   mitStand,
@@ -209,6 +215,8 @@ export function FolgeZeile({
   sperrGrund,
   risikoCode,
 }: {
+  mandantId: string;
+  ereignisId: string;
   f: FolgeDetail;
   basis: string;
   mitStand: (href: string) => string;
@@ -298,6 +306,8 @@ export function FolgeZeile({
         {f.status === 'ANGELEGT' ? (
           <span className="row-s">
             <AktionsForm action={erledigeFolge}>
+              <input type="hidden" name="mandantId" value={mandantId} />
+              <input type="hidden" name="ereignisId" value={ereignisId} />
               <input type="hidden" name="id" value={f.id} />
               <Gesperrt grund={erledigenGesperrt ? (erledigenGrund ?? 'gesperrt') : null}>
                 <SubmitButton className="btn-secondary btn-tiny" disabled={erledigenGesperrt}>
@@ -314,7 +324,7 @@ export function FolgeZeile({
                   : undefined
               }
               action={verwerfeFolge}
-              felder={{ id: f.id }}
+              felder={{ mandantId, ereignisId, id: f.id }}
               bestaetigen="Verwerfen"
               gefahr
               begruendungMin={30}
