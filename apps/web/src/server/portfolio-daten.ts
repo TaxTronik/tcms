@@ -1,21 +1,21 @@
 import 'server-only';
-import { MAX_MANDANTEN_JE_ANFRAGE } from '@tcms/contract';
+import type { PortfolioAntwort } from '@tcms/contract';
+import { MONATE, type AnzeigeStatus, type Pruflast } from '@tcms/domain';
+import { imDienst, ladePortfolio as ladePortfolioImDienst } from '@tcms/service';
 import {
-  isoDatum,
-  MONATE,
-  PAKET,
-  PHASEN,
-  tageZwischen,
-  type AnzeigeStatus,
-  type Pruflast,
-} from '@tcms/domain';
-import { demoPersonen, lies } from './demo';
-import { ladeKontext, personName, type TcmsKontext } from './kontext';
+  DEMO_PORTS,
+  demoPersonen,
+  mandantenListe,
+  zustaendigkeit,
+  type KanzleiAkteur,
+} from './demo';
 import { heute as heuteFn } from './zeit';
 
 // =============================================================================
-// S1 Tax-CMS-Portfolio: je Mandant der aktuelle Kontext (ladeKontext), daraus
-// die Kennzahlen der Portfoliozeile. Keine Personenvergleiche, nur Objekte.
+// S1 Tax-CMS-Portfolio der Demo: Kennzahlen aus @tcms/service (`ladePortfolio`,
+// Liste der zugänglichen Mandanten wie von der kanzleikonsole); die Demo
+// ergänzt nur Zuständigkeit und Namen aus ihrem Verzeichnis und wandelt
+// ISO-Strings für die Anzeige in Datumswerte.
 // =============================================================================
 
 export interface PortfolioTermin {
@@ -37,6 +37,8 @@ export interface PortfolioZeile {
   };
   berufstraeger: string;
   bearbeitung: string;
+  /** Bearbeitungsrecht laut Service (z. B. Einrichtung starten). */
+  darfBearbeiten: boolean;
   hatProgramm: boolean;
   /** Programm im Einrichtungsentwurf (Version 1 noch nicht angelegt). */
   entwurf: boolean;
@@ -74,176 +76,45 @@ export interface Portfolio {
   berufstraeger: { id: string; name: string }[];
 }
 
-const OFFEN: readonly AnzeigeStatus[] = ['FAELLIG', 'IN_DURCHFUEHRUNG', 'ZURUECKGEWIESEN'];
+const datum = (iso: string) => new Date(iso);
 
-function zeile(ctx: TcmsKontext, heute: Date): PortfolioZeile {
-  const m = ctx.mandant;
-  const basis = {
-    mandant: {
-      id: m.id,
-      name: m.name,
-      rechtsform: m.rechtsform,
-      berufstraegerId: m.berufstraegerId,
-      bearbeitungId: m.bearbeitungId,
-    },
-    berufstraeger: personName(ctx, m.berufstraegerId),
-    bearbeitung: personName(ctx, m.bearbeitungId),
-  };
-  const entwurf = !!ctx.programm && ctx.programm.status === 'ENTWURF' && !ctx.programm.version1Am;
-  if (!ctx.programm || entwurf) {
-    return {
-      ...basis,
-      hatProgramm: false,
-      entwurf,
-      paket: null,
-      teilbereich: null,
-      phase: 0,
-      phaseName: entwurf ? 'Einrichtung läuft' : 'kein Tax-CMS',
-      risiken: 0,
-      ueberAppetit: 0,
-      appetit: '',
-      prueflast: null,
-      prueflastMonat: '',
-      faellig: 0,
-      ueberfaellig: 0,
-      zurGegenzeichnung: 0,
-      feststellungenOffen: 0,
-      feststellungenHochOffen: 0,
-      p153Offen: 0,
-      ereignisseNeu: 0,
-      zeitraum: { art: 'OFFEN' },
-      naechsterTermin: null,
-      handlungsbedarf: false,
-      prioritaet: -1,
-    };
-  }
-
-  const d = ctx.durchfuehrungen;
-  const ueberfaellig = d.filter((x) => x.anzeige === 'UEBERFAELLIG').length;
-  const faellig = d.filter(
-    (x) =>
-      OFFEN.includes(x.anzeige) ||
-      (x.anzeige === 'GEPLANT' && tageZwischen(heute, x.faelligAm) <= 14),
-  ).length;
-  const zurGegenzeichnung = d.filter((x) => x.anzeige === 'ZUR_GEGENZEICHNUNG').length;
-  const offeneF = ctx.feststellungen.filter(
-    (f) => f.status !== 'GESCHLOSSEN' && f.status !== 'VERWORFEN',
-  );
-  const hochOffen = offeneF.filter((f) => f.schwere === 'HOCH' || f.schwere === 'KRITISCH').length;
-  const p153Offen = ctx.feststellungen.filter((f) => f.p153Offen).length;
-  const ereignisseNeu = ctx.ereignisse.filter((e) => e.status === 'NEU').length;
-  const ueberAppetit = ctx.risiken.filter((r) => r.ueberAppetit).length;
-
-  const last = d.length > 0 ? (ctx.prueflast[1] ?? ctx.prueflast[0] ?? null) : null;
-  const lastMonat = last
-    ? `${MONATE[Number(last.monat.slice(5, 7)) - 1]} ${last.monat.slice(0, 4)}`
-    : '';
-
-  const p = ctx.programm;
-  let zeitraum: PortfolioZeile['zeitraum'] = { art: 'OFFEN' };
-  if (p.wirksamAb && p.wirksamBis) {
-    if (heute.getTime() < p.wirksamAb.getTime())
-      zeitraum = { art: 'BEVORSTEHEND', ab: p.wirksamAb, bis: p.wirksamBis };
-    else if (heute.getTime() > p.wirksamBis.getTime())
-      zeitraum = { art: 'ABGESCHLOSSEN', ab: p.wirksamAb, bis: p.wirksamBis };
-    else if (ctx.zeitraum)
-      zeitraum = {
-        art: 'LAUFEND',
-        monat: ctx.zeitraum.monat,
-        monate: ctx.zeitraum.monate,
-        ab: p.wirksamAb,
-        bis: p.wirksamBis,
-      };
-  }
-
-  const naechste = d
-    .filter(
-      (x) =>
-        (OFFEN.includes(x.anzeige) || x.anzeige === 'GEPLANT') &&
-        tageZwischen(heute, x.faelligAm) >= 0,
-    )
-    .sort((a, b) => a.faelligAm.getTime() - b.faelligAm.getTime())[0];
-
-  const handlungsbedarf =
-    ueberfaellig > 0 ||
-    p153Offen > 0 ||
-    hochOffen > 0 ||
-    ereignisseNeu > 0 ||
-    ueberAppetit > 0 ||
-    zurGegenzeichnung > 0;
-  const prioritaet =
-    p153Offen * 10_000 +
-    ueberfaellig * 1_000 +
-    hochOffen * 300 +
-    ueberAppetit * 100 +
-    ereignisseNeu * 30 +
-    zurGegenzeichnung * 10 +
-    faellig;
-
-  return {
-    ...basis,
-    hatProgramm: true,
-    entwurf: false,
-    paket: `${PAKET.name} v${p.paketVersion}`,
-    teilbereich: ctx.teilbereich?.name ?? null,
-    phase: ctx.aktivePhase,
-    phaseName: PHASEN[ctx.aktivePhase - 1] ?? '',
-    risiken: ctx.risiken.length,
-    ueberAppetit,
-    appetit: ctx.appetit,
-    prueflast: last,
-    prueflastMonat: lastMonat,
-    faellig,
-    ueberfaellig,
-    zurGegenzeichnung,
-    feststellungenOffen: offeneF.length,
-    feststellungenHochOffen: hochOffen,
-    p153Offen,
-    ereignisseNeu,
-    zeitraum,
-    naechsterTermin: naechste
-      ? {
-          datum: naechste.faelligAm,
-          code: naechste.code,
-          titel: naechste.titel,
-          periode: naechste.periodeLabel,
-          durchfuehrungId: naechste.id,
-          anzeige: naechste.anzeige,
-        }
-      : null,
-    handlungsbedarf,
-    prioritaet,
-  };
+function zeitraum(z: PortfolioAntwort['zeilen'][number]['zeitraum']): PortfolioZeile['zeitraum'] {
+  if (z.art === 'OFFEN') return z;
+  if (z.art === 'LAUFEND') return { ...z, ab: datum(z.ab), bis: datum(z.bis) };
+  return { art: z.art, ab: datum(z.ab), bis: datum(z.bis) };
 }
 
-/**
- * Portfolio über die zugänglichen Mandanten (ADR 0001 §3.3: Liste der
- * Mandanten-IDs kommt von der kanzleikonsole, höchstens 5 000). Mandanten
- * außerhalb der Liste werden nie geladen.
- */
-export async function ladePortfolio(zugaenglich: readonly string[]): Promise<Portfolio> {
-  if (zugaenglich.length > MAX_MANDANTEN_JE_ANFRAGE) throw new Error('Zu viele Mandanten');
-  const heute = heuteFn();
-  const iso = isoDatum(heute);
-  const mandanten = await lies((tx) =>
-    tx.mandant.findMany({
-      where: { aktiv: true, id: { in: [...zugaenglich] } },
-      orderBy: { name: 'asc' },
-      select: { id: true },
-    }),
+/** Portfolio der angemeldeten Kanzleiperson über ihre zugänglichen Mandanten. */
+export async function ladePortfolio(nutzer: KanzleiAkteur): Promise<Portfolio> {
+  const p = await imDienst(nutzer, DEMO_PORTS, (ctx) =>
+    ladePortfolioImDienst(ctx, mandantenListe(nutzer)),
   );
+  const name = (id: string | null) => (id ? (demoPersonen.person(id)?.name ?? '—') : '—');
+  const zeilen = p.zeilen.map((z): PortfolioZeile => {
+    const zust = zustaendigkeit(z.mandant.id);
+    return {
+      ...z,
+      mandant: {
+        ...z.mandant,
+        berufstraegerId: zust.berufstraegerId ?? '',
+        bearbeitungId: zust.bearbeitungId ?? '',
+      },
+      berufstraeger: name(zust.berufstraegerId),
+      bearbeitung: name(zust.bearbeitungId),
+      appetit: z.appetit ?? '',
+      prueflastMonat: z.prueflast
+        ? `${MONATE[Number(z.prueflast.monat.slice(5, 7)) - 1]} ${z.prueflast.monat.slice(0, 4)}`
+        : '',
+      zeitraum: zeitraum(z.zeitraum),
+      naechsterTermin: z.naechsterTermin
+        ? { ...z.naechsterTermin, datum: datum(z.naechsterTermin.datum) }
+        : null,
+    };
+  });
   const bt = demoPersonen
     .alle()
-    .filter((p) => p.art === 'KANZLEI' && p.istBerufstraeger)
-    .map((p) => ({ id: p.id, name: p.name }))
+    .filter((x) => x.art === 'KANZLEI' && x.istBerufstraeger)
+    .map((x) => ({ id: x.id, name: x.name }))
     .sort((a, b) => a.name.localeCompare(b.name, 'de'));
-  const kontexte = await Promise.all(mandanten.map((m) => ladeKontext(m.id, iso, false)));
-  const zeilen = kontexte
-    .filter((c): c is TcmsKontext => c != null)
-    .map((c) => zeile(c, heute))
-    .sort((a, b) => {
-      if (a.hatProgramm !== b.hatProgramm) return a.hatProgramm ? -1 : 1;
-      return b.prioritaet - a.prioritaet || a.mandant.name.localeCompare(b.mandant.name, 'de');
-    });
-  return { heute, zeilen, berufstraeger: bt };
+  return { heute: heuteFn(), zeilen, berufstraeger: bt };
 }

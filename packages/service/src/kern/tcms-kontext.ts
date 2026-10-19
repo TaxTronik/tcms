@@ -18,7 +18,13 @@
 // `Map`), keine HTTP-Antwort; der Endpunkt bildet ihn explizit ab.
 // =============================================================================
 
-import { DienstFehler, KontextEingabeSchema, type KontextEingabe } from '@tcms/contract';
+import {
+  DienstFehler,
+  KontextEingabeSchema,
+  type Akteur,
+  type KontextEingabe,
+} from '@tcms/contract';
+import type { Prisma } from '@tcms/db';
 import {
   abschnittHatText,
   betriebsStand,
@@ -398,6 +404,34 @@ function pruefeEingabe(eingabe: unknown): { mandantId: string; stand: string | u
   return { mandantId: p.data.mandantId.toLowerCase(), stand: p.data.stand };
 }
 
+/** Was der Kontext je Programm aus der Datenbank braucht (eine Abfrage, auch für Blöcke). */
+const PROGRAMM_INHALT = {
+  teilbereiche: { include: { ziele: { orderBy: { createdAt: 'asc' } } } },
+  profile: true,
+  risiken: {
+    include: {
+      staende: true,
+      kontrollen: true,
+      uebersteuerungen: { orderBy: { beantragtAm: 'desc' } },
+    },
+  },
+  kontrollen: {
+    include: {
+      staende: true,
+      risiken: true,
+      durchfuehrungen: { include: { _count: { select: { nachweise: true } } } },
+    },
+  },
+  feststellungen: { include: { massnahmen: true, risiken: { include: { risiko: true } } } },
+  ereignisse: { include: { folgen: true }, orderBy: { gemeldetAm: 'desc' } },
+  laender: true,
+  beschreibungen: { orderBy: { createdAt: 'asc' } },
+} as const satisfies Prisma.TcmsProgrammInclude;
+
+type ProgrammRoh = Prisma.TcmsProgrammGetPayload<{ include: typeof PROGRAMM_INHALT }>;
+type MandantRoh = { id: string; name: string; rechtsform: string; datevNr: string | null };
+type KontaktRoh = { kontaktId: string; rolle: MandantRolle; funktion: string | null };
+
 /**
  * Lädt den Tax-CMS-Kontext eines Mandanten zum Stichtag `stand` (Standard:
  * heute laut `ctx.uhr`; ein Stand ab heute ist der aktuelle Stand). Nur mit
@@ -417,7 +451,6 @@ export async function ladeKontext(
 
   const heute = heuteDatum(ctx.uhr);
   const { stand, historisch } = leseStand(standIso, heute);
-  const ende = tagesende(stand);
   // RLS beschränkt auf den Tenant des Akteurs: ein Mandant eines anderen Tenants ist hier unsichtbar.
   const mandant = await tx.mandant.findUnique({ where: { id: mandantId } });
   if (!mandant) throw new DienstFehler('NICHT_GEFUNDEN');
@@ -429,30 +462,90 @@ export async function ladeKontext(
   const programm = await tx.tcmsProgramm.findFirst({
     where: { mandantId },
     orderBy: { createdAt: 'desc' },
-    include: {
-      teilbereiche: { include: { ziele: { orderBy: { createdAt: 'asc' } } } },
-      profile: true,
-      risiken: {
-        include: {
-          staende: true,
-          kontrollen: true,
-          uebersteuerungen: { orderBy: { beantragtAm: 'desc' } },
-        },
-      },
-      kontrollen: {
-        include: {
-          staende: true,
-          risiken: true,
-          durchfuehrungen: { include: { _count: { select: { nachweise: true } } } },
-        },
-      },
-      feststellungen: { include: { massnahmen: true, risiken: { include: { risiko: true } } } },
-      ereignisse: { include: { folgen: true }, orderBy: { gemeldetAm: 'desc' } },
-      laender: true,
-      beschreibungen: { orderBy: { createdAt: 'asc' } },
-    },
+    include: PROGRAMM_INHALT,
   });
+  const k = berechne({ heute, stand, historisch }, mandant, kontakte, programm);
+  return vollende(ctx, ctx.akteur, k, true);
+}
 
+/** Zugang zu einem Mandanten in einem mandantenübergreifenden Lesepfad. */
+export interface KontextZugang {
+  mandantId: string;
+  /** Akteur mit Bezug auf genau diesen Mandanten (Rechte und Maskierung). */
+  akteur: Akteur;
+}
+
+/** Mandanten je Block in `jeAktuellerKontext` (Abfragen und Speicher je Block begrenzt). */
+export const KONTEXT_BLOCK = 50;
+
+/**
+ * Lädt die aktuellen Kontexte (Stand heute) mehrerer aktiver Mandanten in
+ * Blöcken zu `KONTEXT_BLOCK` Mandanten – je Block eine feste Zahl Abfragen
+ * statt einer je Mandant – und ruft `fn` je Kontext auf; die Rohdaten eines
+ * Blocks werden danach verworfen. Rechte je Mandant wie `ladeKontext`
+ * (`kannLesen` und Maskierung mit dem Akteur des Zugangs); Mandanten ohne
+ * Leserecht, unbekannte, inaktive oder doppelte werden ausgelassen, ohne das
+ * zu verraten. Namen werden hier nicht aufgelöst (`namen` bleibt leer).
+ */
+export async function jeAktuellerKontext(
+  ctx: DienstKontext,
+  zugaenge: readonly KontextZugang[],
+  fn: (k: TcmsKontext, akteur: Akteur) => void,
+  opts: { blockGroesse?: number } = {},
+): Promise<void> {
+  const groesse = Math.max(1, Math.min(opts.blockGroesse ?? KONTEXT_BLOCK, KONTEXT_BLOCK));
+  const tx = ctx.tx;
+  const rollen = await ladeKontaktRollen(tx, ctx.akteur);
+  const zugangJe = new Map<string, Akteur>();
+  for (const z of zugaenge) {
+    const id = z.mandantId.toLowerCase();
+    if (!zugangJe.has(id) && kannLesen(z.akteur, id, rollen)) zugangJe.set(id, z.akteur);
+  }
+  const heute = heuteDatum(ctx.uhr);
+  const ids = [...zugangJe.keys()];
+  for (let i = 0; i < ids.length; i += groesse) {
+    const block = ids.slice(i, i + groesse);
+    const mandanten = await tx.mandant.findMany({
+      where: { id: { in: block }, aktiv: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, rechtsform: true, datevNr: true },
+    });
+    if (mandanten.length === 0) continue;
+    const vorhanden = mandanten.map((m) => m.id);
+    const kontakte = await tx.mandantKontaktRolle.findMany({
+      where: { mandantId: { in: vorhanden }, aktiv: true },
+      orderBy: { createdAt: 'asc' },
+      select: { mandantId: true, kontaktId: true, rolle: true, funktion: true },
+    });
+    const programme = await tx.tcmsProgramm.findMany({
+      where: { mandantId: { in: vorhanden } },
+      orderBy: { createdAt: 'desc' },
+      include: PROGRAMM_INHALT,
+    });
+    const programmJe = new Map<string, ProgrammRoh>();
+    for (const p of programme) if (!programmJe.has(p.mandantId)) programmJe.set(p.mandantId, p);
+    for (const m of mandanten) {
+      const akteur = zugangJe.get(m.id)!;
+      const k = berechne(
+        { heute, stand: heute, historisch: false },
+        m,
+        kontakte.filter((x) => x.mandantId === m.id),
+        programmJe.get(m.id) ?? null,
+      );
+      fn(await vollende(ctx, akteur, k, false), akteur);
+    }
+  }
+}
+
+/** Berechnet den Kontext aus den Rohdaten (rein, ohne Datenbank). */
+function berechne(
+  zeit: { heute: Date; stand: Date; historisch: boolean },
+  mandant: MandantRoh,
+  kontakte: readonly KontaktRoh[],
+  programm: ProgrammRoh | null,
+): TcmsKontext {
+  const { heute, stand, historisch } = zeit;
+  const ende = tagesende(stand);
   const leer: TcmsKontext = {
     heute,
     stand,
@@ -495,7 +588,7 @@ export async function ladeKontext(
     zeitraum: null,
     ausgeblendet: 0,
   };
-  if (!programm) return vollende(ctx, leer);
+  if (!programm) return leer;
 
   let ausgeblendet = 0;
   const tb = programm.teilbereiche[0] ?? null;
@@ -1076,7 +1169,7 @@ export async function ladeKontext(
   }));
   const prueflast = [0, 1, 2].map((i) => pruflast(last, monatSchluessel(monatePlus(stand, i))));
 
-  return vollende(ctx, {
+  return {
     ...leer,
     programm: {
       id: programm.id,
@@ -1129,7 +1222,7 @@ export async function ladeKontext(
     prueflast,
     zeitraum,
     ausgeblendet,
-  });
+  };
 }
 
 /** Anzeige einer vertraulichen Feststellung für Nicht-Beteiligte (Fachkonzept §13). */
@@ -1148,13 +1241,18 @@ export const VERTRAULICH_MASKE = {
  * die Anzeigenamen der genannten Personen über `ctx.personen` auflösen.
  * Beteiligte maskierter Feststellungen werden dabei nicht aufgelöst.
  */
-async function vollende(ctx: DienstKontext, k: TcmsKontext): Promise<TcmsKontext> {
+async function vollende(
+  ctx: DienstKontext,
+  akteur: Akteur,
+  k: TcmsKontext,
+  mitNamen: boolean,
+): Promise<TcmsKontext> {
   const ids = new Set<string>();
   const merke = (...liste: (string | null | undefined)[]) => {
     for (const id of liste) if (id) ids.add(id);
   };
   const feststellungen = k.feststellungen.map((f) => {
-    if (f.vertraulich && !kannVertraulichLesen(ctx.akteur, k.mandant.id, f.beteiligte)) {
+    if (f.vertraulich && !kannVertraulichLesen(akteur, k.mandant.id, f.beteiligte)) {
       return { ...f, ...VERTRAULICH_MASKE, risikoCodes: [], beteiligte: [] };
     }
     merke(...f.beteiligte);
@@ -1182,7 +1280,9 @@ async function vollende(ctx: DienstKontext, k: TcmsKontext): Promise<TcmsKontext
     merke(b.erstelltVon, b.reviewAngefordertVon, b.reviewVon, b.freigegebenVon);
   }
   const namen =
-    ids.size > 0 ? await ctx.personen.namen([...ids].sort()) : new Map<string, string>();
+    mitNamen && ids.size > 0
+      ? await ctx.personen.namen([...ids].sort())
+      : new Map<string, string>();
   return { ...k, feststellungen, namen };
 }
 

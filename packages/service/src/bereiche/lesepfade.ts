@@ -6,6 +6,8 @@
 // =============================================================================
 
 export {
+  jeAktuellerKontext,
+  KONTEXT_BLOCK,
   ladeKontext,
   VERTRAULICH_MASKE,
   type BeschreibungView,
@@ -14,6 +16,7 @@ export {
   type FeststellungView,
   type KennzahlDef,
   type KontaktRolleView,
+  type KontextZugang,
   type KontrolleView,
   type LandView,
   type RisikoView,
@@ -28,3 +31,5 @@ export {
 } from '../kern/nummern';
 export { auditGrenze, heuteDatum, leseStand, tagAlsDatum, tagesende } from '../kern/zeit';
 export { kontextAlsAntwort, kontextRechte, leseKontext } from './lesepfade/kontext';
+export { ladePortfolio, portfolioZeile } from './lesepfade/portfolio';
+export { ladeArbeitskorb } from './lesepfade/arbeitskorb';

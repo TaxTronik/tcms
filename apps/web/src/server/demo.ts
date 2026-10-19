@@ -1,5 +1,5 @@
 import 'server-only';
-import type { Akteur } from '@tcms/contract';
+import type { Akteur, MandantenListe } from '@tcms/contract';
 import { mitTenant, type Tx } from '@tcms/db';
 import {
   DEMO_MANDANTEN,
@@ -93,6 +93,21 @@ export function fuerMandant(a: KanzleiAkteur, mandantId: string): KanzleiAkteur 
  */
 export function zugaenglicheMandanten(a: Akteur): string[] {
   return a.art === 'KANZLEI' ? DEMO_MANDANTEN.map((m) => m.id) : [a.mandantId];
+}
+
+/**
+ * Bestätigte Mandantenliste für mandantenübergreifende Lesepfade (Portfolio,
+ * Arbeitskorb), wie sie die kanzleikonsole im Body schickt (ADR 0001 §3.3):
+ * zugängliche Mandanten und darin die Zuständigkeit als BT bzw. Hauptbearbeitung.
+ */
+export function mandantenListe(a: KanzleiAkteur): MandantenListe {
+  const ids = zugaenglicheMandanten(a);
+  const je = ids.map((id) => demoMandant(id)).filter((m) => m !== null);
+  return {
+    mandantIds: ids,
+    bt: je.filter((m) => m.berufstraegerId === a.id).map((m) => m.id),
+    hb: je.filter((m) => m.bearbeitungId === a.id).map((m) => m.id),
+  };
 }
 
 /** Zuständigkeit eines Demo-Mandanten (Anzeige; Rechte laufen über den Akteur). */

@@ -16,8 +16,6 @@ import { Leerzustand } from '@/components/ui/leer';
 import { MiniSteps } from '@/components/ui/visual';
 import { KEIN_RECHT } from '@/server/aktion';
 import { ladePortfolio, type PortfolioZeile } from '@/server/portfolio-daten';
-import { kannBearbeiten } from '@tcms/service';
-import { fuerMandant, zugaenglicheMandanten } from '@/server/demo';
 import { brauchtKanzlei } from '@/server/sitzung';
 
 export const metadata = { title: 'Tax-CMS-Portfolio' };
@@ -46,7 +44,7 @@ export default async function Portfolio({ searchParams }: { searchParams: Promis
     ueberfaellig: eins(sp['ueberfaellig']) === '1',
     handlung: eins(sp['handlung']) === '1',
   };
-  const { heute, zeilen, berufstraeger } = await ladePortfolio(zugaenglicheMandanten(nutzer));
+  const { heute, zeilen, berufstraeger } = await ladePortfolio(nutzer);
 
   const mitProgramm = zeilen.filter((z) => z.hatProgramm);
   const kpi = {
@@ -80,10 +78,12 @@ export default async function Portfolio({ searchParams }: { searchParams: Promis
   );
   const ohneProgramm = zeilen
     .filter((z) => !z.hatProgramm)
-    .map((z) => {
-      const darf = kannBearbeiten(fuerMandant(nutzer, z.mandant.id), z.mandant.id);
-      return { id: z.mandant.id, name: z.mandant.name, darf, grund: darf ? undefined : KEIN_RECHT };
-    });
+    .map((z) => ({
+      id: z.mandant.id,
+      name: z.mandant.name,
+      darf: z.darfBearbeiten,
+      grund: z.darfBearbeiten ? undefined : KEIN_RECHT,
+    }));
 
   return (
     <div className="page">
@@ -304,11 +304,7 @@ export default async function Portfolio({ searchParams }: { searchParams: Promis
                   z.hatProgramm ? (
                     <Zeile key={z.mandant.id} z={z} />
                   ) : (
-                    <OhneZeile
-                      key={z.mandant.id}
-                      z={z}
-                      darf={kannBearbeiten(fuerMandant(nutzer, z.mandant.id), z.mandant.id)}
-                    />
+                    <OhneZeile key={z.mandant.id} z={z} darf={z.darfBearbeiten} />
                   ),
                 )}
               </tbody>

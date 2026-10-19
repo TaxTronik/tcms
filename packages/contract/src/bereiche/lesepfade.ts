@@ -8,6 +8,7 @@
 // =============================================================================
 
 import { z } from 'zod';
+import { MAX_MANDANTEN_JE_ANFRAGE } from '../fehler';
 
 /**
  * Stichtag `YYYY-MM-DD` (nur gültige Kalendertage). Gemeinsam für alle Leser
@@ -546,3 +547,210 @@ export const KontextAntwortSchema = z
   .strict();
 
 export type KontextAntwort = z.infer<typeof KontextAntwortSchema>;
+
+// ---------------------------------------------------------------------------
+// Mandantenübergreifende Lesepfade: Portfolio und Arbeitskorb (ADR 0001 §3.3)
+// ---------------------------------------------------------------------------
+
+const uuidListe = z.array(z.uuid()).max(MAX_MANDANTEN_JE_ANFRAGE);
+
+/**
+ * Zugängliche Mandanten der Person, von der kanzleikonsole bestätigt (Body,
+ * gebunden über `req.b`). `bt`/`hb`: Teilmengen, in denen die Person
+ * zuständige:r Berufsträger:in bzw. Hauptbearbeitung ist – wie `cli.bt`/
+ * `cli.hb` je Mandant. Doppelte oder fremde Einträge machen die Anfrage
+ * ungültig (keine mehrdeutigen Rechte). Höchstens `MAX_MANDANTEN_JE_ANFRAGE`
+ * IDs; 5 000 IDs passen in die Body-Grenze von 256 KiB.
+ */
+export const MandantenListeSchema = z
+  .object({
+    mandantIds: uuidListe,
+    bt: uuidListe.default([]),
+    hb: uuidListe.default([]),
+  })
+  .strict()
+  .superRefine((e, ctx) => {
+    const alle = new Set<string>();
+    for (const [i, id] of e.mandantIds.entries()) {
+      const k = id.toLowerCase();
+      if (alle.has(k))
+        ctx.addIssue({ code: 'custom', path: ['mandantIds', i], message: 'doppelt' });
+      alle.add(k);
+    }
+    for (const feld of ['bt', 'hb'] as const) {
+      const gesehen = new Set<string>();
+      for (const [i, id] of e[feld].entries()) {
+        const k = id.toLowerCase();
+        if (!alle.has(k) || gesehen.has(k)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [feld, i],
+            message: 'nicht in mandantIds oder doppelt',
+          });
+        }
+        gesehen.add(k);
+      }
+    }
+  });
+
+export type MandantenListe = z.input<typeof MandantenListeSchema>;
+
+const mandantKurz = z.object({ id: z.uuid(), name: text(200) }).strict();
+const programmZeitraum = z.discriminatedUnion('art', [
+  z
+    .object({
+      art: z.literal('LAUFEND'),
+      monat: z.number().int(),
+      monate: z.number().int(),
+      ab: zeitpunkt,
+      bis: zeitpunkt,
+    })
+    .strict(),
+  z.object({ art: z.literal('BEVORSTEHEND'), ab: zeitpunkt, bis: zeitpunkt }).strict(),
+  z.object({ art: z.literal('ABGESCHLOSSEN'), ab: zeitpunkt, bis: zeitpunkt }).strict(),
+  z.object({ art: z.literal('OFFEN') }).strict(),
+]);
+
+/** Antwort von `POST /v1/portfolio`: Kennzahlen je Mandant, keine Personenvergleiche. */
+export const PortfolioAntwortSchema = z
+  .object({
+    heute: StandSchema,
+    zeilen: z.array(
+      z
+        .object({
+          mandant: z.object({ id: z.uuid(), name: text(200), rechtsform: text(50) }).strict(),
+          /** Bearbeitungsrecht (z. B. Einrichtung starten), aus `rol.adm` bzw. `bt`/`hb`. */
+          darfBearbeiten: z.boolean(),
+          hatProgramm: z.boolean(),
+          entwurf: z.boolean(),
+          paket: text(200).nullable(),
+          teilbereich: text(500).nullable(),
+          phase: z.number().int(),
+          phaseName: text(200),
+          risiken: z.number().int(),
+          ueberAppetit: z.number().int(),
+          appetit: klasse.nullable(),
+          prueflast: prueflastSicht.nullable(),
+          faellig: z.number().int(),
+          ueberfaellig: z.number().int(),
+          zurGegenzeichnung: z.number().int(),
+          feststellungenOffen: z.number().int(),
+          feststellungenHochOffen: z.number().int(),
+          p153Offen: z.number().int(),
+          ereignisseNeu: z.number().int(),
+          zeitraum: programmZeitraum,
+          naechsterTermin: z
+            .object({
+              datum: zeitpunkt,
+              code: text(50),
+              titel: text(500),
+              periode: text(100),
+              durchfuehrungId: objektId,
+              anzeige: anzeigeStatus,
+            })
+            .strict()
+            .nullable(),
+          handlungsbedarf: z.boolean(),
+          /** Sortierschlüssel: höher = dringender. */
+          prioritaet: z.number().int(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+export type PortfolioAntwort = z.infer<typeof PortfolioAntwortSchema>;
+
+const akDurchfuehrung = {
+  mandant: mandantKurz,
+  id: objektId,
+  code: text(50),
+  titel: text(500),
+  periode: text(100),
+  faelligAm: zeitpunkt,
+  tage: z.number().int(),
+  anzeige: anzeigeStatus,
+  schluessel: z.boolean(),
+  nachweise: z.number().int(),
+  mindestNachweise: z.number().int(),
+};
+
+/**
+ * Antwort von `POST /v1/arbeitskorb`: eigene Aufgaben der Person über die
+ * zugänglichen Mandanten. Personen nur als IDs.
+ */
+export const ArbeitskorbAntwortSchema = z
+  .object({
+    heute: StandSchema,
+    durchfuehrungen: z.array(z.object(akDurchfuehrung).strict()),
+    gegenzeichnungen: z.array(
+      z
+        .object({
+          ...akDurchfuehrung,
+          durchgefuehrtVon: personId.nullable(),
+          eingereichtAm: zeitpunkt.nullable(),
+        })
+        .strict(),
+    ),
+    vierAugen: z.array(
+      z
+        .object({
+          mandant: mandantKurz,
+          art: z.enum(['UEBERSTEUERUNG', 'FREQUENZ', 'VERWERFEN', 'RISIKOFREIGABE']),
+          key: text(200),
+          /** Objekt, auf das sich die Bestätigung bezieht (Risiko, Kontrolle, Feststellung). */
+          objektId: objektId.nullable(),
+          titel: text(1000),
+          detail: text(1000),
+          begruendung: text(10_000).nullable(),
+          beantragtVon: z.array(personId),
+          beantragtAm: zeitpunkt.nullable(),
+        })
+        .strict(),
+    ),
+    p153: z.array(
+      z
+        .object({
+          mandant: mandantKurz,
+          id: objektId,
+          nummer: text(50),
+          titel: text(500),
+          schwere: klasse,
+          auswirkung: z.enum(['JA', 'NEIN', 'UNKLAR']),
+          vertraulich: z.boolean(),
+          erfasstAm: zeitpunkt,
+        })
+        .strict(),
+    ),
+    /** Ohne Würdigungsrecht: offene Würdigungen in Mandaten, für die die Person zuständig ist. */
+    p153BeiAnderen: z.object({ anzahl: z.number().int(), mandantIds: z.array(z.uuid()) }).strict(),
+    ereignisse: z.array(
+      z
+        .object({
+          mandant: mandantKurz,
+          id: objektId,
+          nummer: text(50),
+          typ: text(100),
+          titel: text(500),
+          quelle: z.enum(['PORTAL', 'KONTROLLE', 'STAMMDATEN', 'RSS', 'MANUELL']),
+          gemeldetVon: personId.nullable(),
+          gemeldetAm: zeitpunkt,
+        })
+        .strict(),
+    ),
+    beschreibungen: z.array(
+      z
+        .object({
+          mandant: mandantKurz,
+          id: objektId,
+          nummer: text(50),
+          angefordertVon: personId.nullable(),
+          angefordertAm: zeitpunkt.nullable(),
+        })
+        .strict(),
+    ),
+    mandantenZustaendig: z.number().int(),
+  })
+  .strict();
+
+export type ArbeitskorbAntwort = z.infer<typeof ArbeitskorbAntwortSchema>;

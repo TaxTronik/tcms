@@ -9,10 +9,15 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DienstFehler, type Akteur, type KontextEingabe } from '@tcms/contract';
 import { mitTenant } from '@tcms/db';
-import { DEMO_IDS, DEMO_TENANT_ID } from '@tcms/db/demo';
+import { DEMO_IDS, DEMO_MANDANTEN, DEMO_TENANT_ID } from '@tcms/db/demo';
 import { verweisAblage } from '../ablage';
 import { imDienst, type PersonenVerzeichnis, type Uhr } from '../kontext';
-import { ladeKontext, VERTRAULICH_MASKE, type TcmsKontext } from './tcms-kontext';
+import {
+  jeAktuellerKontext,
+  ladeKontext,
+  VERTRAULICH_MASKE,
+  type TcmsKontext,
+} from './tcms-kontext';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 
@@ -233,5 +238,58 @@ describe.skipIf(!AKTIV)('Tax-CMS-Kontext gegen PostgreSQL', () => {
       await lade(kontakt(DEMO_IDS.jana, DEMO_IDS.talwind), { mandantId: DEMO_IDS.talwind })
     ).feststellungen.find((f) => f.id === vertraulichId);
     expect(portal?.titel).toBe(VERTRAULICH_MASKE.titel);
+  });
+
+  it('jeAktuellerKontext: je Mandant derselbe Kontext wie ladeKontext, auch über Blockgrenzen', async () => {
+    const ohneNamen = ({ namen: _n, ...rest }: TcmsKontext) => rest;
+    const zugang = (id: string) =>
+      id === DEMO_IDS.talwind
+        ? thomas // nicht beteiligt: maskiert wie bei ladeKontext
+        : kanzlei(DEMO_IDS.anna, id, { admin: true, bt: true, zustaendig: true });
+    const einzeln = new Map<string, TcmsKontext>();
+    for (const m of DEMO_MANDANTEN)
+      einzeln.set(m.id, await lade(zugang(m.id), { mandantId: m.id }));
+    const block: TcmsKontext[] = [];
+    await imDienst(kanzlei(DEMO_IDS.anna, null, { admin: true }), PORTS, (ctx) =>
+      jeAktuellerKontext(
+        ctx,
+        [
+          ...DEMO_MANDANTEN.map((m) => ({ mandantId: m.id, akteur: zugang(m.id) })),
+          {
+            mandantId: DEMO_IDS.talwind,
+            akteur: anna, // doppelter Eintrag: der erste gilt
+          },
+        ],
+        (k) => block.push(k),
+        { blockGroesse: 2 },
+      ),
+    );
+    expect(block).toHaveLength(DEMO_MANDANTEN.length);
+    for (const k of block) {
+      expect(k.namen.size).toBe(0);
+      expect(ohneNamen(k)).toEqual(ohneNamen(einzeln.get(k.mandant.id)!));
+    }
+    const talwind = block.find((k) => k.mandant.id === DEMO_IDS.talwind)!;
+    expect(talwind.feststellungen.find((f) => f.id === vertraulichId)?.titel).toBe(
+      VERTRAULICH_MASKE.titel,
+    );
+  });
+
+  it('jeAktuellerKontext: ohne Leserecht und fremde Mandanten entfallen', async () => {
+    const block: string[] = [];
+    await imDienst(kanzlei(DEMO_IDS.anna, null, { admin: true }), PORTS, (ctx) =>
+      jeAktuellerKontext(
+        ctx,
+        [
+          // Bezug auf einen anderen Mandanten als den angefragten: kein Leserecht.
+          { mandantId: DEMO_IDS.talwind, akteur: kanzlei(DEMO_IDS.anna, DEMO_IDS.seestern) },
+          { mandantId: randomUUID(), akteur: kanzlei(DEMO_IDS.anna, null) },
+          { mandantId: DEMO_IDS.kleinwerk, akteur: kontakt(DEMO_IDS.jana, DEMO_IDS.talwind) },
+          { mandantId: DEMO_IDS.seestern, akteur: kanzlei(DEMO_IDS.anna, DEMO_IDS.seestern) },
+        ],
+        (k) => block.push(k.mandant.id),
+      ),
+    );
+    expect(block).toEqual([DEMO_IDS.seestern]);
   });
 });
