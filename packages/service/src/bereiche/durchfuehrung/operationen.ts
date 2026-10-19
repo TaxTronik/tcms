@@ -41,9 +41,9 @@ import {
 import { tenantSperre, type Prisma, type Tx } from '@tcms/db';
 import { addTage, type DurchfuehrungStatus } from '@tcms/domain';
 import { mitAudit, type Protokoll } from '../../audit';
-import { naechsteFeststellungsnummer } from '../../kern/nummern';
 import type { DienstKontext } from '../../kontext';
-import { auswirkungBeimAnlegen, gleicheId } from '../../rechte';
+import { gleicheId } from '../../rechte';
+import { legeFeststellungAn } from '../feststellungen-ereignisse/gemeinsam';
 import { ladeLage, pruefeEingabe, verlange, type Lage } from './lage';
 import { nachweisAntwort } from './lesen';
 import { BEARBEITBAR, OFFEN } from './rechte';
@@ -561,50 +561,32 @@ export async function gegenzeichneDurchfuehrung(
             'feststellung.risikoIds': ['Risiko ist mit dieser Kontrolle nicht verknüpft'],
           });
         }
-        const auswirkung = auswirkungBeimAnlegen(ctx.akteur, lage.mandantId, f.auswirkung);
-        const nummer = await naechsteFeststellungsnummer(
-          tx,
-          lage.programmId,
-          zeitpunkt.getUTCFullYear(),
-        );
+        // Genau ein Anlagepfad für Feststellungen (Bereich feststellungen):
+        // TS-04 („NEIN" nur mit Würdigungsrecht), Nummernkreis und
+        // Programmzugehörigkeit von Risiken und Durchführung prüft der Helfer.
         const quelleText = `${d.kontrolle.code} ${d.periodeLabel}`;
-        const neu = await tx.feststellung.create({
-          data: {
-            programmId: lage.programmId,
-            nummer,
-            titel: f.titel,
-            sachverhalt: f.sachverhalt,
-            quelle: 'KONTROLLE',
-            quelleText,
-            durchfuehrungId: d.id,
-            klasse: f.klasse,
-            schwere: f.schwere,
-            auswirkung,
-            status: 'ERFASST',
-            erfasstVon: ctx.akteur.id,
-            erfasstAm: zeitpunkt,
-            risiken: { create: f.risikoIds.map((risikoId) => ({ risikoId })) },
-          },
-          select: { id: true },
-        });
-        protokolle.push({
-          aktion: 'tcms.feststellung.erfasst',
-          objektTyp: 'Feststellung',
-          objektId: neu.id,
+        const neu = await legeFeststellungAn(ctx, zeitpunkt, {
+          mandantId: lage.mandantId,
           programmId: lage.programmId,
+          titel: f.titel,
+          sachverhalt: f.sachverhalt,
+          quelle: 'KONTROLLE',
+          quelleText,
+          durchfuehrungId: d.id,
+          klasse: f.klasse,
+          schwere: f.schwere,
+          auswirkung: f.auswirkung,
+          risikoIds: f.risikoIds,
           detail: {
-            nummer,
+            quelle: quelleText,
             durchfuehrungId: d.id,
-            quelle: 'KONTROLLE',
-            quelleText,
             klasse: f.klasse,
             schwere: f.schwere,
-            auswirkung,
-            ...(auswirkung !== f.auswirkung ? { auswirkungAngegeben: f.auswirkung } : {}),
             risiken: f.risikoIds.map((id) => erlaubt.get(id)!).sort(),
           },
         });
-        feststellung = { id: neu.id, nummer };
+        protokolle.push(neu.protokoll);
+        feststellung = { id: neu.id, nummer: neu.nummer };
       }
     }
     await uebergang(
