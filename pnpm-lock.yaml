@@ -184,6 +184,9 @@ importers:
       '@tcms/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@tcms/service':
+        specifier: workspace:*
+        version: link:../../packages/service
       hono:
         specifier: 4.13.13
         version: 4.13.13

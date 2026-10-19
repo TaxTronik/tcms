@@ -16,6 +16,7 @@ import { erzeugeApp } from './app';
 import { PgJti, starteJtiAufraeumen } from './jti';
 import { KonfigurationsFehler, ladeKonfiguration } from './konfiguration';
 import { jsonLogger } from './log';
+import { registriereAlle } from './routen/index';
 
 const log = jsonLogger();
 
@@ -54,6 +55,7 @@ async function starte() {
         await pool.query('SELECT 1');
       },
     },
+    routen: registriereAlle,
     log,
   });
 
