@@ -16,7 +16,7 @@
 
 import { z } from 'zod';
 import { VERWEIGERUNG_GRUENDE } from '../fehler';
-import { DATEINAME_UNZULAESSIG, einzeilig, StandSchema } from './lesepfade';
+import { DATEINAME_UNZULAESSIG, einzeilig, mitTextBasis, StandSchema } from './lesepfade';
 
 // ---------------------------------------------------------------------------
 // Grenzen und Bausteine
@@ -49,11 +49,13 @@ const RisikoIdSchema = objektId();
 const MandantIdSchema = z.uuid().transform((s) => s.toLowerCase());
 
 const begruendung = () =>
-  z
-    .string()
-    .trim()
-    .min(DF_MIN_BEGRUENDUNG, `Begründung: mindestens ${DF_MIN_BEGRUENDUNG} Zeichen`)
-    .max(DF_MAX_BEGRUENDUNG);
+  mitTextBasis(
+    z
+      .string()
+      .trim()
+      .min(DF_MIN_BEGRUENDUNG, `Begründung: mindestens ${DF_MIN_BEGRUENDUNG} Zeichen`)
+      .max(DF_MAX_BEGRUENDUNG),
+  );
 
 const ziel = {
   mandantId: MandantIdSchema,
@@ -140,7 +142,7 @@ export type DurchfuehrungZiel = z.infer<typeof DurchfuehrungZielSchema>;
 export const DurchfuehrungSchrittEingabeSchema = z
   .object({
     erledigt: z.boolean(),
-    kommentar: z.string().trim().max(DF_MAX_SCHRITT_KOMMENTAR),
+    kommentar: mitTextBasis(z.string().trim().max(DF_MAX_SCHRITT_KOMMENTAR)),
   })
   .strict();
 
@@ -151,7 +153,7 @@ export const DurchfuehrungWertEingabeSchema = z
   .object({
     key: DurchfuehrungKennzahlKeySchema,
     wert: z.number().gt(-DF_MAX_BETRAG).lt(DF_MAX_BETRAG).nullable(),
-    bemerkung: z.string().trim().max(DF_MAX_WERT_BEMERKUNG),
+    bemerkung: mitTextBasis(z.string().trim().max(DF_MAX_WERT_BEMERKUNG)),
     erklaert: z.boolean(),
   })
   .strict();
@@ -165,7 +167,7 @@ const speichernFelder = {
     .max(DF_MAX_KENNZAHLEN)
     .refine((w) => new Set(w.map((x) => x.key)).size === w.length, 'Kennzahl doppelt'),
   ergebnis: DurchfuehrungErgebnisSchema.nullable(),
-  ergebnisKommentar: z.string().trim().max(DF_MAX_ERGEBNIS_KOMMENTAR).nullable(),
+  ergebnisKommentar: mitTextBasis(z.string().trim().max(DF_MAX_ERGEBNIS_KOMMENTAR)).nullable(),
 };
 
 export const DurchfuehrungSpeichernBodySchema = z.object(speichernFelder).strict();
@@ -235,7 +237,9 @@ export type DurchfuehrungBegruendungEingabe = z.infer<typeof DurchfuehrungBegrue
  * Entfallen-Antrag ablehnen bzw. zurückziehen: Die antragstellende Person zieht
  * ohne Begründung zurück; jede andere Person lehnt mit Begründung ab (Service).
  */
-const ablehnenFelder = { begruendung: z.string().trim().max(DF_MAX_BEGRUENDUNG).optional() };
+const ablehnenFelder = {
+  begruendung: mitTextBasis(z.string().trim().max(DF_MAX_BEGRUENDUNG)).optional(),
+};
 export const EntfallenAblehnenBodySchema = z.object(ablehnenFelder).strict();
 export const EntfallenAblehnenEingabeSchema = z.object({ ...ziel, ...ablehnenFelder }).strict();
 export type EntfallenAblehnenEingabe = z.infer<typeof EntfallenAblehnenEingabeSchema>;
@@ -262,7 +266,9 @@ const AuswirkungSchema = z.enum(['JA', 'NEIN', 'UNKLAR'], {
 export const GegenzeichnungFeststellungSchema = z
   .object({
     titel: einzeilig(5, 200, 'Titel: mindestens 5 Zeichen'),
-    sachverhalt: z.string().trim().min(20, 'Sachverhalt: mindestens 20 Zeichen').max(4000),
+    sachverhalt: mitTextBasis(
+      z.string().trim().min(20, 'Sachverhalt: mindestens 20 Zeichen').max(4000),
+    ),
     klasse: FeststellungKlasseSchema,
     schwere: KlasseSchema,
     auswirkung: AuswirkungSchema,

@@ -35,6 +35,7 @@ import {
   type Fehler,
   type PruefGrund,
 } from '@tcms/contract';
+import { eingabeFehlercode } from '@tcms/db';
 import { Hono, type Context } from 'hono';
 import { ZodError } from 'zod';
 import { kuendigtBodyAn, leseBodyRoh, pruefeContentLength } from './body';
@@ -274,6 +275,10 @@ function fehler(
 
 const SCHLIESSEN: Readonly<Record<string, string>> = { connection: 'close' };
 
+/** Meldung bei Text, den die Datenbank nicht speichern kann (wie im Dienstkern, RT4-T-08). */
+const EINGABE_NICHT_SPEICHERBAR =
+  'Die Eingabe enthält Zeichen, die nicht gespeichert werden können.';
+
 /**
  * Übersetzt jeden Fehler in den Umschlag; Details nur ins Log. `schliessen`:
  * Ein angekündigter Body wurde nicht (ganz) gelesen – Verbindung schließen,
@@ -312,6 +317,20 @@ function fehlerAntwort(
   if (e instanceof ZodError) {
     felder.fehler = 'UNGUELTIG';
     return fehler(400, { code: 'UNGUELTIG', felder: felderAusZod(e) }, requestId, zusatz);
+  }
+  // RT4-T-08: Text, den die Datenbank nicht speichern kann (NUL, einzelnes Surrogat,
+  // ungültige Darstellung), ist ein Eingabefehler. Ins Log nur der feste Code –
+  // Meldung, Details und Stack enthalten Eingabewerte.
+  const dbCode = eingabeFehlercode(e);
+  if (dbCode !== null) {
+    felder.fehler = 'UNGUELTIG';
+    felder.dbFehler = dbCode;
+    return fehler(
+      400,
+      { code: 'UNGUELTIG', meldung: EINGABE_NICHT_SPEICHERBAR },
+      requestId,
+      zusatz,
+    );
   }
   felder.fehler = 'INTERN';
   felder.ausnahme = e instanceof Error ? e.name : typeof e;

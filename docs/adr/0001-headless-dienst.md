@@ -202,7 +202,9 @@ dieselbe leere Liste wie eine unbekannte.
 
 - Basis `/v1`. JSON, UTF-8. Body höchstens 256 KiB (`413`). Antworten
   `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder?, grund? } }`.
-- Codes: `400 UNGUELTIG` (zod, mit `felder`), `401 NICHT_AUTHENTIFIZIERT`,
+- Codes: `400 UNGUELTIG` (zod, mit `felder`; ebenso Text, den die Datenbank
+  nicht speichern kann – 22021, 22P05, 22P02 –, dann ohne `felder`, RT4-T-08),
+  `401 NICHT_AUTHENTIFIZIERT`,
   `403 NICHT_BERECHTIGT` (mit fachlichem Grund, z. B. Vier-Augen),
   `404 NICHT_GEFUNDEN` (auch fremder Tenant/Mandant), `409 KONFLIKT`
   (Status hat sich geändert, Doppelentscheidung), `413 ZU_GROSS`. Wo der

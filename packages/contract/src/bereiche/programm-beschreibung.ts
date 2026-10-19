@@ -20,7 +20,7 @@
 // =============================================================================
 
 import { z } from 'zod';
-import { einzeilig, StandSchema } from './lesepfade';
+import { einzeilig, mitTextBasis, StandSchema } from './lesepfade';
 import { ProfilAntwortenGespeichertSchema, ProfilAntwortenSchema } from './risiken-kontrollen';
 import { FreigabeZustellungSchema, NachrichtUnzustellbarGrundSchema } from './zustellung';
 
@@ -271,7 +271,7 @@ export const TeilbereichSchrittSchema = z
     teilbereich: z
       .object({
         name: einzeilig(1, 200),
-        abgrenzung: z.string().trim().max(4000),
+        abgrenzung: mitTextBasis(z.string().trim().max(4000)),
         einschluesse: z.array(kurz).max(30),
         ausschluesse: z.array(kurz).max(30),
       })
@@ -297,7 +297,7 @@ export const EntwurfZielSchema = z
       .min(1)
       .max(60)
       .regex(/^[A-Za-z0-9_-]+$/),
-    text: z.string().trim().max(1000),
+    text: mitTextBasis(z.string().trim().max(1000)),
     wesentlichkeitEur: z.number().int().min(0).max(1e9),
     risikoappetit: SetupAppetitSchema,
     aktiv: z.boolean(),
@@ -314,7 +314,7 @@ export const ZieleSchrittSchema = z
   .strict();
 
 export const EntwurfRisikoSchema = z
-  .object({ uebernehmen: z.boolean(), begruendung: z.string().trim().max(2000) })
+  .object({ uebernehmen: z.boolean(), begruendung: mitTextBasis(z.string().trim().max(2000)) })
   .strict();
 
 export const RisikenSchrittSchema = z
@@ -566,7 +566,12 @@ export const BESCHREIBUNG_MAX_TEXTBLOCK = 20_000;
 export const BESCHREIBUNG_MAX_BLOECKE = 20;
 
 export const BeschreibungBlockSchema = z.discriminatedUnion('typ', [
-  z.object({ typ: z.literal('text'), text: z.string().max(BESCHREIBUNG_MAX_TEXTBLOCK) }).strict(),
+  z
+    .object({
+      typ: z.literal('text'),
+      text: mitTextBasis(z.string().max(BESCHREIBUNG_MAX_TEXTBLOCK)),
+    })
+    .strict(),
   z.object({ typ: z.literal('baustein'), art: BeschreibungBausteinArtSchema }).strict(),
 ]);
 export const BeschreibungAbschnittSchema = z
@@ -895,7 +900,9 @@ export type BeschreibungVersionAktionErgebnis = z.infer<
 export const REVIEW_MIN_BEGRUENDUNG = 30;
 
 export const ReviewZurueckweisenBodySchema = z
-  .object({ begruendung: z.string().trim().min(REVIEW_MIN_BEGRUENDUNG).max(2000) })
+  .object({
+    begruendung: mitTextBasis(z.string().trim().min(REVIEW_MIN_BEGRUENDUNG).max(2000)),
+  })
   .strict();
 export const ReviewZurueckweisenEingabeSchema =
   ReviewZurueckweisenBodySchema.extend(versionPfad).strict();

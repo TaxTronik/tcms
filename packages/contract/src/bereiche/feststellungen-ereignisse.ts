@@ -25,6 +25,7 @@ import {
   DATEINAME_GESPEICHERT_UNZULAESSIG,
   DATEINAME_UNZULAESSIG,
   einzeilig,
+  freitext,
   StandSchema,
 } from './lesepfade';
 
@@ -38,21 +39,8 @@ export const ObjektIdSchema = z.string().regex(/^[a-z0-9]{16,40}$/, 'Ungültige 
 /** Kalendertag `YYYY-MM-DD` (nur gültige Tage). */
 export const TagSchema = z.iso.date();
 
-// NUL und andere Steuerzeichen (außer Tab/Zeilenumbruch) sowie einzelne
-// Surrogate: PostgreSQL weist NUL ab (sonst 500), die übrigen sind nie fachlich.
-const STEUERZEICHEN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
-const EINZELNES_SURROGAT = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-
-/** Freitext: getrimmt, Längengrenzen, ohne Steuerzeichen. */
-export function freitext(min: number, max: number) {
-  return z
-    .string()
-    .trim()
-    .min(min)
-    .max(max)
-    .refine((s) => !STEUERZEICHEN.test(s), 'Steuerzeichen sind nicht erlaubt')
-    .refine((s) => !EINZELNES_SURROGAT.test(s), 'Ungültige Zeichenfolge');
-}
+// Freitexte (`freitext`) und einzeilige Texte (`einzeilig`) kommen aus
+// lesepfade.ts: eine Text-Basisregel für den ganzen Vertrag (RT4-T-08).
 
 const iso = z.iso.datetime();
 

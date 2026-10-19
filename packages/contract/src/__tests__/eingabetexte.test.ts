@@ -8,6 +8,9 @@
 //     Geschäftsprofil) sind einzeilig – ohne CR, LF, TAB, Richtungs-,
 //     Nullbreiten- und unsichtbare Zeichen (`einzeilig`, Zeichenregel).
 //     Dasselbe gilt für die Vorlagendaten der Nachrichten (`nachrichtTitel`).
+//   - RT4-T-08: Jede Zeichenkette (auch mehrzeilige Freitexte) weist NUL und
+//     einzelne Surrogate ab (`TEXT_UNZULAESSIG`, `mitTextBasis`), damit keine
+//     vertragsgültige Eingabe erst beim Speichern scheitert (500).
 //
 // Ein Feld gilt als geprüft, wenn ein harmloser Wert passender Länge
 // angenommen und derselbe Wert mit dem Störzeichen in der Mitte abgewiesen
@@ -215,5 +218,50 @@ describe('Eingaben: Titel und Namen sind einzeilig (RT4-T-03)', () => {
     const blaetterGespeichert = zeichenkettenBlaetter(ProfilAntwortenGespeichertSchema, 'profil');
     const name = blaetterGespeichert.find((b) => b.pfad === 'profil.p4.warengruppen[].name')!;
     expect(name.schema.safeParse('Bücher\u202e').success).toBe(true);
+  });
+});
+
+describe('Eingaben: jede Zeichenkette ohne NUL und einzelne Surrogate (RT4-T-08)', () => {
+  const blaetter = eingabeBlaetter();
+
+  it('prüft eine plausible Zahl freier Textfelder', () => {
+    const frei = blaetter.filter((b) => harmlos(b) !== null);
+    expect(frei.length).toBeGreaterThanOrEqual(80);
+    for (const p of [
+      'durchfuehrungSpeichern body.schritte[].kommentar',
+      'portalAufgabeSpeichern body.schritte[].kommentar',
+      'beschreibungsabschnittSpeichern body.bloecke[]|0.text',
+      'risikoNeuBewerten body.begruendung',
+      'einrichtungEntwurfSpeichern body|0.daten.teilbereich.abgrenzung',
+    ]) {
+      expect(
+        frei.map((b) => b.pfad),
+        p,
+      ).toContain(p);
+    }
+  });
+
+  it('kein Feld nimmt NUL, ein einzelnes hohes oder tiefes Surrogat an', () => {
+    const verletzt: string[] = [];
+    for (const b of blaetter) {
+      const wert = harmlos(b);
+      if (wert === null) continue;
+      for (const [name, z] of [
+        ['NUL', '\u0000'],
+        ['hohes Surrogat', '\ud800'],
+        ['tiefes Surrogat', '\udfff'],
+      ] as const) {
+        if (b.schema.safeParse(gestoert(wert, z)).success)
+          verletzt.push(`${b.pfad} nimmt ${name} an`);
+      }
+    }
+    expect(verletzt).toEqual([]);
+  });
+
+  it('mehrzeilige Freitexte behalten Zeilenumbruch, TAB und Emoji', () => {
+    const kommentar = blaetter.find(
+      (b) => b.pfad === 'durchfuehrungSpeichern body.schritte[].kommentar',
+    )!;
+    expect(kommentar.schema.safeParse('Zeile 1\nZeile 2\tmit TAB \u{1f600}').success).toBe(true);
   });
 });

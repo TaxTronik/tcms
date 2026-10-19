@@ -960,6 +960,39 @@ export type PortalUebersichtAntwort = z.infer<typeof PortalUebersichtAntwortSche
 export const UNZULAESSIG_KLASSE = String.raw`\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\p{Cs}`;
 export const UNZULAESSIGE_ZEICHEN = new RegExp(`[${UNZULAESSIG_KLASSE}]`, 'u');
 
+/**
+ * Basisregel jedes Texts einer Eingabe (RT4-T-08): kein NUL und keine
+ * einzelnen Surrogate. PostgreSQL speichert beides nicht (TEXT kein NUL,
+ * JSONB weder `\u0000` noch ein einzelnes Surrogat); ohne die Regel endete
+ * eine vertragsgültige Eingabe als `500 INTERN`. Gilt für jeden Freitext
+ * (`mitTextBasis`, `freitext`; Zeilenumbruch und TAB bleiben erlaubt);
+ * einzeilige Texte und Dateinamen prüfen die strengere Zeichenregel, die
+ * beides einschließt. `__tests__/eingabetexte.test.ts` prüft jedes
+ * Zeichenkettenfeld des Endpunktregisters.
+ */
+export const TEXT_UNZULAESSIG = /[\u0000\p{Cs}]/u;
+export const TEXT_UNZULAESSIG_MELDUNG = 'Unzulässige Zeichen (NUL oder einzelnes Surrogat)';
+
+/** Hängt die Basisregel an eine Zeichenkette der Eingabe an. */
+export function mitTextBasis(s: z.ZodString): z.ZodString {
+  return s.refine((t) => !TEXT_UNZULAESSIG.test(t), TEXT_UNZULAESSIG_MELDUNG);
+}
+
+// NUL und andere Steuerzeichen (außer Tab/Zeilenumbruch) sind in Freitexten nie fachlich.
+const STEUERZEICHEN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+
+/** Freitext (mehrzeilig): getrimmt, Längengrenzen, ohne Steuerzeichen, mit Basisregel. */
+export function freitext(min: number, max: number) {
+  return mitTextBasis(
+    z
+      .string()
+      .trim()
+      .min(min)
+      .max(max)
+      .refine((s) => !STEUERZEICHEN.test(s), 'Steuerzeichen sind nicht erlaubt'),
+  );
+}
+
 /** Dateiname: dieselben Zeichen und zusätzlich keine Pfadtrenner (`/`, Backslash). */
 export const DATEINAME_UNZULAESSIG = new RegExp(`[${UNZULAESSIG_KLASSE}/\\\\]`, 'u');
 

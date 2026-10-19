@@ -24,6 +24,7 @@ import { z } from 'zod';
 import {
   BearbeitenRechteSchema,
   einzeilig,
+  mitTextBasis,
   PflichtattributLueckeSchema,
   StandSchema,
 } from './lesepfade';
@@ -49,12 +50,16 @@ const ObjektIdSchema = z
   .regex(/^[A-Za-z0-9_-]+$/);
 /** Person der kanzleikonsole (Mitarbeiter- oder Mandantenkontakt-ID). */
 const PersonIdSchema = z.uuid();
-const BegruendungSchema = z
-  .string()
-  .trim()
-  .min(MIN_BEGRUENDUNG_ZEICHEN, `mindestens ${MIN_BEGRUENDUNG_ZEICHEN} Zeichen`)
-  .max(MAX_BEGRUENDUNG_ZEICHEN);
-const optionaleBegruendung = z.string().trim().max(MAX_BEGRUENDUNG_ZEICHEN).optional();
+const BegruendungSchema = mitTextBasis(
+  z
+    .string()
+    .trim()
+    .min(MIN_BEGRUENDUNG_ZEICHEN, `mindestens ${MIN_BEGRUENDUNG_ZEICHEN} Zeichen`)
+    .max(MAX_BEGRUENDUNG_ZEICHEN),
+);
+const optionaleBegruendung = mitTextBasis(
+  z.string().trim().max(MAX_BEGRUENDUNG_ZEICHEN),
+).optional();
 
 const KlasseSchema = z.enum(['GERING', 'MITTEL', 'HOCH', 'KRITISCH']);
 const SchadenSchema = z.enum(['N', 'M', 'H']);

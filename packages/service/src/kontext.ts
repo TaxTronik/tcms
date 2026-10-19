@@ -6,7 +6,13 @@
 // =============================================================================
 
 import { DienstFehler, type Akteur, type PersonAkteur, type SystemAkteur } from '@tcms/contract';
-import { mitTenant, pruefeTenantId, type TenantOptionen, type Tx } from '@tcms/db';
+import {
+  eingabeFehlercode,
+  mitTenant,
+  pruefeTenantId,
+  type TenantOptionen,
+  type Tx,
+} from '@tcms/db';
 
 /**
  * „Heute" und „jetzt" für fachliche Werte (Fälligkeiten, Stichtage,
@@ -183,6 +189,21 @@ function pruefeTenantIdOderFehler(id: unknown): string {
   }
 }
 
+/** Meldung, wenn die Datenbank eine Texteingabe nicht speichern kann (RT4-T-08). */
+export const EINGABE_NICHT_SPEICHERBAR =
+  'Die Eingabe enthält Zeichen, die nicht gespeichert werden können.';
+
+/**
+ * Datenbankfehler wegen ungültiger Texteingabe (`eingabeFehlercode`: 22P05,
+ * 22021, 22P02) als `UNGUELTIG` statt als roher Fehler (sonst `500 INTERN`);
+ * alle anderen Fehler unverändert. Die Transaktion ist dann schon
+ * zurückgerollt; die Meldung nennt keine Werte.
+ */
+export function alsEingabefehler(e: unknown): unknown {
+  if (e instanceof DienstFehler) return e;
+  return eingabeFehlercode(e) ? new DienstFehler('UNGUELTIG', EINGABE_NICHT_SPEICHERBAR) : e;
+}
+
 /**
  * Führt `fn` in genau einer Transaktion im Tenant des Akteurs aus (ADR 0001
  * §4). Der Tenant kommt ausschließlich aus dem Akteur, nie aus der Eingabe.
@@ -195,7 +216,11 @@ export async function imDienst<T>(
 ): Promise<T> {
   // Vor der Transaktion: Ein Systemakteur öffnet für Personenoperationen keine.
   const a = personAkteur(akteur);
-  return mitTenant(a.tenantId, (tx) => fn({ tx, akteur: a, ...ports }), opts);
+  try {
+    return await mitTenant(a.tenantId, (tx) => fn({ tx, akteur: a, ...ports }), opts);
+  } catch (e) {
+    throw alsEingabefehler(e);
+  }
 }
 
 /**
@@ -210,5 +235,9 @@ export async function imSystemdienst<T>(
   opts?: TenantOptionen,
 ): Promise<T> {
   const a = systemAkteur(akteur);
-  return mitTenant(a.tenantId, (tx) => fn({ tx, akteur: a, uhr }), opts);
+  try {
+    return await mitTenant(a.tenantId, (tx) => fn({ tx, akteur: a, uhr }), opts);
+  } catch (e) {
+    throw alsEingabefehler(e);
+  }
 }

@@ -245,6 +245,10 @@ für KI-Werkzeuge.
   Eine neue Systemoperation braucht einen Registereintrag `akteure: NUR_SYSTEM`,
   eine eigene Artprüfung in der Operation und den registerweiten Test
   (`apps/api/src/__tests__/systemakteur*.test.ts`) angepasst.
+- Jeder Text einer Eingabe weist NUL und einzelne Surrogate ab (`mitTextBasis`, `freitext`,
+  `einzeilig`; RT4-T-08). Scheitert trotzdem ein Text an der Datenbank (22021, 22P05,
+  22P02, `eingabeFehlercode` aus `@tcms/db`), antworten Dienst (`fehlerAntwort`) und
+  Dienstkern (`imDienst`, `imSystemdienst`) `UNGUELTIG`; ins Log nur der Code (`dbFehler`).
 - Logs: JSON-Zeilen ohne Header-Werte, Bodys, Namen und rohe Pfade, nur IDs
   und Codes. Keine Secrets in Logs, Fehlermeldungen, Tests oder Commits.
 - Jede Sicherheitsannahme hat einen Negativtest, der ohne die Schutzmaßnahme

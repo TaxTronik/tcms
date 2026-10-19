@@ -29,3 +29,4 @@ export {
   type Tx,
 } from './tenant';
 export { AUDIT_SPERRE, pruefeAuditKette, schreibeAudit, type AuditInput } from './audit';
+export { EINGABE_FEHLERCODES, eingabeFehlercode, type EingabeFehlercode } from './fehler';
