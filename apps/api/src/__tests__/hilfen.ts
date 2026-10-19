@@ -126,6 +126,33 @@ export function systemClaims(over: Partial<AkteurClaims> = {}): AkteurClaims {
   return c;
 }
 
+/**
+ * Konkreter, kanonischer Pfad zu einem Registermuster mit gültigen
+ * Beispielwerten je Parameter (Mandant: `mandantId`).
+ */
+export function beispielPfad(muster: string, mandantId = MANDANT): string {
+  return muster
+    .split('/')
+    .map((s) => {
+      if (!s.startsWith(':')) return s;
+      const name = s.slice(1);
+      if (name === 'mandantId') return mandantId;
+      if (name === 'sha256') return 'a'.repeat(64);
+      return 'ckz0a1b2c3d4e5f6g7h8i9j0';
+    })
+    .join('/');
+}
+
+/** Pfadparameter zu einem Muster wie `beispielPfad`. */
+export function beispielParams(muster: string, mandantId = MANDANT): Record<string, string> {
+  const werte = beispielPfad(muster, mandantId).split('/');
+  const params: Record<string, string> = Object.create(null);
+  muster.split('/').forEach((s, i) => {
+    if (s.startsWith(':')) params[s.slice(1)] = werte[i]!;
+  });
+  return params;
+}
+
 export interface Senden {
   methode?: string;
   /** Pfad mit Query, wie der Client ihn schickt (roh). */

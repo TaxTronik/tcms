@@ -67,7 +67,7 @@ describe.skipIf(!AKTIV)('Endpunkte CMS-Beschreibung und Freigaben (App + Postgre
     expect(frueher).toMatchObject({ historisch: true, versionen: [], darfBearbeiten: false });
 
     // Postausgang: Code nur hier (für die Zustellung), nirgends sonst.
-    const post = await ok(await senden(w, 'GET', '/v1/nachrichten/offen?limit=50', a.admin()));
+    const post = await ok(await senden(w, 'GET', '/v1/nachrichten/offen?limit=50', a.system()));
     const nachrichten = post['nachrichten'] as {
       empfaengerId: string;
       zweck: string;

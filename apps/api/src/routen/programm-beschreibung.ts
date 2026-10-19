@@ -7,8 +7,9 @@
 // Schemas stehen im Endpunktregister (`ENDPUNKTE`).
 //
 // Pfade unter /v1/mandanten/:mandantId/… sind an `cli.id` gebunden (routen.ts);
-// Portal-Endpunkte (`portal: true`) erreichen Mandantenkontakte. Der Postausgang
-// ist tenantweit (/v1/nachrichten, nur Verwaltungsrecht, im Service geprüft).
+// Portal-Endpunkte erreichen Mandantenkontakte. Der Postausgang ist tenantweit
+// (/v1/nachrichten) und nur für den Systemakteur (Register `NUR_SYSTEM`,
+// `systemKontext`, im Service erneut geprüft).
 // Pfadparameter werden nach Body und Query eingesetzt (überschreiben sie).
 // =============================================================================
 
@@ -35,7 +36,7 @@ import {
   weiseBeschreibungsreviewZurueck,
 } from '@tcms/service';
 import type { Routen } from '../routen';
-import { dienstKontext } from './kontext';
+import { dienstKontext, systemKontext } from './kontext';
 
 type Params = { params: Readonly<Record<string, string>> };
 const mandant = (c: Params) => ({ mandantId: c.params.mandantId! });
@@ -43,12 +44,12 @@ const version = (c: Params) => ({ ...mandant(c), versionId: c.params.versionId! 
 const freigabe = (c: Params) => ({ ...mandant(c), freigabeId: c.params.freigabeId! });
 
 export function registriereProgrammBeschreibung(r: Routen<Tx>): void {
-  // ---- Postausgang (tenantweit, Verwaltungsrecht im Service) ----
+  // ---- Postausgang (tenantweit, nur Systemakteur) ----
   r.endpunkt(ENDPUNKTE.nachrichtenOffenLesen, (c) =>
-    ladeOffeneNachrichten(dienstKontext(c), { ...c.query }),
+    ladeOffeneNachrichten(systemKontext(c), { ...c.query }),
   );
   r.endpunkt(ENDPUNKTE.nachrichtZugestelltMelden, (c) =>
-    bestaetigeNachrichtZustellung(dienstKontext(c), { nachrichtId: c.params.nachrichtId! }),
+    bestaetigeNachrichtZustellung(systemKontext(c), { nachrichtId: c.params.nachrichtId! }),
   );
 
   // ---- Einrichtungsassistent ----

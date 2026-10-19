@@ -1016,10 +1016,11 @@ export const ENDPUNKTE = register({
     status: 201,
   },
 
-  // ---- Postausgang (tenantweit) -----------------------------------------------
+  // ---- Postausgang (tenantweit, nur Systemakteur: Zustell-Worker der kanzleikonsole) ----
   nachrichtenOffenLesen: {
     methode: 'GET',
     pfad: '/v1/nachrichten/offen',
+    akteure: NUR_SYSTEM,
     params: KeineParamsSchema,
     query: NachrichtenOffenQuerySchema,
     antwort: NachrichtenOffenSchema,
@@ -1027,6 +1028,7 @@ export const ENDPUNKTE = register({
   nachrichtZugestelltMelden: {
     methode: 'POST',
     pfad: '/v1/nachrichten/:nachrichtId/zugestellt',
+    akteure: NUR_SYSTEM,
     params: NachrichtZugestelltEingabeSchema,
     antwort: NachrichtZugestelltErgebnisSchema,
   },

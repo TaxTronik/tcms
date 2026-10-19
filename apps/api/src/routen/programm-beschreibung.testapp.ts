@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import type { AkteurClaims } from '@tcms/contract';
 import { mitTenant, type Tx } from '@tcms/db';
 import { describe, expect, it } from 'vitest';
-import { aufbau, bestaetigtSenden, json, type Aufbau } from '../__tests__/hilfen';
+import { aufbau, bestaetigtSenden, json, SYSTEM_ID, type Aufbau } from '../__tests__/hilfen';
 import type { Routen } from '../routen';
 import { registriereProgrammBeschreibung } from './programm-beschreibung';
 
@@ -84,9 +84,19 @@ export function akteure(w: ApiWelt) {
     rol: undefined,
     cli: { id: cli, bt: false, hb: false },
   });
+  /** Systemakteur der kanzleikonsole (Zustell-Worker): ohne `rol` und `cli`. */
+  const system = (tnt = w.T): C => ({
+    tnt,
+    sub: SYSTEM_ID,
+    knd: 'SYSTEM',
+    nam: 'Zustellung kanzleikonsole',
+    rol: undefined,
+    cli: undefined,
+  });
   return {
     kanzlei,
     kontakt,
+    system,
     bt: (m = w.A) => kanzlei(w.BT, m, { adm: true, bt: true, zbt: true }),
     hb: (m = w.A) => kanzlei(w.HB, m, { hb: true }),
     admin: () => kanzlei(w.ADMIN, null, { adm: true }),

@@ -7,6 +7,7 @@
 export {
   echteUhr,
   imDienst,
+  imSystemdienst,
   kalendertag,
   keinPersonenVerzeichnis,
   normalisiereAkteur,
@@ -19,10 +20,11 @@ export {
   type NachweisEingang,
   type NachweisVerweis,
   type PersonenVerzeichnis,
+  type SystemKontext,
   type Uhr,
 } from './kontext';
 export { pruefeVerweis, verweisAblage, VERWEIS_GRENZEN } from './ablage';
-export { mitAudit, type Protokoll } from './audit';
+export { AUDIT_SYSTEM_PRAEFIX, mitAudit, type AuditKontext, type Protokoll } from './audit';
 export { ladeKontaktRollen } from './rollen';
 export {
   aktiveRollen,

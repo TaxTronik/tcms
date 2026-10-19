@@ -88,6 +88,18 @@ export interface DienstKontext {
 
 export type DienstPorts = Pick<DienstKontext, 'uhr' | 'personen' | 'ablage'>;
 
+/**
+ * Kontext der Systemoperationen (Stufe 4: Nachrichten abholen und Zustellung
+ * melden). Nur der Systemakteur; keine Namensauflösung und keine Ablage, weil
+ * Systemoperationen weder Personen anzeigen noch Nachweise annehmen. Jede
+ * Systemoperation prüft die Art zusätzlich selbst (fail closed).
+ */
+export interface SystemKontext {
+  tx: Tx;
+  akteur: SystemAkteur;
+  uhr: Uhr;
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function uuid(wert: unknown): string {
@@ -184,4 +196,19 @@ export async function imDienst<T>(
   // Vor der Transaktion: Ein Systemakteur öffnet für Personenoperationen keine.
   const a = personAkteur(akteur);
   return mitTenant(a.tenantId, (tx) => fn({ tx, akteur: a, ...ports }), opts);
+}
+
+/**
+ * Wie `imDienst` für Systemoperationen: genau eine Transaktion im Tenant des
+ * Systemakteurs; jede Person erhält `NICHT_GEFUNDEN`, bevor eine Transaktion
+ * geöffnet wird.
+ */
+export async function imSystemdienst<T>(
+  akteur: Akteur,
+  uhr: Uhr,
+  fn: (ctx: SystemKontext) => Promise<T>,
+  opts?: TenantOptionen,
+): Promise<T> {
+  const a = systemAkteur(akteur);
+  return mitTenant(a.tenantId, (tx) => fn({ tx, akteur: a, uhr }), opts);
 }

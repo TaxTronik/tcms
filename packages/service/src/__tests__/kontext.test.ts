@@ -253,6 +253,63 @@ describe('mitAudit', () => {
     });
   });
 
+  it('kennzeichnet Systemakteure: Präfix im Namen und systemakteur im Detail', async () => {
+    const sys = { tx: { fake: true } as never, akteur: systemAkteur(SYSTEM), uhr: PORTS.uhr };
+    await mitAudit(sys, async () => ({
+      wert: null,
+      protokoll: [
+        { aktion: 'tcms.test.s', objektTyp: 'X', objektId: '4', programmId: null },
+        {
+          aktion: 'tcms.test.t',
+          objektTyp: 'X',
+          objektId: '5',
+          programmId: null,
+          detail: { k: 1 },
+        },
+      ],
+    }));
+    expect(aufrufe.schreibeAudit[0]![1]).toEqual({
+      actorId: SYSTEM.id,
+      actorName: 'System: Zustellung kanzleikonsole',
+      aktion: 'tcms.test.s',
+      objektTyp: 'X',
+      objektId: '4',
+      programmId: null,
+      detail: { systemakteur: true },
+    });
+    expect(aufrufe.schreibeAudit[1]![1]).toMatchObject({ detail: { k: 1, systemakteur: true } });
+    // Höchstlänge des Vertrags (200) auch mit Präfix.
+    const lang = { ...sys, akteur: systemAkteur({ ...SYSTEM, name: 'x'.repeat(200) }) };
+    await mitAudit(lang, async () => ({
+      wert: null,
+      protokoll: { aktion: 'tcms.test.u', objektTyp: 'X', objektId: '6', programmId: null },
+    }));
+    const name = (aufrufe.schreibeAudit[2]![1] as { actorName: string }).actorName;
+    expect(name.startsWith('System: ')).toBe(true);
+    expect(name).toHaveLength(200);
+  });
+
+  it('Personen tragen keine Systemkennzeichnung; eine Operation kann sie nicht setzen', async () => {
+    await mitAudit(ctx(), async () => ({
+      wert: null,
+      protokoll: { aktion: 'tcms.test.p', objektTyp: 'X', objektId: '7', programmId: null },
+    }));
+    expect(aufrufe.schreibeAudit[0]![1]).toMatchObject({ actorName: AKTEUR.name, detail: {} });
+    await expect(
+      mitAudit(ctx(), async () => ({
+        wert: null,
+        protokoll: {
+          aktion: 'tcms.test.q',
+          objektTyp: 'X',
+          objektId: '8',
+          programmId: null,
+          detail: { systemakteur: true },
+        },
+      })),
+    ).rejects.toThrow(/reserviert/);
+    expect(aufrufe.schreibeAudit).toHaveLength(1);
+  });
+
   it('weist eine Änderung ohne Protokoll ab', async () => {
     await expect(mitAudit(ctx(), async () => ({ wert: 1, protokoll: [] }))).rejects.toThrow(
       /ohne Audit-Eintrag/,

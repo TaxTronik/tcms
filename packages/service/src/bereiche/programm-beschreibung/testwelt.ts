@@ -17,7 +17,14 @@ import {
   type Tx,
 } from '@tcms/db';
 import { verweisAblage } from '../../ablage';
-import { imDienst, keinPersonenVerzeichnis, type DienstKontext, type Uhr } from '../../kontext';
+import {
+  imDienst,
+  imSystemdienst,
+  keinPersonenVerzeichnis,
+  type DienstKontext,
+  type SystemKontext,
+  type Uhr,
+} from '../../kontext';
 
 export const TEST_UHR: Uhr = {
   jetzt: () => new Date('2026-10-19T09:00:00.000Z'),
@@ -142,6 +149,21 @@ export const btA = (w: Welt) =>
 export const hbA = (w: Welt) => kanzlei(w, w.hb, w.mandantA, { hb: true });
 /** Kanzleiperson mit Bezug zu A, aber ohne Bearbeitungsrecht. */
 export const ohneRechtA = (w: Welt) => kanzlei(w, w.dritte, w.mandantA);
+
+/** Systemakteur der kanzleikonsole (Zustell-Worker) im Tenant der Welt. */
+export function system(w: Welt, tenantId = w.tenantId, id = SYSTEM_ID): Akteur {
+  return { art: 'SYSTEM', tenantId, id, name: 'Zustellung kanzleikonsole' };
+}
+export const SYSTEM_ID = '5ee5ee5e-5555-4555-8555-555555555555';
+
+/** Systemoperation in genau einer Transaktion (wie der Dienst mit `systemKontext`). */
+export function imSystem<T>(
+  a: Akteur,
+  fn: (ctx: SystemKontext) => Promise<T>,
+  client?: PrismaClient,
+): Promise<T> {
+  return imSystemdienst(a, TEST_UHR, fn, client ? { client } : undefined);
+}
 
 export function im<T>(
   a: Akteur,

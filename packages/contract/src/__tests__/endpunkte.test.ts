@@ -139,6 +139,16 @@ describe('Endpunktregister', () => {
     expect(ENDPUNKTE.kontextLesen.akteure).toEqual(['KANZLEI']);
   });
 
+  it('lässt den Systemakteur genau an die zwei Nachrichten-Endpunkte, an keinen anderen', () => {
+    const mitSystem = ENDPUNKT_LISTE.filter((e) => e.akteure.includes('SYSTEM')).map((e) => e.name);
+    expect(mitSystem.sort()).toEqual(['nachrichtZugestelltMelden', 'nachrichtenOffenLesen']);
+    expect(ENDPUNKTE.nachrichtenOffenLesen.akteure).toEqual(['SYSTEM']);
+    expect(ENDPUNKTE.nachrichtZugestelltMelden.akteure).toEqual(['SYSTEM']);
+    for (const e of ENDPUNKT_LISTE) {
+      if (!mitSystem.includes(e.name)) expect(e.akteure, e.name).not.toContain('SYSTEM');
+    }
+  });
+
   it('weist falsch definierte Akteursarten beim Laden ab (fail closed)', () => {
     const M = '/v1/mandanten/:mandantId/x';
     const fehler: [string, boolean, unknown[] | undefined, RegExp][] = [

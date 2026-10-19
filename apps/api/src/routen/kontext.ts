@@ -2,14 +2,18 @@
 // Dienstkontext einer Route: Transaktion und Akteur aus der Prüfkette, echte
 // Uhr, keine Namensauflösung (die kanzleikonsole löst Namen auf) und eine
 // Nachweisablage, die nur Verweise der kanzleikonsole annimmt (ADR 0001 §6).
+// Personen und Systemakteur bekommen getrennte Kontexte: `dienstKontext` nur
+// für Personen, `systemKontext` nur für den Systemakteur (ADR 0001 §3.2).
 // =============================================================================
 import type { Tx } from '@tcms/db';
 import {
   echteUhr,
   keinPersonenVerzeichnis,
   personAkteur,
+  systemAkteur,
   verweisAblage,
   type DienstKontext,
+  type SystemKontext,
 } from '@tcms/service';
 import type { RoutenKontext } from '../routen';
 
@@ -26,4 +30,12 @@ export function dienstKontext(ctx: RoutenKontext<Tx, unknown, unknown>): DienstK
     personen: keinPersonenVerzeichnis,
     ablage: verweisAblage,
   };
+}
+
+/**
+ * Kontext einer Systemoperation (Nachrichten abholen, Zustellung melden). Jede
+ * Person – auch ein Admin – erhält `NICHT_GEFUNDEN`, bevor die Operation läuft.
+ */
+export function systemKontext(ctx: RoutenKontext<Tx, unknown, unknown>): SystemKontext {
+  return { tx: ctx.tx, akteur: systemAkteur(ctx.akteur), uhr: echteUhr };
 }

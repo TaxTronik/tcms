@@ -8,9 +8,11 @@
 // Bestätigungscode im Klartext enthalten, der nach der Zustellung nicht im
 // Tax-CMS liegen bleiben soll; der Vorgang steht im Audit (ohne Text).
 //
-// Lesen und Bestätigen nur für Kanzleipersonen mit Verwaltungsrecht
-// (`kannVerwalten`), tenantweit über RLS. Codes erscheinen in keiner anderen
-// Antwort und in keinem Audit-Detail.
+// Abholen und Bestätigen ausschließlich durch den Systemakteur der
+// kanzleikonsole (`SystemKontext`, Stufe 4): Der Zustell-Worker ist keine
+// Person, und keine Person – auch kein Admin – liest den Postausgang über den
+// Dienst. Tenantweit über RLS. Codes erscheinen in keiner anderen Antwort und
+// in keinem Audit-Detail.
 // =============================================================================
 
 import {
@@ -26,8 +28,7 @@ import {
 } from '@tcms/contract';
 import type { Prisma, Tx } from '@tcms/db';
 import { mitAudit } from '../../audit';
-import type { DienstKontext } from '../../kontext';
-import { kannVerwalten } from '../../rechte';
+import type { SystemKontext } from '../../kontext';
 import { pruefeEingabe } from './gemeinsam';
 
 // Typprüfung: Der Datenbank-Enum ist genau die Liste des Vertrags.
@@ -71,9 +72,14 @@ export async function legeNachrichtAn(
   return z.id;
 }
 
-function brauchtVerwaltung(ctx: DienstKontext): void {
-  // Ohne Verwaltungsrecht: wie ein unbekannter Pfad (kein Hinweis auf Inhalte).
-  if (!kannVerwalten(ctx.akteur)) throw new DienstFehler('NICHT_GEFUNDEN');
+/**
+ * Nur der Systemakteur (dritte Schicht nach Routentabelle und `systemKontext`):
+ * Personen erhalten `NICHT_GEFUNDEN` wie ein unbekannter Pfad, auch wenn ein
+ * Aufrufer einen `DienstKontext` unterschiebt. Vor jedem Datenzugriff.
+ */
+function brauchtSystem(ctx: SystemKontext): void {
+  const a = (ctx as { akteur?: { art?: unknown } } | null)?.akteur;
+  if (a?.art !== 'SYSTEM') throw new DienstFehler('NICHT_GEFUNDEN');
 }
 
 /**
@@ -82,11 +88,11 @@ function brauchtVerwaltung(ctx: DienstKontext): void {
  * können Bestätigungscodes enthalten.
  */
 export async function ladeOffeneNachrichten(
-  ctx: DienstKontext,
+  ctx: SystemKontext,
   eingabe: NachrichtenOffenEingabe,
 ): Promise<{ nachrichten: OffeneNachricht[] }> {
+  brauchtSystem(ctx);
   const e = pruefeEingabe(NachrichtenOffenEingabeSchema, eingabe);
-  brauchtVerwaltung(ctx);
   const limit = e.limit ?? STANDARD_NACHRICHTEN_LIMIT;
   const zeilen = await ctx.tx.nachricht.findMany({
     where: { zugestelltAm: null },
@@ -115,22 +121,27 @@ export async function ladeOffeneNachrichten(
 }
 
 /**
- * Zustellung bestätigen (idempotent): `zugestelltAm` wird gesetzt und der Text
- * geleert; eine bereits bestätigte oder unbekannte ID ändert nichts und
- * liefert dasselbe Ergebnis (kein Existenz-Orakel, keine Wiederholungsfehler).
+ * Zustellung bestätigen: `zugestelltAm` wird gesetzt und der Text geleert.
+ * Idempotent für Nachrichten des eigenen Tenants (eine bereits bestätigte
+ * liefert dasselbe Ergebnis ohne zweites Audit). Unbekannte IDs und
+ * Nachrichten anderer Tenants (RLS: unsichtbar) → `NICHT_GEFUNDEN`; das
+ * verrät nichts über andere Tenants, und der Systemakteur sieht die Nachrichten
+ * seines Tenants ohnehin.
  */
 export async function bestaetigeNachrichtZustellung(
-  ctx: DienstKontext,
+  ctx: SystemKontext,
   eingabe: NachrichtZugestelltEingabe,
 ): Promise<NachrichtZugestelltErgebnis> {
+  brauchtSystem(ctx);
   const e = pruefeEingabe(NachrichtZugestelltEingabeSchema, eingabe);
-  brauchtVerwaltung(ctx);
   const ergebnis: NachrichtZugestelltErgebnis = { nachrichtId: e.nachrichtId, zugestellt: true };
-  const zeile = await ctx.tx.nachricht.findFirst({
-    where: { id: e.nachrichtId, zugestelltAm: null },
-    select: { id: true, zweck: true, empfaengerId: true },
+  const vorhanden = await ctx.tx.nachricht.findFirst({
+    where: { id: e.nachrichtId },
+    select: { id: true, zugestelltAm: true, zweck: true, empfaengerId: true },
   });
-  if (!zeile) return ergebnis;
+  if (!vorhanden) throw new DienstFehler('NICHT_GEFUNDEN');
+  if (vorhanden.zugestelltAm) return ergebnis;
+  const zeile = vorhanden;
   // Bedingt: Bei gleichzeitiger Bestätigung setzt genau eine Anfrage die Zustellung,
   // die andere findet unter der Zeilensperre keine offene Zeile mehr.
   const r = await ctx.tx.nachricht.updateMany({
