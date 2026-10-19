@@ -71,9 +71,10 @@ describe.skipIf(!AKTIV)('Kontrollen: Fachoperationen', () => {
   async function rechteNegativ(
     lauf: (ctx: DienstKontext, mandantId: string) => Promise<unknown>,
   ): Promise<void> {
-    expect((await fehlerVon(rufe(akt.leser, (ctx) => lauf(ctx, a.mandantId)))).code).toBe(
-      'NICHT_BERECHTIGT',
-    );
+    expect(await fehlerVon(rufe(akt.leser, (ctx) => lauf(ctx, a.mandantId)))).toMatchObject({
+      code: 'NICHT_BERECHTIGT',
+      grund: 'BEARBEITEN',
+    });
     for (const akteur of [
       kanzlei(tenant, a.personen.bt, b.mandantId, { admin: true, bt: true, zustaendig: true }),
       kontakt(tenant, a.personen.gv, a.mandantId),
@@ -264,7 +265,7 @@ describe.skipIf(!AKTIV)('Kontrollen: Fachoperationen', () => {
           }),
         ),
       );
-      expect(selbst.code).toBe('NICHT_BERECHTIGT');
+      expect([selbst.code, selbst.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       // Eine Designänderung durch die beantragende Person ändert den Antragsteller nicht.
       const zwischen = await rufe(akt.bt, (ctx) =>
         designBeurteilen(ctx, {
@@ -298,7 +299,7 @@ describe.skipIf(!AKTIV)('Kontrollen: Fachoperationen', () => {
           }),
         ),
       );
-      expect(nochSelbst.code).toBe('NICHT_BERECHTIGT');
+      expect([nochSelbst.code, nochSelbst.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
 
       const frei = await rufe(akt.bt, (ctx) =>
         frequenzAbweichungEntscheiden(ctx, {

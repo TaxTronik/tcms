@@ -48,6 +48,7 @@ describe.skipIf(!AKTIV)('Endpunkte CMS-Beschreibung und Freigaben (App + Postgre
     expect(selbst.status).toBe(403);
     expect((await json(selbst))['fehler']).toMatchObject({
       code: 'NICHT_BERECHTIGT',
+      grund: 'VIER_AUGEN',
       meldung: expect.stringContaining('zweite Person'),
     });
     await ok(await senden(w, 'POST', `${V}/review/abschliessen`, a.bt()));

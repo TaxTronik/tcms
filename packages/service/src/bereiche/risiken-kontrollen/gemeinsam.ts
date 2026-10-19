@@ -15,7 +15,7 @@
 // Programm → Risiken (nach ID) → Kontrollen (nach ID) → Durchführungen.
 // =============================================================================
 
-import { DienstFehler, type Akteur } from '@tcms/contract';
+import { DienstFehler, nichtBerechtigt, type Akteur } from '@tcms/contract';
 import type { Tx } from '@tcms/db';
 import type { DienstKontext } from '../../kontext';
 import { kannBearbeiten, kannLesen } from '../../rechte';
@@ -63,7 +63,7 @@ export function pruefeStaffLesen(a: Akteur, mandantId: string): void {
 /** Bearbeiten: wie Lesen, zusätzlich `kannBearbeiten` (sonst NICHT_BERECHTIGT mit Grund). */
 export function pruefeBearbeiten(a: Akteur, mandantId: string): void {
   pruefeStaffLesen(a, mandantId);
-  if (!kannBearbeiten(a, mandantId)) throw new DienstFehler('NICHT_BERECHTIGT', KEIN_RECHT);
+  if (!kannBearbeiten(a, mandantId)) throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
 }
 
 export interface ProgrammRef {

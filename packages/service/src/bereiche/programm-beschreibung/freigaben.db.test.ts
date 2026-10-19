@@ -207,12 +207,13 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
     );
     expect(gv2).toMatchObject({
       code: 'NICHT_BERECHTIGT',
+      grund: 'PORTAL_ZUGEORDNET',
       message: 'Diese Freigabe ist an eine andere Person gerichtet.',
     });
     const tcb = await fehlerVon(
       im(kontakt(w, w.tcb, w.mandantA), (ctx) => fordereFreigabeCodeAn(ctx, fa(zieleFreigabe))),
     );
-    expect(tcb.code).toBe('NICHT_BERECHTIGT');
+    expect([tcb.code, tcb.grund]).toEqual(['NICHT_BERECHTIGT', 'PORTAL_ROLLE']);
     // Adressiert, aber (nicht mehr) gesetzliche Vertretung: keine Freigabe mit Code.
     const anTcb = await weitereFreigabe('RISIKOAKZEPTANZ', w.tcb);
     const keineGv = await fehlerVon(
@@ -220,6 +221,7 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
     );
     expect(keineGv).toMatchObject({
       code: 'NICHT_BERECHTIGT',
+      grund: 'PORTAL_ROLLE',
       message: 'Freigaben sind der gesetzlichen Vertretung vorbehalten.',
     });
     const ma = await fehlerVon(
@@ -366,7 +368,7 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
         erteileFreigabe(ctx, { ...fa(beschreibungsFreigabe), code }),
       ),
     );
-    expect(f.code).toBe('NICHT_BERECHTIGT');
+    expect([f.code, f.grund]).toEqual(['NICHT_BERECHTIGT', 'PORTAL_ZUGEORDNET']);
     expect((await freigabeZeile(beschreibungsFreigabe)).status).toBe('OFFEN');
   });
 
@@ -494,7 +496,7 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
         bestaetigeKenntnisnahme(ctx, { ...fa(kenntnisTcb), gelesen: true }),
       ),
     );
-    expect(gvF.code).toBe('NICHT_BERECHTIGT');
+    expect([gvF.code, gvF.grund]).toEqual(['NICHT_BERECHTIGT', 'PORTAL_ZUGEORDNET']);
     const maF = await fehlerVon(
       im(kontakt(w, w.ma, w.mandantA), (ctx) =>
         bestaetigeKenntnisnahme(ctx, { ...fa(kenntnisTcb), gelesen: true }),
@@ -538,14 +540,10 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
       expect(f.code, empfaengerId).toBe('UNGUELTIG');
     }
     expect(
-      (
-        await fehlerVon(
-          im(ohneRechtA(w), (ctx) =>
-            adressiereFreigabeNeu(ctx, { ...fa(id), empfaengerId: w.gv2 }),
-          ),
-        )
-      ).code,
-    ).toBe('NICHT_BERECHTIGT');
+      await fehlerVon(
+        im(ohneRechtA(w), (ctx) => adressiereFreigabeNeu(ctx, { ...fa(id), empfaengerId: w.gv2 })),
+      ),
+    ).toMatchObject({ code: 'NICHT_BERECHTIGT', grund: 'BEARBEITEN' });
     for (const lauf of [
       () => im(gv, (ctx) => adressiereFreigabeNeu(ctx, { ...fa(id), empfaengerId: w.gv })),
       () =>
@@ -597,9 +595,10 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
       daten: { freigabeId: id, art: f.art, titel: f.titel, version: null },
     });
     // Die frühere Empfängerin kann nichts mehr tun, die neue schon.
-    expect((await fehlerVon(im(gv, (ctx) => fordereFreigabeCodeAn(ctx, fa(id))))).code).toBe(
-      'NICHT_BERECHTIGT',
-    );
+    expect(await fehlerVon(im(gv, (ctx) => fordereFreigabeCodeAn(ctx, fa(id))))).toMatchObject({
+      code: 'NICHT_BERECHTIGT',
+      grund: 'PORTAL_ZUGEORDNET',
+    });
     await im(kontakt(w, w.gv2, w.mandantA), (ctx) => fordereFreigabeCodeAn(ctx, fa(id)));
     // Kenntnisnahme: an jeden aktiven Kontakt (auch Mitarbeitende).
     const k = await im(btA(w), (ctx) =>

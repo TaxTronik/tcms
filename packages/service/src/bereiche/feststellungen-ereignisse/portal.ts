@@ -7,6 +7,7 @@
 
 import {
   DienstFehler,
+  nichtBerechtigt,
   PortalMeldungenLesenSchema,
   type Akteur,
   PortalMeldungSchema,
@@ -74,7 +75,8 @@ export async function meldeEreignis(
   if (!kannLesen(ctx.akteur, mandantId, rollen)) throw new DienstFehler('NICHT_GEFUNDEN');
   await pruefeMandant(ctx.tx, mandantId);
   if (!darfEreignisMelden(ctx.akteur, mandantId, rollen)) {
-    throw new DienstFehler('NICHT_BERECHTIGT', NUR_GV_TCB);
+    // Kanzleipersonen melden nicht im Portal (andere Seite); Kontakte ohne GV/TCB fehlt die Rolle.
+    throw nichtBerechtigt(ctx.akteur.art === 'MANDANT' ? 'PORTAL_ROLLE' : 'PARTEI', NUR_GV_TCB);
   }
   if (!PORTAL_TYPEN.includes(x.typ)) {
     const text = 'Bitte wählen Sie eine Art des Ereignisses.';

@@ -65,8 +65,9 @@ describe.skipIf(!AKTIV)('Länder-Monitor gegen PostgreSQL', () => {
         (await fehlerVon(im(a, (ctx) => ladeLaender(ctx, { mandantId: w.mandant })))).code,
       ).toBe('NICHT_GEFUNDEN');
     }
-    expect((await fehlerVon(hinzu(A.leser, land('AT')))).code).toBe('NICHT_BERECHTIGT');
-    expect((await fehlerVon(staende(A.leser, [land('AT')]))).code).toBe('NICHT_BERECHTIGT');
+    for (const p of [hinzu(A.leser, land('AT')), staende(A.leser, [land('AT')])]) {
+      expect(await fehlerVon(p)).toMatchObject({ code: 'NICHT_BERECHTIGT', grund: 'BEARBEITEN' });
+    }
     // Programm eines anderen Mandanten bleibt unberührt.
     expect(
       await inTenant(w, (tx) => tx.landStand.count({ where: { programmId: w.programmFremd } })),

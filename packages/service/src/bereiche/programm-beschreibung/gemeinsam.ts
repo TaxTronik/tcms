@@ -12,7 +12,7 @@
 //     Mandanten (RLS trennt nur Tenants, nicht Mandanten).
 // =============================================================================
 
-import { DienstFehler } from '@tcms/contract';
+import { DienstFehler, nichtBerechtigt } from '@tcms/contract';
 import { Prisma, type Tx } from '@tcms/db';
 import type { DienstKontext } from '../../kontext';
 import { kannBearbeiten, kannLesen, type KontaktRolle } from '../../rechte';
@@ -70,7 +70,7 @@ export async function kanzleiZugriff(
   });
   if (!mandant) return nichtGefunden();
   if (bearbeiten && !kannBearbeiten(a, mandantId)) {
-    throw new DienstFehler('NICHT_BERECHTIGT', KEIN_RECHT);
+    throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
   }
   return mandant;
 }

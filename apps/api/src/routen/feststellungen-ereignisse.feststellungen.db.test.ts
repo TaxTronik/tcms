@@ -244,6 +244,7 @@ describe.skipIf(!AKTIV)('API Feststellungen gegen PostgreSQL', () => {
       fehler: {
         code: 'NICHT_BERECHTIGT',
         meldung: 'Dieser Schritt ist Berufsträger:innen vorbehalten.',
+        grund: 'WUERDIGEN',
       },
     });
     expect((await rufe(ZBT, 'POST', `${B}/feststellungen/${f.id}/p153`, body)).status).toBe(200);
@@ -263,7 +264,10 @@ describe.skipIf(!AKTIV)('API Feststellungen gegen PostgreSQL', () => {
     const ziel = `${B}/feststellungen/${f.id}/verwerfen/bestaetigen`;
     const hb = await rufe(HB, 'POST', ziel);
     expect(hb.status).toBe(403);
-    expect(hb.json).toMatchObject({ ok: false, fehler: { code: 'NICHT_BERECHTIGT' } });
+    expect(hb.json).toMatchObject({
+      ok: false,
+      fehler: { code: 'NICHT_BERECHTIGT', grund: 'WUERDIGEN' },
+    });
     expect(String((hb.json['fehler'] as { meldung?: string }).meldung)).toMatch(/§ 153/);
     const nein = await feststellung({
       auswirkung: 'NEIN',

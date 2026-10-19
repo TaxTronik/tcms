@@ -580,6 +580,7 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
       fehler: {
         code: 'NICHT_BERECHTIGT',
         meldung: 'Gegenzeichnung muss durch eine andere Person erfolgen (Vier-Augen-Prinzip)',
+        grund: 'VIER_AUGEN',
       },
     });
     expect((await senden('POST', `${D(did)}/gegenzeichnen`, C.pruefer, {})).status).toBe(200);

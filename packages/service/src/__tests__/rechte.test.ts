@@ -383,7 +383,11 @@ describe('Durchführen', () => {
 describe('Gegenzeichnen (Vier-Augen)', () => {
   it('die durchführende Person kann nie gegenzeichnen – auch nicht in anderer Schreibweise', () => {
     const r = kannGegenzeichnen(BT_ZUST, K_KANZLEI, M1, BT_ZUST.id);
-    expect(r).toEqual({ erlaubt: false, grund: expect.stringContaining('andere Person') });
+    expect(r).toEqual({
+      erlaubt: false,
+      grund: expect.stringContaining('andere Person'),
+      verweigerung: 'VIER_AUGEN',
+    });
     expect(kannGegenzeichnen(BT_ZUST, K_KANZLEI, M1, BT_ZUST.id.toUpperCase()).erlaubt).toBe(false);
     expect(kannGegenzeichnen(BT_ZUST, K_KANZLEI, M1, HB.id).erlaubt).toBe(true);
   });
@@ -397,6 +401,10 @@ describe('Gegenzeichnen (Vier-Augen)', () => {
     // zugewiesene Gegenzeichnung, aber cli auf anderen Mandanten
     const fremd = kanzlei(BT_ZUST.id, { bt: true, cli: { id: M2, bt: true } });
     expect(kannGegenzeichnen(fremd, K_KANZLEI, M1, HB.id).erlaubt).toBe(false);
+    // Verweigerungsgrund: die Rechtefunktion selbst.
+    for (const a of [BT_OHNE_ZUST, KANZLEI_OHNE, ADMIN_OHNE_CLI, ADMIN_FREMD, fremd]) {
+      expect(kannGegenzeichnen(a, K_KANZLEI, M1, HB.id).verweigerung, a.id).toBe('GEGENZEICHNEN');
+    }
   });
 
   it('Mandanten-Gegenzeichnung: zweite Person des Mandanten mit aktiver Rolle, danach Kanzlei', () => {
@@ -414,6 +422,15 @@ describe('Gegenzeichnen (Vier-Augen)', () => {
     expect(kannGegenzeichnen(BT_ZUST, K_MANDANT, M1, TCB.id, true).erlaubt).toBe(true);
     // Mandantenkontakt bei Kanzlei-Gegenzeichnung
     expect(kannGegenzeichnen(MA, K_KANZLEI, M1, HB.id, false, ROLLEN).erlaubt).toBe(false);
+    // Verweigerungsgründe
+    const v = (...a: Parameters<typeof kannGegenzeichnen>) => kannGegenzeichnen(...a).verweigerung;
+    expect(v(TCB, K_MANDANT, M1, TCB.id, false, ROLLEN)).toBe('VIER_AUGEN');
+    for (const a of [OHNE_ROLLE, DEAKTIVIERT, FREMDER_KONTAKT]) {
+      expect(v(a, K_MANDANT, M1, TCB.id, false, ROLLEN), a.id).toBe('PORTAL_ROLLE');
+    }
+    expect(v(BT_ZUST, K_MANDANT, M1, TCB.id, false)).toBe('GEGENZEICHNEN');
+    expect(v(MA, K_KANZLEI, M1, HB.id, false, ROLLEN)).toBe('PARTEI');
+    expect(v(BT_ZUST, K_MANDANT, M1, TCB.id, true)).toBe(null);
   });
 
   it('zweite Person: verschieden von der beantragenden, beantragt muss gesetzt sein', () => {
@@ -431,6 +448,7 @@ describe('Verwerfen einer Feststellung bestätigen (Regeln 4 und 5)', () => {
       const r = kannVerwerfenBestaetigen(BT_ZUST, M1, BT_ZUST.id.toUpperCase(), a);
       expect(r.erlaubt, a).toBe(false);
       expect(r.grund).toMatch(/zweite Person/);
+      expect(r.verweigerung).toBe('VIER_AUGEN');
       expect(kannVerwerfenBestaetigen(BT_ZUST, M1, null, a).erlaubt).toBe(false);
     }
   });
@@ -441,10 +459,12 @@ describe('Verwerfen einer Feststellung bestätigen (Regeln 4 und 5)', () => {
         const r = kannVerwerfenBestaetigen(ohne, M1, BT_ZUST.id, a);
         expect(r.erlaubt, `${a} ${ohne.id}`).toBe(false);
         expect(r.grund).toMatch(/§ 153/);
+        expect(r.verweigerung).toBe('WUERDIGEN');
       }
       expect(kannVerwerfenBestaetigen(ADMIN_BT, M1, BT_ZUST.id, a)).toEqual({
         erlaubt: true,
         grund: null,
+        verweigerung: null,
       });
       expect(kannVerwerfenBestaetigen(BT_ZUST, M1, HB.id, a).erlaubt).toBe(true);
     }

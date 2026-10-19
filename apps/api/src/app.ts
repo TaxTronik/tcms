@@ -299,6 +299,12 @@ function fehlerAntwort(
     const f: Fehler = { code: e.code };
     if (e.message !== e.code) f.meldung = e.message.slice(0, MAX_MELDUNG);
     if (e.felder) f.felder = begrenzeFelder(Object.entries(e.felder));
+    // Maschinenlesbarer Grund nur bei 403 (DienstFehler erzwingt das); feste
+    // Werte aus VERWEIGERUNG_GRUENDE, daher auch im Log zulässig.
+    if (e.grund !== undefined) {
+      f.grund = e.grund;
+      felder.verweigerung = e.grund;
+    }
     felder.fehler = e.code;
     // Nach 413 immer schließen, auch ohne angekündigte Länge (gestreamter Body).
     return fehler(FEHLER_STATUS[e.code], f, requestId, e.code === 'ZU_GROSS' ? SCHLIESSEN : zusatz);

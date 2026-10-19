@@ -9,6 +9,7 @@
 
 import {
   DienstFehler,
+  nichtBerechtigt,
   LaenderLesenSchema,
   LandHinzufuegenSchema,
   LandStaendeSchema,
@@ -368,8 +369,7 @@ function vorpruefung(ctx: DienstKontext, mandantId: string, datenstandIso: strin
 /** In der Transaktion: Mandant sichtbar, Bearbeitungsrecht, Programm gesperrt (TS-05). */
 async function sperreZumErfassen(ctx: DienstKontext, mandantId: string): Promise<string> {
   await pruefeMandant(ctx.tx, mandantId);
-  if (!kannBearbeiten(ctx.akteur, mandantId))
-    throw new DienstFehler('NICHT_BERECHTIGT', KEIN_RECHT);
+  if (!kannBearbeiten(ctx.akteur, mandantId)) throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
   return sperreProgramm(ctx.tx, mandantId);
 }
 

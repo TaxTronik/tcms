@@ -107,7 +107,7 @@ describe.skipIf(!AKTIV)('Portal-Übersicht gegen PostgreSQL', () => {
 
   it('Kanzleipersonen und ungültige Eingaben', async () => {
     const k = await fehlerVon(lade(kanzlei(DEMO_IDS.anna, T, { admin: true, zustaendig: true })));
-    expect(k.code).toBe('NICHT_BERECHTIGT');
+    expect([k.code, k.grund]).toEqual(['NICHT_BERECHTIGT', 'PARTEI']);
     const f = await fehlerVon(
       im(kontakt(DEMO_IDS.jana, T), (ctx) =>
         ladePortalUebersicht(ctx, { mandantId: T, x: 1 } as unknown as PortalUebersichtEingabe),

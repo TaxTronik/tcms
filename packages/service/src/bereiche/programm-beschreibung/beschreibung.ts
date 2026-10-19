@@ -25,6 +25,7 @@ import {
   BeschreibungVersionAktionEingabeSchema,
   BeschreibungVersionAnlegenEingabeSchema,
   DienstFehler,
+  nichtBerechtigt,
   ReviewZurueckweisenEingabeSchema,
   type AbschnittSpeichernEingabe,
   type BeschreibungFreigabeAnfordernEingabe,
@@ -427,8 +428,8 @@ export async function schliesseBeschreibungsreviewAb(
   // ermittelbare Bearbeitung kein Abschluss (fail closed).
   const letzte = await letzteBearbeitungVon(ctx.tx, v);
   if (!letzte || gleicheId(letzte, ctx.akteur.id)) {
-    throw new DienstFehler(
-      'NICHT_BERECHTIGT',
+    throw nichtBerechtigt(
+      'VIER_AUGEN',
       'Die Review schließt eine zweite Person ab – nicht die letzte Bearbeitung des Textes.',
     );
   }

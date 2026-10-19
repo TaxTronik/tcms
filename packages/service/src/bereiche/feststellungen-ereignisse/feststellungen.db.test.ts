@@ -251,6 +251,10 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
       }
       const e = await fehlerVon(p);
       expect(e.code).toBe('NICHT_BERECHTIGT');
+      // §-153 und Vertraulichkeit: kannWuerdigen; alles andere: kannBearbeiten.
+      expect(e.grund).toBe(
+        op.name === 'p153' || op.name === 'vertraulich' ? 'WUERDIGEN' : 'BEARBEITEN',
+      );
       expect(e.message.length).toBeGreaterThan(10);
       expect(await auditZahl(w, f.id)).toBe(0);
     });
@@ -415,6 +419,7 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
       );
       expect(e).toMatchObject({
         code: 'NICHT_BERECHTIGT',
+        grund: 'WUERDIGEN',
         message: 'Dieser Schritt ist Berufsträger:innen vorbehalten.',
       });
     }
@@ -549,7 +554,7 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
         );
       for (const a of [A.hb, A.adminOhneBt]) {
         const e = await fehlerVon(herab(a));
-        expect(e.code).toBe('NICHT_BERECHTIGT');
+        expect([e.code, e.grund]).toEqual(['NICHT_BERECHTIGT', 'WUERDIGEN']);
         expect(e.message).toMatch(/Berufsträger/);
       }
       const nachher = await inTenant(w, (tx) =>
@@ -703,7 +708,10 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
         }),
       );
     await expect(erledige(A.leser, m.id)()).resolves.toMatchObject({ id: m.id });
-    expect((await fehlerVon(erledige(A.leser, n.id)())).code).toBe('NICHT_BERECHTIGT');
+    expect(await fehlerVon(erledige(A.leser, n.id)())).toMatchObject({
+      code: 'NICHT_BERECHTIGT',
+      grund: 'BEARBEITEN',
+    });
     for (let runde = 0; runde < 3; runde++) {
       const x = await neueMassnahme(w, f.id, w.p.zbt);
       expect(
@@ -762,6 +770,7 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
       );
       expect(e).toMatchObject({
         code: 'NICHT_BERECHTIGT',
+        grund: 'VIER_AUGEN',
         message: 'Die Bestätigung muss durch eine zweite Person erfolgen.',
       });
     }
@@ -790,6 +799,7 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
           ),
         );
         expect(e.code, `${auswirkung} als ${a.id}`).toBe('NICHT_BERECHTIGT');
+        expect(e.grund).toBe('WUERDIGEN');
         expect(e.message).toMatch(/Berufsträger.*§ 153/);
       }
       const x = await inTenant(w, (tx) =>
@@ -865,18 +875,16 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
     const f = await neueFeststellung(w);
     for (const a of [A.hb, A.adminOhneBt, A.leser]) {
       expect(
-        (
-          await fehlerVon(
-            im(a, (ctx) =>
-              setzeVertraulich(ctx, {
-                mandantId: w.mandant,
-                feststellungId: f.id,
-                vertraulich: true,
-              }),
-            ),
-          )
-        ).code,
-      ).toBe('NICHT_BERECHTIGT');
+        await fehlerVon(
+          im(a, (ctx) =>
+            setzeVertraulich(ctx, {
+              mandantId: w.mandant,
+              feststellungId: f.id,
+              vertraulich: true,
+            }),
+          ),
+        ),
+      ).toMatchObject({ code: 'NICHT_BERECHTIGT', grund: 'WUERDIGEN' });
     }
     await expect(
       im(A.zbt, (ctx) =>
@@ -1067,7 +1075,10 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
       auswirkung: 'NEIN',
       auswirkungHerabgestuft: false,
     });
-    expect((await fehlerVon(erfasse(A.leser))).code).toBe('NICHT_BERECHTIGT');
+    expect(await fehlerVon(erfasse(A.leser))).toMatchObject({
+      code: 'NICHT_BERECHTIGT',
+      grund: 'BEARBEITEN',
+    });
   });
 
   it('erfassen: Risiken und Durchführung anderer Mandanten → NICHT_GEFUNDEN; Durchführung nur bei Quelle Kontrolle', async () => {

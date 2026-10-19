@@ -189,6 +189,7 @@ describe.skipIf(!AKTIV)('API risiken-kontrollen gegen PostgreSQL', () => {
     const leser = await rufe('POST', p(a, `/risiken/${r.id}/neu-bewerten`), wer(a, 'leser'), body);
     expect(leser.status).toBe(403);
     expect((leser.antwort as { fehler: { meldung?: string } }).fehler.meldung).toBeTruthy();
+    expect(leser.antwort).toMatchObject({ fehler: { grund: 'BEARBEITEN' } });
     const ok = await rufe('POST', p(a, `/risiken/${r.id}/neu-bewerten`), wer(a, 'hb'), body);
     expect(ok.status).toBe(200);
     const e = erwarte(NeuBewertungErgebnisSchema, ok.antwort);
@@ -227,6 +228,7 @@ describe.skipIf(!AKTIV)('API risiken-kontrollen gegen PostgreSQL', () => {
     await ungueltig(pfad, { entscheidung: 'ABLEHNEN' });
     const selbst = await rufe('POST', p(a, pfad), wer(a, 'hb'), { entscheidung: 'FREIGEBEN' });
     expect(selbst.status).toBe(403);
+    expect(selbst.antwort).toMatchObject({ fehler: { grund: 'VIER_AUGEN' } });
     const ok = await rufe('POST', p(a, pfad), wer(a, 'bt'), { entscheidung: 'FREIGEBEN' });
     expect(erwarte(UebersteuerungEntschiedenSchema, ok.antwort).status).toBe('FREIGEGEBEN');
   });
@@ -255,6 +257,7 @@ describe.skipIf(!AKTIV)('API risiken-kontrollen gegen PostgreSQL', () => {
       risikoIds: [r1.id],
     });
     expect(selbst.status).toBe(403);
+    expect(selbst.antwort).toMatchObject({ fehler: { grund: 'VIER_AUGEN' } });
     const frei = await rufe('POST', p(a, '/risiken-freigabe/freigeben'), wer(a, 'bt'), {
       risikoIds: [r1.id],
     });
@@ -359,6 +362,7 @@ describe.skipIf(!AKTIV)('API risiken-kontrollen gegen PostgreSQL', () => {
       ebody,
     );
     expect(selbst.status).toBe(403);
+    expect(selbst.antwort).toMatchObject({ fehler: { grund: 'VIER_AUGEN' } });
     const frei = await rufe(
       'POST',
       p(a, `/kontrollen/${k.id}/abweichung/entscheiden`),

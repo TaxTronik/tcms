@@ -62,9 +62,10 @@ describe.skipIf(!AKTIV)('Geschäftsprofil: Fachoperationen', () => {
   async function rechteNegativ(
     lauf: (ctx: DienstKontext, mandantId: string) => Promise<unknown>,
   ): Promise<void> {
-    expect((await fehlerVon(rufe(akt.leser, (ctx) => lauf(ctx, a.mandantId)))).code).toBe(
-      'NICHT_BERECHTIGT',
-    );
+    expect(await fehlerVon(rufe(akt.leser, (ctx) => lauf(ctx, a.mandantId)))).toMatchObject({
+      code: 'NICHT_BERECHTIGT',
+      grund: 'BEARBEITEN',
+    });
     for (const akteur of [
       kanzlei(tenant, a.personen.bt, b.mandantId, { admin: true, bt: true, zustaendig: true }),
       kontakt(tenant, a.personen.gv, a.mandantId),

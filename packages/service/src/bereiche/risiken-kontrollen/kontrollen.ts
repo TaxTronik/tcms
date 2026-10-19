@@ -18,6 +18,7 @@ import {
   AbweichungEntscheidenSchema,
   DesignBeurteilenSchema,
   DienstFehler,
+  nichtBerechtigt,
   VerantwortlicheAendernSchema,
   type AbweichungAufheben,
   type AbweichungBeantragen,
@@ -272,7 +273,7 @@ export async function frequenzAbweichungEntscheiden(
       });
       const antrag = antragDerAbweichung(staende);
       if (!zweitePerson(ctx.akteur, antrag.von)) {
-        throw new DienstFehler('NICHT_BERECHTIGT', ZWEITE_PERSON);
+        throw nichtBerechtigt('VIER_AUGEN', ZWEITE_PERSON);
       }
       const ziel: Frequenz = {
         turnus: alt.abweichungTurnus!,

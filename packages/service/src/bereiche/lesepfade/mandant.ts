@@ -11,6 +11,7 @@
 
 import {
   DienstFehler,
+  nichtBerechtigt,
   MandantAnkerAntwortSchema,
   MandantAnkerEingabeSchema,
   type Akteur,
@@ -30,8 +31,8 @@ import { antwortNach, pruefeEingabe } from './hilfen';
 export function brauchtBearbeitung(a: Akteur, mandantId: string, was: string): void {
   if (kannBearbeiten(a, mandantId)) return;
   if (a.art !== 'KANZLEI' || !kannLesen(a, mandantId)) throw new DienstFehler('NICHT_GEFUNDEN');
-  throw new DienstFehler(
-    'NICHT_BERECHTIGT',
+  throw nichtBerechtigt(
+    'BEARBEITEN',
     `${was} ist zuständigen Personen der Kanzlei oder Admins vorbehalten.`,
   );
 }

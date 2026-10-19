@@ -148,7 +148,7 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
     const gross = kanzlei(w, w.hb.toUpperCase(), w.mandantA, { hb: true });
     for (const a of [hbA(w), gross]) {
       const f = await fehlerVon(im(a, (ctx) => schliesseBeschreibungsreviewAb(ctx, v(erste))));
-      expect(f.code).toBe('NICHT_BERECHTIGT');
+      expect([f.code, f.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       expect(f.message).toContain('zweite Person');
     }
     const ok = await im(btA(w), (ctx) => schliesseBeschreibungsreviewAb(ctx, v(erste)));
@@ -313,7 +313,10 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
         ),
       () => im(ohneRechtA(w), (ctx) => fordereBeschreibungsfreigabeAn(ctx, anfordern(n.id))),
     ]) {
-      expect((await fehlerVon(lauf())).code).toBe('NICHT_BERECHTIGT');
+      expect(await fehlerVon(lauf())).toMatchObject({
+        code: 'NICHT_BERECHTIGT',
+        grund: 'BEARBEITEN',
+      });
     }
     const lesen = await im(ohneRechtA(w), (ctx) =>
       ladeBeschreibung(ctx, { mandantId: w.mandantA }),

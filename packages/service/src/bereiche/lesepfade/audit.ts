@@ -21,6 +21,7 @@ import {
   AuditPruefenAntwortSchema,
   AuditPruefenEingabeSchema,
   DienstFehler,
+  nichtBerechtigt,
   type AuditListeAntwort,
   type AuditListeEingabe,
   type AuditPruefenAntwort,
@@ -39,7 +40,7 @@ export const PRUEF_ZEITBUDGET_MS = 20_000;
 
 function nurAdmin(ctx: DienstKontext): void {
   if (!kannVerwalten(ctx.akteur)) {
-    throw new DienstFehler('NICHT_BERECHTIGT', 'Das Audit ist Admins/Partnern vorbehalten.');
+    throw nichtBerechtigt('VERWALTUNG', 'Das Audit ist Admins/Partnern vorbehalten.');
   }
 }
 

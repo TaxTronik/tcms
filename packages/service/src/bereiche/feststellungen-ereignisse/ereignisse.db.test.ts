@@ -217,6 +217,7 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
     for (const op of ops.filter((o) => o.name !== 'Detail' && o.name !== 'Anlage')) {
       const x = await fehlerVon(im(A.leser, (ctx) => op.lauf(ctx, e.id, f.id)));
       expect(x.code, op.name).toBe('NICHT_BERECHTIGT');
+      expect(x.grund, op.name).toBe('BEARBEITEN');
       expect(x.message).toBe('Dieser Schritt ist zuständigen Personen vorbehalten.');
     }
     expect(await auditZahl(w, e.id)).toBe(0);
@@ -420,7 +421,10 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
     // Andere angelegte Folgen desselben Risikos dürfen nicht stören: Testwelt-Risiko frisch markiert.
     const erledige = (a: Akteur, fid: string) => () =>
       im(a, (ctx) => erledigeFolge(ctx, { mandantId: w.mandant, ereignisId: e.id, folgeId: fid }));
-    expect((await fehlerVon(erledige(A.leser, h.id)())).code).toBe('NICHT_BERECHTIGT');
+    expect(await fehlerVon(erledige(A.leser, h.id)())).toMatchObject({
+      code: 'NICHT_BERECHTIGT',
+      grund: 'BEARBEITEN',
+    });
     expect(
       genauEinerKonflikt(await gleichzeitig(erledige(A.leser, r.id), erledige(A.hb, r.id))),
     ).toBe(true);
@@ -566,6 +570,7 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
       );
       expect(x).toMatchObject({
         code: 'NICHT_BERECHTIGT',
+        grund: 'VIER_AUGEN',
         message: 'Die Bestätigung muss durch eine zweite Person erfolgen.',
       });
     }
@@ -621,7 +626,7 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
         bestaetigeEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId: e.id }),
       ),
     );
-    expect(x.code).toBe('NICHT_BERECHTIGT');
+    expect([x.code, x.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
     // Zurückziehen leert den Antrag samt Antragsteller.
     await im(A.hb, (ctx) =>
       lehneEreignisVerwerfenAb(ctx, { mandantId: w.mandant, ereignisId: e.id }),
@@ -726,7 +731,12 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
     expect(await auditZahl(w, a.id, 'tcms.ereignis.erfasst')).toBe(1);
     expect((await fehlerVon(erfasse(A.hb, 'T-99'))).code).toBe('UNGUELTIG');
     expect((await fehlerVon(erfasse(A.hb, 'SONST'))).code).toBe('UNGUELTIG');
-    for (const a of [A.leser]) expect((await fehlerVon(erfasse(a))).code).toBe('NICHT_BERECHTIGT');
+    for (const a of [A.leser]) {
+      expect(await fehlerVon(erfasse(a))).toMatchObject({
+        code: 'NICHT_BERECHTIGT',
+        grund: 'BEARBEITEN',
+      });
+    }
     for (const a of [A.gv, A.ohneBezug, A.fremdBezug, A.leerTenant])
       expect((await fehlerVon(erfasse(a))).code).toBe('NICHT_GEFUNDEN');
   });
@@ -813,9 +823,12 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
   });
 
   it('Portal: Mitarbeitende und Kanzlei → NICHT_BERECHTIGT; ohne Rolle, fremder Mandant, fremder Tenant → NICHT_GEFUNDEN', async () => {
-    for (const a of [A.ma, A.zbt]) {
+    for (const [a, grund] of [
+      [A.ma, 'PORTAL_ROLLE'],
+      [A.zbt, 'PARTEI'],
+    ] as const) {
       const x = await fehlerVon(im(a, (ctx) => meldeEreignis(ctx, meldung() as never)));
-      expect(x.code).toBe('NICHT_BERECHTIGT');
+      expect([x.code, x.grund]).toEqual(['NICHT_BERECHTIGT', grund]);
     }
     for (const a of [A.ohneRolle, A.gvFremd, A.ohneBezug, A.leerTenant]) {
       const x = await fehlerVon(im(a, (ctx) => meldeEreignis(ctx, meldung() as never)));

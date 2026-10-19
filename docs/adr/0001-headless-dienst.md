@@ -194,11 +194,20 @@ mit lokaler Dateiablage, der Dienst einen Port, der nur Verweise annimmt.
 ## 7. HTTP-Vertrag
 
 - Basis `/v1`. JSON, UTF-8. Body höchstens 256 KiB (`413`). Antworten
-  `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder? } }`.
+  `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder?, grund? } }`.
 - Codes: `400 UNGUELTIG` (zod, mit `felder`), `401 NICHT_AUTHENTIFIZIERT`,
   `403 NICHT_BERECHTIGT` (mit fachlichem Grund, z. B. Vier-Augen),
   `404 NICHT_GEFUNDEN` (auch fremder Tenant/Mandant), `409 KONFLIKT`
   (Status hat sich geändert, Doppelentscheidung), `413 ZU_GROSS`.
+- `grund` (Stufe 5) steht genau bei `403` und dort immer: ein Wert aus
+  `VERWEIGERUNG_GRUENDE` (`BEARBEITEN`, `WUERDIGEN`, `VIER_AUGEN`,
+  `VERWALTUNG`, `VERTRAULICH`, `DURCHFUEHREN`, `GEGENZEICHNEN`, `PARTEI`,
+  `PORTAL_ROLLE`, `PORTAL_ZUGEORDNET`), je Wert eine Rechtefunktion des
+  Dienstes; die kanzleikonsole wählt danach ihre feste Meldung. Erst nach der
+  Sichtbarkeitsprüfung, nie an `404` (kein Existenz-Orakel). `DienstFehler`
+  erzwingt das (Typ und Konstruktor; ein 403 ohne Grund wird `500 INTERN`),
+  `FehlerSchema` ebenso, ein statischer Test hält jede Stelle mit ihrem Grund
+  fest (`packages/service/src/__tests__/verweigerung.test.ts`).
 - Datumswerte als ISO-8601-Strings, keine `Map`/`Set`/`Date` im JSON.
 - Lesen zu einem Stichtag: `?stand=YYYY-MM-DD`. Schreibende Endpunkte nehmen
   **keinen** Stichtag an und arbeiten immer auf dem aktuellen Stand.

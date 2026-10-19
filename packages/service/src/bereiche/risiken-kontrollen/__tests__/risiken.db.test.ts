@@ -69,7 +69,7 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
   ): Promise<void> {
     // Rolle fehlt: Bezug, aber weder Admin, BT noch Hauptbearbeitung.
     const ohne = await fehlerVon(rufe(akt.leser, (ctx) => lauf(ctx, a.mandantId)));
-    expect(ohne.code).toBe('NICHT_BERECHTIGT');
+    expect([ohne.code, ohne.grund]).toEqual(['NICHT_BERECHTIGT', 'BEARBEITEN']);
     for (const akteur of [
       // Fremder Mandant: Bezug auf B, Anfrage auf A.
       kanzlei(tenant, a.personen.bt, b.mandantId, { admin: true, bt: true, zustaendig: true }),
@@ -281,22 +281,20 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
           }),
         ),
       );
-      expect(selbst.code).toBe('NICHT_BERECHTIGT');
+      expect([selbst.code, selbst.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       // Dieselbe Person in anderer Schreibweise (Großbuchstaben) ist keine zweite Person.
       const gross = kanzlei(tenant, a.personen.hb.toUpperCase(), a.mandantId, { hb: true });
       expect(
-        (
-          await fehlerVon(
-            rufe(gross, (ctx) =>
-              uebersteuerungEntscheiden(ctx, {
-                mandantId: a.mandantId,
-                uebersteuerungId: antrag.uebersteuerungId,
-                entscheidung: 'FREIGEBEN',
-              }),
-            ),
-          )
-        ).code,
-      ).toBe('NICHT_BERECHTIGT');
+        await fehlerVon(
+          rufe(gross, (ctx) =>
+            uebersteuerungEntscheiden(ctx, {
+              mandantId: a.mandantId,
+              uebersteuerungId: antrag.uebersteuerungId,
+              entscheidung: 'FREIGEBEN',
+            }),
+          ),
+        ),
+      ).toMatchObject({ code: 'NICHT_BERECHTIGT', grund: 'VIER_AUGEN' });
       const ok = await rufe(akt.bt, (ctx) =>
         uebersteuerungEntscheiden(ctx, {
           mandantId: a.mandantId,
@@ -532,7 +530,7 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
       const selbst = await fehlerVon(
         rufe(akt.hb, (ctx) => risikenFreigeben(ctx, { mandantId: a.mandantId, risikoIds: [id1] })),
       );
-      expect(selbst.code).toBe('NICHT_BERECHTIGT');
+      expect([selbst.code, selbst.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       const zurueck = await fehlerVon(
         rufe(akt.hb, (ctx) =>
           risikoZurueckweisen(ctx, {
@@ -542,7 +540,7 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
           }),
         ),
       );
-      expect(zurueck.code).toBe('NICHT_BERECHTIGT');
+      expect([zurueck.code, zurueck.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       const frei = await rufe(akt.bt, (ctx) =>
         risikenFreigeben(ctx, { mandantId: a.mandantId, risikoIds: [id1] }),
       );

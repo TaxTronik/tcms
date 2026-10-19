@@ -9,6 +9,7 @@
 
 import {
   DienstFehler,
+  nichtBerechtigt,
   PortalUebersichtAntwortSchema,
   PortalUebersichtEingabeSchema,
   type PortalUebersichtAntwort,
@@ -128,10 +129,7 @@ export async function ladePortalUebersicht(
   const e = pruefeEingabe(PortalUebersichtEingabeSchema, eingabe);
   const a = ctx.akteur;
   if (a.art !== 'MANDANT') {
-    throw new DienstFehler(
-      'NICHT_BERECHTIGT',
-      'Die Portal-Übersicht ist Mandantenkontakten vorbehalten.',
-    );
+    throw nichtBerechtigt('PARTEI', 'Die Portal-Übersicht ist Mandantenkontakten vorbehalten.');
   }
   // Leserecht (aktive Rolle beim eigenen Mandanten) prüft der Kern; sonst NICHT_GEFUNDEN.
   const k = await ladeKontext(ctx, { mandantId: e.mandantId });

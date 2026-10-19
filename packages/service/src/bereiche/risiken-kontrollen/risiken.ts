@@ -14,6 +14,7 @@
 
 import {
   DienstFehler,
+  nichtBerechtigt,
   RisikenFreigabeSchrittSchema,
   RisikoakzeptanzAnfordernSchema,
   RisikoBestaetigenSchema,
@@ -558,7 +559,7 @@ export async function uebersteuerungEntscheiden(
         throw konflikt('Über diese Übersteuerung wurde bereits entschieden.');
       }
       if (!zweitePerson(ctx.akteur, u.beantragtVon)) {
-        throw new DienstFehler('NICHT_BERECHTIGT', ZWEITE_PERSON);
+        throw nichtBerechtigt('VIER_AUGEN', ZWEITE_PERSON);
       }
       const status = e.entscheidung === 'FREIGEBEN' ? 'FREIGEGEBEN' : 'ABGELEHNT';
       const z = await tx.uebersteuerung.updateMany({
@@ -666,7 +667,7 @@ async function freigabeSchritt(
       }
       if (bearbeitet.length === 0) {
         const text = `Kein Risiko bearbeitet: ${uebersprungen.map((u) => `${u.code} (${u.grund})`).join(', ')}.`;
-        if (nurVierAugen) throw new DienstFehler('NICHT_BERECHTIGT', `${ZWEITE_PERSON} ${text}`);
+        if (nurVierAugen) throw nichtBerechtigt('VIER_AUGEN', `${ZWEITE_PERSON} ${text}`);
         throw konflikt(text);
       }
       return { wert: { bearbeitet, uebersprungen }, protokoll: protokolle };
@@ -706,7 +707,7 @@ export async function risikoZurueckweisen(
         throw konflikt('Das Risiko ist nicht zur Freigabe eingereicht.');
       }
       if (!zweitePerson(ctx.akteur, risiko.freigabeEingereichtVon)) {
-        throw new DienstFehler('NICHT_BERECHTIGT', ZWEITE_PERSON);
+        throw nichtBerechtigt('VIER_AUGEN', ZWEITE_PERSON);
       }
       const z = await tx.risiko.updateMany({
         where: { id: risiko.id, freigabe: 'ZUR_FREIGABE' },

@@ -69,7 +69,7 @@ describe.skipIf(!AKTIV)('Mandantenanker und Kontaktrollen gegen PostgreSQL', () 
         expect((await fehlerVon(anker(m, 'X', a))).code).toBe('NICHT_GEFUNDEN');
       }
       const f = await fehlerVon(anker(m, 'X', ohneZustaendigkeit(m)));
-      expect(f.code).toBe('NICHT_BERECHTIGT');
+      expect([f.code, f.grund]).toEqual(['NICHT_BERECHTIGT', 'BEARBEITEN']);
       expect(
         (await mitTenant(tenant, (tx) => tx.mandant.findFirst({ where: { id: m } })))?.name,
       ).toBe('Muster GmbH');
@@ -276,7 +276,7 @@ describe.skipIf(!AKTIV)('Mandantenanker und Kontaktrollen gegen PostgreSQL', () 
         expect((await fehlerVon(rollen(mA, k, ['MITARBEITER'], a))).code).toBe('NICHT_GEFUNDEN');
       }
       const nb = await fehlerVon(rollen(mA, k, ['MITARBEITER'], ohneZustaendigkeit(mA)));
-      expect(nb.code).toBe('NICHT_BERECHTIGT');
+      expect([nb.code, nb.grund]).toEqual(['NICHT_BERECHTIGT', 'BEARBEITEN']);
       // Lesen: Kanzleiperson mit Bezug ja, Mandantenkontakt und fremder Tenant nein.
       await im(ohneZustaendigkeit(mA), (ctx) => ladeKontakte(ctx, { mandantId: mA }));
       for (const a of [kontakt(randomUUID(), mA, tenant), admin(mA, tenantB), admin(mB)]) {

@@ -12,6 +12,7 @@
 
 import {
   DienstFehler,
+  nichtBerechtigt,
   ErklaerungSchema,
   FeststellungAktionSchema,
   FeststellungErfassenSchema,
@@ -114,13 +115,12 @@ export function beteiligteVon(f: {
 
 function pruefeVertraulich(ctx: DienstKontext, mandantId: string, f: Gesperrt): void {
   if (f.vertraulich && !kannVertraulichLesen(ctx.akteur, mandantId, beteiligteVon(f))) {
-    throw new DienstFehler('NICHT_BERECHTIGT', VERTRAULICH);
+    throw nichtBerechtigt('VERTRAULICH', VERTRAULICH);
   }
 }
 
 function pruefeBearbeiten(ctx: DienstKontext, mandantId: string): void {
-  if (!kannBearbeiten(ctx.akteur, mandantId))
-    throw new DienstFehler('NICHT_BERECHTIGT', KEIN_RECHT);
+  if (!kannBearbeiten(ctx.akteur, mandantId)) throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
 }
 
 function pruefeOffen(f: { status: string }): void {
@@ -236,7 +236,7 @@ export async function entscheideP153(
     const f = await ladeGesperrt(ctx, mandantId, e.feststellungId);
     // Höchstpersönlich: ausschließlich zuständige Berufsträger:innen (oder Admin-BT).
     if (!kannWuerdigen(ctx.akteur, mandantId)) {
-      throw new DienstFehler('NICHT_BERECHTIGT', NUR_BERUFSTRAEGER);
+      throw nichtBerechtigt('WUERDIGEN', NUR_BERUFSTRAEGER);
     }
     pruefeVertraulich(ctx, mandantId, f);
     pruefeOffen(f);
@@ -347,8 +347,8 @@ export async function aktualisiereWuerdigung(
       e.auswirkung === 'NEIN' &&
       !kannWuerdigen(ctx.akteur, mandantId)
     ) {
-      throw new DienstFehler(
-        'NICHT_BERECHTIGT',
+      throw nichtBerechtigt(
+        'WUERDIGEN',
         `${NUR_BERUFSTRAEGER} Die steuerliche Auswirkung auf „nein“ zu setzen beendet die §-153-Würdigung.`,
       );
     }
@@ -507,7 +507,7 @@ export async function erledigeMassnahme(
     const m = f.massnahmen.find((x) => x.id === e.massnahmeId);
     if (!m) throw new DienstFehler('NICHT_GEFUNDEN');
     if (!kannBearbeiten(ctx.akteur, mandantId) && !gleicheId(ctx.akteur.id, m.verantwortlich)) {
-      throw new DienstFehler('NICHT_BERECHTIGT', KEIN_RECHT);
+      throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
     }
     pruefeVertraulich(ctx, mandantId, f);
     pruefeOffen(f);
@@ -662,7 +662,7 @@ export async function bestaetigeFeststellungVerwerfen(
       f.verwerfenBeantragtVon,
       f.auswirkung,
     );
-    if (!recht.erlaubt) throw new DienstFehler('NICHT_BERECHTIGT', recht.grund ?? KEIN_RECHT);
+    if (!recht.erlaubt) throw nichtBerechtigt(recht.verweigerung, recht.grund);
     await tx.feststellung.update({
       where: { id: f.id },
       data: { status: 'VERWORFEN', verwerfenBestaetigtVon: ctx.akteur.id },
@@ -734,7 +734,7 @@ export async function setzeVertraulich(
   pruefeKanzleiZugriff(ctx, mandantId);
   const f = await ladeGesperrt(ctx, mandantId, e.feststellungId);
   if (!kannWuerdigen(ctx.akteur, mandantId)) {
-    throw new DienstFehler('NICHT_BERECHTIGT', NUR_BERUFSTRAEGER);
+    throw nichtBerechtigt('WUERDIGEN', NUR_BERUFSTRAEGER);
   }
   pruefeVertraulich(ctx, mandantId, f);
   // Unverändert: keine fachliche Änderung, also auch kein Audit-Eintrag.
@@ -779,8 +779,7 @@ export async function erfasseFeststellung(
   }
   return aendere(ctx, async (tx, zeitpunkt) => {
     await pruefeMandant(tx, mandantId);
-    if (!kannBearbeiten(ctx.akteur, mandantId))
-      throw new DienstFehler('NICHT_BERECHTIGT', KEIN_RECHT);
+    if (!kannBearbeiten(ctx.akteur, mandantId)) throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
     const programm = await programmVon(tx, mandantId);
     if (!programm) throw new DienstFehler('NICHT_GEFUNDEN', KEIN_PROGRAMM);
     const neu = await legeFeststellungAn(ctx, zeitpunkt, {

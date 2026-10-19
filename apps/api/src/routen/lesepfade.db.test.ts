@@ -169,6 +169,9 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
     it('Kanzleiperson: 403 (nur Mandantenkontakte)', async () => {
       const r = await bestaetigtSenden(app(), { ziel: pfad, claims: anna() });
       expect(r.status).toBe(403);
+      expect(await r.json()).toMatchObject({
+        fehler: { code: 'NICHT_BERECHTIGT', grund: 'PARTEI' },
+      });
     });
 
     it('Query: 400', async () => {
@@ -236,6 +239,7 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
         claims: admin({ rol: { adm: false, bt: true } }),
       });
       expect(ohne.status).toBe(403);
+      expect(await ohne.json()).toMatchObject({ fehler: { grund: 'BEARBEITEN' } });
       for (const body of [
         '{}',
         JSON.stringify({ name: 'A', rechtsform: 'KapG', tenantId: randomUUID() }),

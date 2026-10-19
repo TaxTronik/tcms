@@ -14,7 +14,7 @@
 //      Durchführung, Nachweisen und Audit ermitteln, Rechte berechnen.
 // =============================================================================
 
-import { DienstFehler } from '@tcms/contract';
+import { DienstFehler, nichtBerechtigt } from '@tcms/contract';
 import type { Prisma, Tx } from '@tcms/db';
 import { statusAm } from '@tcms/domain';
 import { heuteDatum } from '../../kern/zeit';
@@ -24,7 +24,6 @@ import { ladeKontaktRollen } from '../../rollen';
 import {
   darfPortalLesen,
   durchfuehrungsRechte,
-  KEIN_RECHT,
   type HandlungsRechte,
   type Recht,
   type RechteLage,
@@ -91,13 +90,14 @@ export function pruefeEingabe<T>(schema: Pruefbar<T>, eingabe: unknown): T {
   throw new DienstFehler('UNGUELTIG', 'Eingabe ungültig.', felder);
 }
 
-/** Ablehnung eines Rechts als Fehler: Zustand → KONFLIKT, Person → NICHT_BERECHTIGT. */
+/**
+ * Ablehnung eines Rechts als Fehler: Zustand → KONFLIKT, Person →
+ * NICHT_BERECHTIGT mit dem Verweigerungsgrund der Rechtefunktion.
+ */
 export function verlange(r: Recht): void {
   if (r.erlaubt) return;
-  throw new DienstFehler(
-    r.art === 'STATUS' ? 'KONFLIKT' : 'NICHT_BERECHTIGT',
-    r.grund ?? KEIN_RECHT,
-  );
+  if (r.art === 'STATUS') throw new DienstFehler('KONFLIKT', r.grund);
+  throw nichtBerechtigt(r.verweigerung, r.grund);
 }
 
 /** Leserecht auf den Mandanten der Anfrage (TS-03); liefert die Kontaktrollen des Akteurs. */

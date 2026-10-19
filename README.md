@@ -259,7 +259,9 @@ await fetch(`<interne-url>${pfad}`, {
 });
 ```
 
-Antworten: `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder? } }`. Jeder
+Antworten: `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder?, grund? } }`;
+`grund` steht genau bei `403 NICHT_BERECHTIGT` (feste Liste `VERWEIGERUNG_GRUENDE`, je Wert eine
+Rechtefunktion, nie bei `404`). Jeder
 Fehler bei Token, Bestätigung oder `jti` ergibt dieselbe Antwort `401 NICHT_AUTHENTIFIZIERT` (mit
 `Connection: close`); der Grund steht nur im Log (JSON-Zeilen auf stdout, mit Request-ID, ohne
 Header-Werte und Bodys). Fremde Mandanten und nicht kanonische Pfade ergeben `404`.

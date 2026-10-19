@@ -1,4 +1,10 @@
-import { AKTEUR_HEADER, DienstFehler, MAX_BODY_BYTES, bodySha256 } from '@tcms/contract';
+import {
+  AKTEUR_HEADER,
+  DienstFehler,
+  MAX_BODY_BYTES,
+  bodySha256,
+  nichtBerechtigt,
+} from '@tcms/contract';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { SpeicherJti } from '../jti';
@@ -61,6 +67,13 @@ const testRouten = (r: Routen<unknown>) => {
         throw new DienstFehler('UNGUELTIG', 'Bitte prüfen.', { titel: ['zu kurz'] });
       }
       if (params.art === 'zod') return z.object({ a: z.string() }).parse({});
+      if (params.art === 'verweigert') throw nichtBerechtigt('VIER_AUGEN', 'Zweite Person.');
+      if (params.art === 'unbekannt') throw new DienstFehler('NICHT_GEFUNDEN');
+      if (params.art === 'ohne-grund') {
+        // Umgehung des Typs: der Konstruktor weist ab, die Antwort ist 500 (fail closed).
+        const roh = DienstFehler as unknown as new (...a: unknown[]) => DienstFehler;
+        throw new roh('NICHT_BERECHTIGT', 'Ohne Grund.');
+      }
       throw new Error('SELECT geheim FROM mandant WHERE name = Talwind');
     },
   });
@@ -834,6 +847,29 @@ describe('Fehlerabbildung', () => {
       ok: false,
       fehler: { code: 'UNGUELTIG', meldung: 'Bitte prüfen.', felder: { titel: ['zu kurz'] } },
     });
+  });
+
+  it('NICHT_BERECHTIGT → 403 mit maschinenlesbarem Grund (auch im Log); NICHT_GEFUNDEN ohne Grund', async () => {
+    const t = routenAufbau();
+    const v = await bestaetigtSenden(t.app, { methode: 'POST', ziel: '/v1/fehler/verweigert' });
+    expect(v.status).toBe(403);
+    expect(await json(v)).toEqual({
+      ok: false,
+      fehler: { code: 'NICHT_BERECHTIGT', meldung: 'Zweite Person.', grund: 'VIER_AUGEN' },
+    });
+    expect(t.log.at(-1)).toMatchObject({ fehler: 'NICHT_BERECHTIGT', verweigerung: 'VIER_AUGEN' });
+    const u = await bestaetigtSenden(t.app, { methode: 'POST', ziel: '/v1/fehler/unbekannt' });
+    expect(u.status).toBe(404);
+    expect(await json(u)).toEqual({ ok: false, fehler: { code: 'NICHT_GEFUNDEN' } });
+    expect(t.log.at(-1)).not.toHaveProperty('verweigerung');
+  });
+
+  it('NICHT_BERECHTIGT ohne Grund (Typ umgangen) → 500 INTERN, nie ein 403 ohne Grund', async () => {
+    const t = routenAufbau();
+    const r = await bestaetigtSenden(t.app, { methode: 'POST', ziel: '/v1/fehler/ohne-grund' });
+    expect(r.status).toBe(500);
+    expect(await json(r)).toEqual({ ok: false, fehler: { code: 'INTERN' } });
+    expect(t.log.at(-1)).toMatchObject({ fehler: 'INTERN', ausnahme: 'TypeError' });
   });
 
   it('zod-Fehler → 400 UNGUELTIG mit felder', async () => {

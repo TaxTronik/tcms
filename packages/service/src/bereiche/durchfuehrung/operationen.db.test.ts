@@ -213,7 +213,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       const did = await f.durchfuehrung('k1');
       for (const wer of [a.kollege, a.bt, a.pruefer]) {
         const e = await fehlerVon(f.dienst(wer, (ctx) => beginneDurchfuehrung(ctx, ziel(did))));
-        expect(e.code).toBe('NICHT_BERECHTIGT');
+        expect([e.code, e.grund]).toEqual(['NICHT_BERECHTIGT', 'DURCHFUEHREN']);
         expect(e.message).toMatch(/zugewiesene Person|Vertretung/);
       }
       // Kanzlei auf einer Mandanten-Kontrolle.
@@ -221,7 +221,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       const e = await fehlerVon(
         f.dienst(a.bearbeiter, (ctx) => beginneDurchfuehrung(ctx, ziel(d2))),
       );
-      expect(e.code).toBe('NICHT_BERECHTIGT');
+      expect([e.code, e.grund]).toEqual(['NICHT_BERECHTIGT', 'PARTEI']);
       expect(e.message).toBe('Diese Kontrolle führt der Mandant im Portal durch');
     });
 
@@ -302,7 +302,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
           speichereDurchfuehrung(ctx, { ...ziel(did), ...vollstaendig() }),
         ),
       );
-      expect(e.code).toBe('NICHT_BERECHTIGT');
+      expect([e.code, e.grund]).toEqual(['NICHT_BERECHTIGT', 'DURCHFUEHREN']);
       const d2 = await eingereicht();
       const e2 = await fehlerVon(
         f.dienst(a.bearbeiter, (ctx) =>
@@ -457,7 +457,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       const e2 = await fehlerVon(
         f.dienst(a.kollege, (ctx) => haengeNachweisAn(ctx, { ...ziel(did), verweis: verweis() })),
       );
-      expect(e2.code).toBe('NICHT_BERECHTIGT');
+      expect([e2.code, e2.grund]).toEqual(['NICHT_BERECHTIGT', 'DURCHFUEHREN']);
       const d2 = await eingereicht();
       const e3 = await fehlerVon(
         f.dienst(a.bearbeiter, (ctx) => haengeNachweisAn(ctx, { ...ziel(d2), verweis: verweis() })),
@@ -553,7 +553,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
           entferneNachweis(ctx, { ...ziel(anderer), nachweisId: nachweis.id }),
         ),
       );
-      expect(e3.code).toBe('NICHT_BERECHTIGT');
+      expect([e3.code, e3.grund]).toEqual(['NICHT_BERECHTIGT', 'DURCHFUEHREN']);
       expect((await zeile(anderer)).nachweise).toHaveLength(1);
     });
 
@@ -650,7 +650,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
             weiseDurchfuehrungZurueck(ctx, { ...ziel(did), begruendung: BEGRUENDUNG }),
           ),
         );
-        expect(e.code).toBe('NICHT_BERECHTIGT');
+        expect([e.code, e.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
         expect(e.message).toMatch(/Vier-Augen/);
       }
       const e2 = await fehlerVon(
@@ -658,7 +658,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
           weiseDurchfuehrungZurueck(ctx, { ...ziel(did), begruendung: BEGRUENDUNG }),
         ),
       );
-      expect(e2.code).toBe('NICHT_BERECHTIGT');
+      expect([e2.code, e2.grund]).toEqual(['NICHT_BERECHTIGT', 'GEGENZEICHNEN']);
       expect((await zeile(did)).status).toBe('ZUR_GEGENZEICHNUNG');
     });
 
@@ -781,13 +781,13 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
         const e = await fehlerVon(
           f.dienst(wer, (ctx) => gegenzeichneDurchfuehrung(ctx, ziel(did))),
         );
-        expect(e.code).toBe('NICHT_BERECHTIGT');
+        expect([e.code, e.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       }
       for (const wer of [a.kollege, a.vertretung]) {
         const e = await fehlerVon(
           f.dienst(wer, (ctx) => gegenzeichneDurchfuehrung(ctx, ziel(did))),
         );
-        expect(e.code).toBe('NICHT_BERECHTIGT');
+        expect([e.code, e.grund]).toEqual(['NICHT_BERECHTIGT', 'GEGENZEICHNEN']);
         expect(e.message).toMatch(/zugewiesene Gegenzeichnung/);
       }
       expect((await zeile(did)).status).toBe('ZUR_GEGENZEICHNUNG');
@@ -822,7 +822,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       const e = await fehlerVon(
         f.dienst(a.pruefer, (ctx) => gegenzeichneDurchfuehrung(ctx, ziel(did))),
       );
-      expect(e.code).toBe('NICHT_BERECHTIGT');
+      expect([e.code, e.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       expect(e.message).toMatch(/Vier-Augen/);
     });
 
@@ -893,9 +893,9 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
     it('Bestätigen: nicht durch Beteiligte, nicht durch die Kanzlei, nicht ohne Sichtbarkeit', async () => {
       const did = await eingereicht('k2');
       const e1 = await fehlerVon(f.dienst(a.ma, (ctx) => bestaetigeDurchfuehrung(ctx, ziel(did))));
-      expect(e1.code).toBe('NICHT_BERECHTIGT');
+      expect([e1.code, e1.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       const e2 = await fehlerVon(f.dienst(a.bt, (ctx) => bestaetigeDurchfuehrung(ctx, ziel(did))));
-      expect(e2.code).toBe('NICHT_BERECHTIGT');
+      expect([e2.code, e2.grund]).toEqual(['NICHT_BERECHTIGT', 'PARTEI']);
       const e3 = await fehlerVon(f.dienst(a.ma3, (ctx) => bestaetigeDurchfuehrung(ctx, ziel(did))));
       expect(e3.code).toBe('NICHT_GEFUNDEN');
       expect((await zeile(did)).mandantBestaetigtVon).toBeNull();
@@ -908,7 +908,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
           weiseDurchfuehrungZurueck(ctx, { ...ziel(did), begruendung: BEGRUENDUNG }),
         ),
       );
-      expect(e.code).toBe('NICHT_BERECHTIGT');
+      expect([e.code, e.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       await f.dienst(a.tcb, (ctx) =>
         weiseDurchfuehrungZurueck(ctx, { ...ziel(did), begruendung: BEGRUENDUNG }),
       );
@@ -929,7 +929,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       const e2 = await fehlerVon(
         f.dienst(a.gv, (ctx) => speichereDurchfuehrung(ctx, { ...ziel(did), ...vollstaendig() })),
       );
-      expect(e2.code).toBe('NICHT_BERECHTIGT');
+      expect([e2.code, e2.grund]).toEqual(['NICHT_BERECHTIGT', 'PORTAL_ZUGEORDNET']);
     });
 
     it('TS-05: zwei gleichzeitige Bestätigungen → genau eine', async () => {
@@ -974,17 +974,17 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
         beantrageEntfallen(ctx, { ...ziel(did), begruendung: BEGRUENDUNG }),
       );
       const e1 = await fehlerVon(f.dienst(a.bt, (ctx) => gibEntfallenFrei(ctx, ziel(did))));
-      expect(e1.code).toBe('NICHT_BERECHTIGT');
+      expect([e1.code, e1.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       expect(e1.message).toBe('Freigabe durch eine zweite Person');
       // Nicht-Berufsträger und Berufsträger ohne Zuständigkeit/Admin.
       for (const wer of [a.kollege, a.bearbeiter, f.kanzlei(f.p.kollege, { bt: true })]) {
         const e = await fehlerVon(f.dienst(wer, (ctx) => gibEntfallenFrei(ctx, ziel(did))));
-        expect(e.code).toBe('NICHT_BERECHTIGT');
+        expect([e.code, e.grund]).toEqual(['NICHT_BERECHTIGT', 'WUERDIGEN']);
       }
       // Die antragstellende Person in anderer Schreibweise ist dieselbe Person.
       const btGross = f.kanzlei(f.p.bt.toUpperCase(), { bt: true, zustaendig: true });
       const e2 = await fehlerVon(f.dienst(btGross, (ctx) => gibEntfallenFrei(ctx, ziel(did))));
-      expect(e2.code).toBe('NICHT_BERECHTIGT');
+      expect([e2.code, e2.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       expect((await zeile(did)).status).toBe('GEPLANT');
       await f.dienst(a.bt2, (ctx) => gibEntfallenFrei(ctx, ziel(did)));
       expect((await zeile(did)).status).toBe('ENTFALLEN');
@@ -1014,7 +1014,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       const e2 = await fehlerVon(
         f.dienst(a.gv, (ctx) => beantrageEntfallen(ctx, { ...ziel(d2), begruendung: BEGRUENDUNG })),
       );
-      expect(e2.code).toBe('NICHT_BERECHTIGT');
+      expect([e2.code, e2.grund]).toEqual(['NICHT_BERECHTIGT', 'PARTEI']);
     });
 
     it('TS-05: Freigabe und Ablehnung gleichzeitig → genau eine Entscheidung', async () => {
@@ -1078,14 +1078,14 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
           legeNachtragAn(ctx, { ...ziel(did), begruendung: BEGRUENDUNG }),
         ),
       );
-      expect(e2.code).toBe('NICHT_BERECHTIGT');
+      expect([e2.code, e2.grund]).toEqual(['NICHT_BERECHTIGT', 'BEARBEITEN']);
       const d2 = await eingereicht('k2');
       await f.dienst(a.gv, (ctx) => bestaetigeDurchfuehrung(ctx, ziel(d2)));
       await f.dienst(a.bt, (ctx) => gegenzeichneDurchfuehrung(ctx, ziel(d2)));
       const e3 = await fehlerVon(
         f.dienst(a.gv, (ctx) => legeNachtragAn(ctx, { ...ziel(d2), begruendung: BEGRUENDUNG })),
       );
-      expect(e3.code).toBe('NICHT_BERECHTIGT');
+      expect([e3.code, e3.grund]).toEqual(['NICHT_BERECHTIGT', 'PARTEI']);
     });
 
     it('TS-05: zwei gleichzeitige Nachträge → genau einer', async () => {

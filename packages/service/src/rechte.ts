@@ -13,7 +13,7 @@
 //     dieselbe Person nie als „zweite Person" durchgeht.
 // =============================================================================
 
-import type { Akteur, MandantBezug } from '@tcms/contract';
+import type { Akteur, MandantBezug, VerweigerungGrund } from '@tcms/contract';
 import type { MandantRolle } from '@tcms/domain';
 
 /** Rollen der Mandantenseite; eine Quelle in `@tcms/domain` (`MANDANT_ROLLEN`). */
@@ -35,10 +35,20 @@ export interface KontrollZustaendigkeit {
   partei: 'KANZLEI' | 'MANDANT';
 }
 
-export interface Entscheidung {
-  erlaubt: boolean;
-  grund: string | null;
-}
+/**
+ * Entscheidung einer Rechtefunktion: bei Ablehnung mit Meldung (`grund`) und
+ * maschinenlesbarem Grund (`verweigerung`, wird zu `fehler.grund` des 403).
+ */
+export type Entscheidung =
+  | { erlaubt: true; grund: null; verweigerung: null }
+  | { erlaubt: false; grund: string; verweigerung: VerweigerungGrund };
+
+const ERLAUBT: Entscheidung = Object.freeze({ erlaubt: true, grund: null, verweigerung: null });
+const abgelehnt = (verweigerung: VerweigerungGrund, grund: string): Entscheidung => ({
+  erlaubt: false,
+  grund,
+  verweigerung,
+});
 
 /** Gleiche ID (UUID-Vergleich ohne Groß-/Kleinschreibung); leere Werte sind nie gleich. */
 export function gleicheId(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -191,32 +201,32 @@ export function kannGegenzeichnen(
   rollen: readonly KontaktRolle[] = [],
 ): Entscheidung {
   if (gleicheId(a.id, durchgefuehrtVon)) {
-    return { erlaubt: false, grund: 'Gegenzeichnung muss durch eine andere Person erfolgen' };
+    return abgelehnt('VIER_AUGEN', 'Gegenzeichnung muss durch eine andere Person erfolgen');
   }
   if (a.art === 'MANDANT') {
     if (!k.gegenzeichnungMandant)
-      return { erlaubt: false, grund: 'Gegenzeichnung erfolgt durch die Kanzlei' };
-    const ok = aktiveRollen(a, mandantId, rollen).size > 0;
-    return {
-      erlaubt: ok,
-      grund: ok ? null : 'Bestätigung durch eine zweite Person beim Mandanten',
-    };
+      return abgelehnt('PARTEI', 'Gegenzeichnung erfolgt durch die Kanzlei');
+    return aktiveRollen(a, mandantId, rollen).size > 0
+      ? ERLAUBT
+      : abgelehnt('PORTAL_ROLLE', 'Bestätigung durch eine zweite Person beim Mandanten');
   }
   if (!mandantBezug(a, mandantId)) {
-    return { erlaubt: false, grund: 'Kein Zugriff auf diesen Mandanten' };
+    return abgelehnt('GEGENZEICHNEN', 'Kein Zugriff auf diesen Mandanten');
   }
   if (k.gegenzeichnungMandant && !mandantBestaetigt) {
-    return {
-      erlaubt: false,
-      grund: 'Bestätigung durch eine zweite Person beim Mandanten steht aus',
-    };
+    return abgelehnt(
+      'GEGENZEICHNEN',
+      'Bestätigung durch eine zweite Person beim Mandanten steht aus',
+    );
   }
   const ok =
     gleicheId(a.id, k.gegenzeichnerId) || (istBerufstraeger(a) && kannBearbeiten(a, mandantId));
-  return {
-    erlaubt: ok,
-    grund: ok ? null : 'Nur die zugewiesene Gegenzeichnung oder zuständige Berufsträger:innen',
-  };
+  return ok
+    ? ERLAUBT
+    : abgelehnt(
+        'GEGENZEICHNEN',
+        'Nur die zugewiesene Gegenzeichnung oder zuständige Berufsträger:innen',
+      );
 }
 
 /** Vier-Augen: entscheidende Person ≠ beantragende Person (und beantragt muss gesetzt sein). */
@@ -239,14 +249,13 @@ export function kannVerwerfenBestaetigen(
   auswirkung: Auswirkung,
 ): Entscheidung {
   if (!zweitePerson(a, beantragtVon)) {
-    return { erlaubt: false, grund: 'Die Bestätigung muss durch eine zweite Person erfolgen.' };
+    return abgelehnt('VIER_AUGEN', 'Die Bestätigung muss durch eine zweite Person erfolgen.');
   }
   if (auswirkung !== 'NEIN' && !kannWuerdigen(a, mandantId)) {
-    return {
-      erlaubt: false,
-      grund:
-        'Bei möglicher steuerlicher Auswirkung bestätigt nur die zuständige Berufsträgerin bzw. der zuständige Berufsträger das Verwerfen (§ 153).',
-    };
+    return abgelehnt(
+      'WUERDIGEN',
+      'Bei möglicher steuerlicher Auswirkung bestätigt nur die zuständige Berufsträgerin bzw. der zuständige Berufsträger das Verwerfen (§ 153).',
+    );
   }
-  return { erlaubt: true, grund: null };
+  return ERLAUBT;
 }

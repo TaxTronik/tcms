@@ -4,7 +4,7 @@
 // JSON-Werte abbilden (ISO-Strings statt `Date`, ADR 0001 §7).
 // =============================================================================
 
-import { DienstFehler, type Akteur, type MandantBezug } from '@tcms/contract';
+import { DienstFehler, nichtBerechtigt, type Akteur, type MandantBezug } from '@tcms/contract';
 
 /**
  * Strukturelle Sicht auf ein zod-Schema aus `@tcms/contract` (der Service
@@ -81,7 +81,7 @@ export function alsJson(wert: unknown): unknown {
 /** Nur Kanzleipersonen (mandantenübergreifende Lesepfade, ADR 0001 §3.3). */
 export function nurKanzlei(a: Akteur): Extract<Akteur, { art: 'KANZLEI' }> {
   if (a.art !== 'KANZLEI') {
-    throw new DienstFehler('NICHT_BERECHTIGT', 'Nur für Personen der Kanzlei.');
+    throw nichtBerechtigt('PARTEI', 'Nur für Personen der Kanzlei.');
   }
   return a;
 }

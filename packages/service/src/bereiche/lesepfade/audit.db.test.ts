@@ -96,7 +96,10 @@ describe.skipIf(!AKTIV)('Audit gegen PostgreSQL', () => {
         kanzlei(randomUUID(), mandant, { tenantId: tenant, bt: true, zustaendig: true }),
         kontakt(randomUUID(), mandant, tenant),
       ]) {
-        expect((await fehlerVon(im(a, (ctx) => ladeAudit(ctx, {})))).code).toBe('NICHT_BERECHTIGT');
+        expect(await fehlerVon(im(a, (ctx) => ladeAudit(ctx, {})))).toMatchObject({
+          code: 'NICHT_BERECHTIGT',
+          grund: 'VERWALTUNG',
+        });
       }
       const fremd = kanzlei(randomUUID(), null, { tenantId: randomUUID(), admin: true });
       const f = await im(fremd, (ctx) => ladeAudit(ctx, { programmId: programm }));
@@ -248,7 +251,10 @@ describe.skipIf(!AKTIV)('Audit gegen PostgreSQL', () => {
 
     it('nur Admins; unbekannter Fortsetzungspunkt ungültig', async () => {
       const ohne = kanzlei(randomUUID(), mandant, { tenantId: tenant, bt: true, zustaendig: true });
-      expect((await fehlerVon(pruefe(undefined, {}, ohne))).code).toBe('NICHT_BERECHTIGT');
+      expect(await fehlerVon(pruefe(undefined, {}, ohne))).toMatchObject({
+        code: 'NICHT_BERECHTIGT',
+        grund: 'VERWALTUNG',
+      });
       expect((await fehlerVon(pruefe(MAX_AUDIT_POS))).code).toBe('UNGUELTIG');
     });
   });

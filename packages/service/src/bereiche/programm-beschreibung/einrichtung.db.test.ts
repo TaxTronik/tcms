@@ -203,7 +203,7 @@ describe.skipIf(!AKTIV)('Einrichtungsassistent (Service, PostgreSQL)', () => {
 
   it('Rechte: Bearbeiten nur mit kannBearbeiten, sonst NICHT_BERECHTIGT; Lesen mit Bezug', async () => {
     const f = await fehlerVon(speichere(ohneRechtA(w), 1, SCHRITT1, 'speichern'));
-    expect(f.code).toBe('NICHT_BERECHTIGT');
+    expect([f.code, f.grund]).toEqual(['NICHT_BERECHTIGT', 'BEARBEITEN']);
     const g = await fehlerVon(
       im(ohneRechtA(w), (ctx) =>
         legeProgrammAn(ctx, {
@@ -213,7 +213,7 @@ describe.skipIf(!AKTIV)('Einrichtungsassistent (Service, PostgreSQL)', () => {
         }),
       ),
     );
-    expect(g.code).toBe('NICHT_BERECHTIGT');
+    expect([g.code, g.grund]).toEqual(['NICHT_BERECHTIGT', 'BEARBEITEN']);
     expect((await lies(ohneRechtA(w))).darfBearbeiten).toBe(false);
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Akteur } from '@tcms/contract';
+import { VERWEIGERUNG_GRUENDE, type Akteur } from '@tcms/contract';
 import type { KontaktRolle } from '../../rechte';
 import { darfPortalLesen, durchfuehrungsRechte, rechteFlags, type RechteLage } from './rechte';
 import { pruefeEinreichung, leseWerte, toleranzLagen, type KennzahlDef } from './werte';
@@ -70,7 +70,11 @@ describe('durchfuehrungsRechte', () => {
     const r = durchfuehrungsRechte(lage({ status: 'IN_DURCHFUEHRUNG' }));
     expect(r.beginnen).toMatchObject({ erlaubt: false, art: 'STATUS', grund: 'Bereits begonnen' });
     const fremd = durchfuehrungsRechte(lage({ akteur: kanzlei(id(99)) }));
-    expect(fremd.beginnen).toMatchObject({ erlaubt: false, art: 'RECHT' });
+    expect(fremd.beginnen).toMatchObject({
+      erlaubt: false,
+      art: 'RECHT',
+      verweigerung: 'DURCHFUEHREN',
+    });
   });
 
   it('historischer Stand sperrt jede Handlung', () => {
@@ -87,7 +91,11 @@ describe('durchfuehrungsRechte', () => {
     const beteiligt = durchfuehrungsRechte(
       lage({ ...basis, akteur: kanzlei(PRUEFER), beteiligte: [PRUEFER.toUpperCase()] }),
     );
-    expect(beteiligt.gegenzeichnen).toMatchObject({ erlaubt: false, art: 'RECHT' });
+    expect(beteiligt.gegenzeichnen).toMatchObject({
+      erlaubt: false,
+      art: 'RECHT',
+      verweigerung: 'VIER_AUGEN',
+    });
     expect(beteiligt.zurueckweisen.erlaubt).toBe(false);
   });
 
@@ -109,13 +117,26 @@ describe('durchfuehrungsRechte', () => {
       lage({ ...basis, akteur: kanzlei(BT, { bt: true, zust: true }) }),
     );
     expect(bt.gegenzeichnen).toMatchObject({ erlaubt: false, art: 'STATUS' });
-    expect(bt.mandantBestaetigen).toMatchObject({ erlaubt: false, art: 'RECHT' });
+    expect(bt.mandantBestaetigen).toMatchObject({
+      erlaubt: false,
+      art: 'RECHT',
+      verweigerung: 'PARTEI',
+    });
     const gv = durchfuehrungsRechte(lage({ ...basis, akteur: kontakt(GV), rollen }));
     expect(gv.mandantBestaetigen.erlaubt).toBe(true);
     const ma = durchfuehrungsRechte(
       lage({ ...basis, akteur: kontakt(MA), rollen, beteiligte: [MA] }),
     );
-    expect(ma.mandantBestaetigen).toMatchObject({ erlaubt: false, art: 'RECHT' });
+    expect(ma.mandantBestaetigen).toMatchObject({
+      erlaubt: false,
+      art: 'RECHT',
+      verweigerung: 'VIER_AUGEN',
+    });
+    // Kontakt ohne Rolle beim Mandanten (nicht GV/TCB, nicht zugewiesen).
+    const ohne = durchfuehrungsRechte(lage({ ...basis, akteur: kontakt(id(14)), rollen }));
+    expect(ohne.mandantBestaetigen).toMatchObject({ art: 'RECHT', verweigerung: 'PORTAL_ROLLE' });
+    // Kanzleiabschluss durch einen Mandantenkontakt: andere Seite.
+    expect(gv.gegenzeichnen).toMatchObject({ art: 'RECHT', verweigerung: 'PARTEI' });
   });
 
   it('Entfallen: Freigabe nur mit Würdigungsrecht und nie durch die antragstellende Person', () => {
@@ -123,14 +144,22 @@ describe('durchfuehrungsRechte', () => {
     const selbst = durchfuehrungsRechte(
       lage({ ...antrag, akteur: kanzlei(BT, { bt: true, zust: true }) }),
     );
-    expect(selbst.entfallenFreigeben).toMatchObject({ erlaubt: false, art: 'RECHT' });
+    expect(selbst.entfallenFreigeben).toMatchObject({
+      erlaubt: false,
+      art: 'RECHT',
+      verweigerung: 'VIER_AUGEN',
+    });
     expect(selbst.entfallenAblehnen.erlaubt).toBe(true);
     const zweite = durchfuehrungsRechte(
       lage({ ...antrag, akteur: kanzlei(id(5), { bt: true, adm: true }) }),
     );
     expect(zweite.entfallenFreigeben.erlaubt).toBe(true);
     const ohneBt = durchfuehrungsRechte(lage({ ...antrag, akteur: kanzlei(id(6), { adm: true }) }));
-    expect(ohneBt.entfallenFreigeben).toMatchObject({ erlaubt: false, art: 'RECHT' });
+    expect(ohneBt.entfallenFreigeben).toMatchObject({
+      erlaubt: false,
+      art: 'RECHT',
+      verweigerung: 'WUERDIGEN',
+    });
     // Nach Einreichung kein offener Antrag mehr entscheidbar.
     const eingereicht = durchfuehrungsRechte(
       lage({
@@ -140,6 +169,114 @@ describe('durchfuehrungsRechte', () => {
       }),
     );
     expect(eingereicht.entfallenFreigeben).toMatchObject({ erlaubt: false, art: 'STATUS' });
+  });
+});
+
+describe('Verweigerungsgrund je Handlung', () => {
+  it('Kanzlei auf Mandanten-Kontrolle und Kontakt auf Kanzlei-Kontrolle: PARTEI', () => {
+    const mandantK = {
+      partei: 'MANDANT' as const,
+      durchfuehrendId: MA,
+      vertretungId: null,
+      gegenzeichnerId: null,
+      gegenzeichnungMandant: false,
+    };
+    const k = durchfuehrungsRechte(lage({ zustaendigkeit: mandantK }));
+    expect(k.beginnen).toMatchObject({ art: 'RECHT', verweigerung: 'PARTEI' });
+    const m = durchfuehrungsRechte(lage({ akteur: kontakt(BEARBEITER) }));
+    expect(m.beginnen).toMatchObject({ art: 'RECHT', verweigerung: 'PARTEI' });
+    // Kontakt, sichtbar (GV), aber nicht zugewiesen: Portal-Zuordnung.
+    const gv = durchfuehrungsRechte(
+      lage({
+        zustaendigkeit: mandantK,
+        akteur: kontakt(GV),
+        rollen: [rolle(GV, 'GESETZLICHER_VERTRETER')],
+      }),
+    );
+    expect(gv.beginnen).toMatchObject({ art: 'RECHT', verweigerung: 'PORTAL_ZUGEORDNET' });
+  });
+
+  it('Kanzlei: Gegenzeichnung, Entfallen und Nachtrag', () => {
+    const zur = { status: 'ZUR_GEGENZEICHNUNG' as const, durchgefuehrtVon: BEARBEITER };
+    const kollege = durchfuehrungsRechte(lage({ ...zur, akteur: kanzlei(id(7)) }));
+    expect(kollege.gegenzeichnen).toMatchObject({ art: 'RECHT', verweigerung: 'GEGENZEICHNEN' });
+    const offen = durchfuehrungsRechte(lage({ akteur: kanzlei(id(7)) }));
+    expect(offen.entfallenBeantragen).toMatchObject({ art: 'RECHT', verweigerung: 'BEARBEITEN' });
+    const kontaktOffen = durchfuehrungsRechte(lage({ akteur: kontakt(GV) }));
+    expect(kontaktOffen.entfallenBeantragen).toMatchObject({
+      art: 'RECHT',
+      verweigerung: 'PARTEI',
+    });
+    const fertig = { status: 'OHNE_BEFUND' as const };
+    expect(
+      durchfuehrungsRechte(lage({ ...fertig, akteur: kanzlei(id(7)) })).nachtrag,
+    ).toMatchObject({ art: 'RECHT', verweigerung: 'BEARBEITEN' });
+    expect(durchfuehrungsRechte(lage({ ...fertig, akteur: kontakt(GV) })).nachtrag).toMatchObject({
+      art: 'RECHT',
+      verweigerung: 'PARTEI',
+    });
+  });
+
+  it('jede Personenablehnung trägt einen Grund der Liste, keine Statusablehnung einen', () => {
+    const akteure = [
+      kanzlei(BEARBEITER, { hb: true }),
+      kanzlei(PRUEFER),
+      kanzlei(BT, { bt: true, zust: true }),
+      kanzlei(id(7)),
+      kanzlei(id(8), { adm: true }),
+      kontakt(GV),
+      kontakt(MA),
+      kontakt(id(14)),
+    ];
+    const rollen = [rolle(GV, 'GESETZLICHER_VERTRETER'), rolle(MA, 'MITARBEITER')];
+    const zustaendigkeiten = [
+      lage().zustaendigkeit,
+      {
+        partei: 'MANDANT' as const,
+        durchfuehrendId: MA,
+        vertretungId: null,
+        gegenzeichnerId: GV,
+        gegenzeichnungMandant: true,
+      },
+    ];
+    const status = [
+      'GEPLANT',
+      'IN_DURCHFUEHRUNG',
+      'ZUR_GEGENZEICHNUNG',
+      'ZURUECKGEWIESEN',
+      'OHNE_BEFUND',
+      'ENTFALLEN',
+    ] as const;
+    let rechtFaelle = 0;
+    for (const akteur of akteure)
+      for (const zustaendigkeit of zustaendigkeiten)
+        for (const s of status)
+          for (const historisch of [false, true])
+            for (const antrag of [null, BT]) {
+              const r = durchfuehrungsRechte(
+                lage({
+                  akteur,
+                  rollen,
+                  zustaendigkeit,
+                  status: s,
+                  historisch,
+                  durchgefuehrtVon: s === 'GEPLANT' ? null : zustaendigkeit.durchfuehrendId,
+                  beteiligte: s === 'GEPLANT' ? [] : [zustaendigkeit.durchfuehrendId!],
+                  entfallenBegruendung: antrag ? 'x'.repeat(30) : null,
+                  entfallenVon: antrag,
+                }),
+              );
+              for (const [handlung, x] of Object.entries(r)) {
+                const wo = `${akteur.id} ${s} ${handlung}`;
+                if (x.erlaubt) expect(x.verweigerung, wo).toBe(null);
+                else if (x.art === 'STATUS') expect(x.verweigerung, wo).toBe(null);
+                else {
+                  rechtFaelle += 1;
+                  expect(VERWEIGERUNG_GRUENDE, wo).toContain(x.verweigerung);
+                }
+              }
+            }
+    expect(rechtFaelle).toBeGreaterThan(100);
   });
 });
 

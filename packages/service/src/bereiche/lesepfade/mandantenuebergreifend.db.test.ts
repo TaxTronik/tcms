@@ -89,7 +89,7 @@ describe.skipIf(!AKTIV)('Portfolio und Arbeitskorb gegen PostgreSQL', () => {
           ladePortfolio(ctx, { mandantIds: [DEMO_IDS.talwind] }),
         ),
       );
-      expect(f.code).toBe('NICHT_BERECHTIGT');
+      expect([f.code, f.grund]).toEqual(['NICHT_BERECHTIGT', 'PARTEI']);
       const mitCli = kanzlei(DEMO_IDS.anna, DEMO_IDS.talwind, { admin: true, zustaendig: true });
       const p = await im(mitCli, (ctx) => ladePortfolio(ctx, { mandantIds: [DEMO_IDS.seestern] }));
       expect(p.zeilen.map((z) => z.mandant.id)).toEqual([DEMO_IDS.seestern]);
@@ -237,7 +237,7 @@ describe.skipIf(!AKTIV)('Portfolio und Arbeitskorb gegen PostgreSQL', () => {
           ladeArbeitskorb(ctx, { mandantIds: [DEMO_IDS.talwind] }),
         ),
       );
-      expect(f.code).toBe('NICHT_BERECHTIGT');
+      expect([f.code, f.grund]).toEqual(['NICHT_BERECHTIGT', 'PARTEI']);
     });
   });
 });

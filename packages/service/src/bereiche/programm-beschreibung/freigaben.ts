@@ -24,6 +24,7 @@
 
 import {
   DienstFehler,
+  nichtBerechtigt,
   FreigabeNeuadressierungEingabeSchema,
   PortalCodeAnfordernEingabeSchema,
   PortalFreigabenEingabeSchema,
@@ -296,10 +297,10 @@ function pruefeFreigabeRecht(
   }
   if (f.status !== 'OFFEN') throw new DienstFehler('KONFLIKT', ERLEDIGT);
   if (!istGesetzlicherVertreter(ctx.akteur, mandantId, rollen))
-    throw new DienstFehler('NICHT_BERECHTIGT', NUR_GV);
+    throw nichtBerechtigt('PORTAL_ROLLE', NUR_GV);
   // TS-06: nur die adressierte Person; eine Neuadressierung ist Sache der Kanzlei.
   if (!gleicheId(f.empfaengerId, ctx.akteur.id))
-    throw new DienstFehler('NICHT_BERECHTIGT', ANDERE_PERSON);
+    throw nichtBerechtigt('PORTAL_ZUGEORDNET', ANDERE_PERSON);
 }
 
 export async function fordereFreigabeCodeAn(
@@ -594,8 +595,8 @@ export async function bestaetigeKenntnisnahme(
     ]);
   }
   if (!gleicheId(f.empfaengerId, ctx.akteur.id))
-    throw new DienstFehler(
-      'NICHT_BERECHTIGT',
+    throw nichtBerechtigt(
+      'PORTAL_ZUGEORDNET',
       'Diese Kenntnisnahme ist an eine andere Person gerichtet.',
     );
   if (f.status !== 'OFFEN')

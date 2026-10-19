@@ -140,6 +140,12 @@ für KI-Werkzeuge.
   Mandantenkontakte nur mit aktiver `MandantKontaktRolle`.
 - Fremde Mandanten und Objekte: `404` bzw. „nicht gefunden", nie ein Hinweis
   auf ihre Existenz.
+- Fehlendes Recht auf einem sichtbaren Objekt nur über
+  `nichtBerechtigt(grund, meldung)` (`@tcms/contract`): `403` mit
+  maschinenlesbarem `grund` aus `VERWEIGERUNG_GRUENDE`, passend zur abgelehnten
+  Rechtefunktion (Rechtefunktionen mit Ergebnisobjekt liefern ihn als
+  `verweigerung`). Eine neue Stelle gehört mit ihrem Grund ins Inventar von
+  `packages/service/src/__tests__/verweigerung.test.ts`.
 - Vertrauliche Feststellungen (Fachkonzept §13): Für Personen ohne
   `kannVertraulichLesen` ist jede Ausgabe eine eigene Variante
   `maskiert: true` mit genau den Feldern des dedizierten Lesepfads (Nummer,

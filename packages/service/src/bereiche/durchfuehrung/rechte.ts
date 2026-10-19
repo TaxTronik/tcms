@@ -9,12 +9,13 @@
 //   - STATUS: Der Zustand erlaubt den Übergang nicht (Statusmodell, auch nach
 //     einer gleichzeitigen Änderung) → `KONFLIKT` (409).
 //   - RECHT: Die Person darf den Schritt nicht (Rolle, Vier-Augen) →
-//     `NICHT_BERECHTIGT` (403) mit fachlichem Grund.
+//     `NICHT_BERECHTIGT` (403) mit fachlichem Grund und maschinenlesbarem
+//     Verweigerungsgrund (`verweigerung`, VERWEIGERUNG_GRUENDE im Vertrag).
 // Sichtbarkeit (fremder Mandant, Portal ohne Zuweisung) wird vorher geprüft
 // und ergibt `NICHT_GEFUNDEN`.
 // =============================================================================
 
-import type { Akteur } from '@tcms/contract';
+import type { Akteur, VerweigerungGrund } from '@tcms/contract';
 import {
   fmtDatum,
   OFFENE_GESPEICHERTE_STATUS,
@@ -43,12 +44,14 @@ export const BEARBEITBAR: readonly DurchfuehrungStatus[] = ['IN_DURCHFUEHRUNG', 
 export const OFFEN: readonly DurchfuehrungStatus[] = OFFENE_GESPEICHERTE_STATUS;
 export const ABGESCHLOSSEN: readonly DurchfuehrungStatus[] = ['OHNE_BEFUND', 'MIT_BEFUND'];
 
-export interface Recht {
-  erlaubt: boolean;
-  grund: string | null;
-  /** Art der Ablehnung (nur intern; nicht in Antworten). */
-  art: 'STATUS' | 'RECHT' | null;
-}
+/**
+ * Recht je Handlung. `art` (nur intern; nicht in den Flags): STATUS → 409,
+ * RECHT → 403 mit `verweigerung` als `fehler.grund`.
+ */
+export type Recht =
+  | { erlaubt: true; grund: null; art: null; verweigerung: null }
+  | { erlaubt: false; grund: string; art: 'STATUS'; verweigerung: null }
+  | { erlaubt: false; grund: string; art: 'RECHT'; verweigerung: VerweigerungGrund };
 
 export type HandlungsRechte = Record<
   | 'beginnen'
@@ -84,9 +87,19 @@ export interface RechteLage {
   name?: (id: string | null) => string | null;
 }
 
-const ja: Recht = { erlaubt: true, grund: null, art: null };
-const status = (grund: string): Recht => ({ erlaubt: false, grund, art: 'STATUS' });
-const recht = (grund: string): Recht => ({ erlaubt: false, grund, art: 'RECHT' });
+const ja: Recht = Object.freeze({ erlaubt: true, grund: null, art: null, verweigerung: null });
+const status = (grund: string): Recht => ({
+  erlaubt: false,
+  grund,
+  art: 'STATUS',
+  verweigerung: null,
+});
+const recht = (verweigerung: VerweigerungGrund, grund: string): Recht => ({
+  erlaubt: false,
+  grund,
+  art: 'RECHT',
+  verweigerung,
+});
 
 function statusGrund(s: DurchfuehrungStatus): string {
   switch (s) {
@@ -126,17 +139,21 @@ export function darfPortalLesen(
   return [k.durchfuehrendId, k.vertretungId, k.gegenzeichnerId].some((id) => gleicheId(a.id, id));
 }
 
-function durchfuehrenGrund(l: RechteLage): string {
+/** Ablehnung von `kannDurchfuehren`: andere Seite (PARTEI) oder nicht zugewiesen. */
+function durchfuehrenVerweigert(l: RechteLage): Recht {
   const a = l.akteur;
   if (l.zustaendigkeit.partei === 'MANDANT' && a.art === 'KANZLEI')
-    return 'Diese Kontrolle führt der Mandant im Portal durch';
+    return recht('PARTEI', 'Diese Kontrolle führt der Mandant im Portal durch');
   if (l.zustaendigkeit.partei === 'KANZLEI' && a.art === 'MANDANT')
-    return 'Diese Kontrolle führt die Kanzlei durch';
+    return recht('PARTEI', 'Diese Kontrolle führt die Kanzlei durch');
   const d = l.name?.(l.zustaendigkeit.durchfuehrendId) ?? null;
   const v = l.name?.(l.zustaendigkeit.vertretungId) ?? null;
-  return d && v
-    ? `Durchführung durch ${d} oder Vertretung ${v}`
-    : 'Durchführung durch die zugewiesene Person oder ihre Vertretung';
+  return recht(
+    a.art === 'MANDANT' ? 'PORTAL_ZUGEORDNET' : 'DURCHFUEHREN',
+    d && v
+      ? `Durchführung durch ${d} oder Vertretung ${v}`
+      : 'Durchführung durch die zugewiesene Person oder ihre Vertretung',
+  );
 }
 
 /** Rechte des Akteurs je Handlung. Im historischen Stand ist alles gesperrt (AGENTS.md Regel 6). */
@@ -154,7 +171,7 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
       return status(BEARBEITBAR.includes(s) ? 'Bereits begonnen' : statusGrund(s));
     if (l.anzeige === 'GEPLANT')
       return status(`Periode endet am ${fmtDatum(l.periodeBis)} — Beginn danach möglich`);
-    if (!darfDurchfuehren) return recht(durchfuehrenGrund(l));
+    if (!darfDurchfuehren) return durchfuehrenVerweigert(l);
     return ja;
   })();
 
@@ -162,7 +179,7 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
     if (l.historisch) return status(NUR_AKTUELL);
     if (s === 'GEPLANT') return beginnen;
     if (!BEARBEITBAR.includes(s)) return status(statusGrund(s));
-    if (!darfDurchfuehren) return recht(durchfuehrenGrund(l));
+    if (!darfDurchfuehren) return durchfuehrenVerweigert(l);
     return ja;
   })();
 
@@ -175,10 +192,10 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
           ? 'Bereits gegengezeichnet'
           : 'Nur für eingereichte Durchführungen',
       );
-    if (a.art !== 'KANZLEI') return recht('Abschluss durch die Kanzlei');
-    if (beteiligt) return recht(VIER_AUGEN);
+    if (a.art !== 'KANZLEI') return recht('PARTEI', 'Abschluss durch die Kanzlei');
+    if (beteiligt) return recht('VIER_AUGEN', VIER_AUGEN);
     const g = kannGegenzeichnen(a, k, l.mandantId, l.durchgefuehrtVon, true, l.rollen);
-    return g.erlaubt ? ja : recht(g.grund ?? KEIN_RECHT);
+    return g.erlaubt ? ja : recht(g.verweigerung, g.grund);
   })();
 
   const gegenzeichnen = ((): Recht => {
@@ -197,13 +214,17 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
       return status(n ? `Bereits bestätigt durch ${n}` : 'Bereits bestätigt');
     }
     if (a.art !== 'MANDANT' || !darfPortalLesen(a, l.mandantId, l.rollen, k))
-      return recht('Bestätigung durch eine zweite Person beim Mandanten');
+      return recht(
+        a.art !== 'MANDANT' ? 'PARTEI' : 'PORTAL_ROLLE',
+        'Bestätigung durch eine zweite Person beim Mandanten',
+      );
     if (beteiligt)
       return recht(
+        'VIER_AUGEN',
         'Die Bestätigung erfolgt durch eine zweite Person, nicht durch die durchführende',
       );
     const g = kannGegenzeichnen(a, k, l.mandantId, l.durchgefuehrtVon, false, l.rollen);
-    return g.erlaubt ? ja : recht(g.grund ?? KEIN_RECHT);
+    return g.erlaubt ? ja : recht(g.verweigerung, g.grund);
   })();
 
   const zurueckweisen = a.art === 'KANZLEI' ? kanzleiPruefer : mandantBestaetigen;
@@ -213,13 +234,14 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
 
   const entfallenBeantragen = ((): Recht => {
     if (l.historisch) return status(NUR_AKTUELL);
-    if (a.art !== 'KANZLEI') return recht(KEIN_RECHT);
+    if (a.art !== 'KANZLEI') return recht('PARTEI', KEIN_RECHT);
     if (!offen)
       return status(
         s === 'ZUR_GEGENZEICHNUNG' ? 'Eingereicht — zuerst zurückweisen' : statusGrund(s),
       );
     if (hatAntrag) return status('Ein Antrag liegt bereits vor');
-    if (!darfDurchfuehren && !kannBearbeiten(a, l.mandantId)) return recht(KEIN_RECHT);
+    if (!darfDurchfuehren && !kannBearbeiten(a, l.mandantId))
+      return recht('BEARBEITEN', KEIN_RECHT);
     return ja;
   })();
 
@@ -238,9 +260,11 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
     if (!antragOffen.erlaubt) return antragOffen;
     if (!kannWuerdigen(a, l.mandantId))
       return recht(
+        'WUERDIGEN',
         'Freigabe durch die zuständige Berufsträgerin bzw. den zuständigen Berufsträger',
       );
-    if (gleicheId(a.id, l.entfallenVon)) return recht('Freigabe durch eine zweite Person');
+    if (gleicheId(a.id, l.entfallenVon))
+      return recht('VIER_AUGEN', 'Freigabe durch eine zweite Person');
     return ja;
   })();
 
@@ -253,10 +277,11 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
 
   const nachtrag = ((): Recht => {
     if (l.historisch) return status(NUR_AKTUELL);
-    if (a.art !== 'KANZLEI') return recht(KEIN_RECHT);
+    if (a.art !== 'KANZLEI') return recht('PARTEI', KEIN_RECHT);
     if (!ABGESCHLOSSEN.includes(s))
       return status('Nachträge nur zu abgeschlossenen Durchführungen');
-    if (!darfDurchfuehren && !kannBearbeiten(a, l.mandantId)) return recht(KEIN_RECHT);
+    if (!darfDurchfuehren && !kannBearbeiten(a, l.mandantId))
+      return recht('BEARBEITEN', KEIN_RECHT);
     return ja;
   })();
 

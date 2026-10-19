@@ -17,6 +17,7 @@ import {
   FolgeHinzufuegenSchema,
   FolgenAnlegenSchema,
   FolgeVerwerfenSchema,
+  nichtBerechtigt,
   type EreignisAktion,
   type EreignisErfassen,
   type EreignisErfasst,
@@ -127,8 +128,7 @@ function pruefeOffen(e: { status: string }): void {
 /** Gemeinsame Prüfung: Bearbeitungsrecht und Ereignis offen. */
 async function ladeZumAendern(ctx: DienstKontext, mandantId: string, ereignisId: string) {
   const e = await ladeGesperrt(ctx, mandantId, ereignisId);
-  if (!kannBearbeiten(ctx.akteur, mandantId))
-    throw new DienstFehler('NICHT_BERECHTIGT', KEIN_RECHT);
+  if (!kannBearbeiten(ctx.akteur, mandantId)) throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
   pruefeOffen(e);
   return e;
 }
@@ -522,7 +522,7 @@ export async function erledigeFolge(
   return aendere(ctx, async (tx, zeitpunkt) => {
     const { e, folge: f } = await ladeFolge(ctx, mandantId, x.ereignisId, x.folgeId);
     if (!kannBearbeiten(ctx.akteur, mandantId) && !gleicheId(ctx.akteur.id, f.zustaendig)) {
-      throw new DienstFehler('NICHT_BERECHTIGT', KEIN_RECHT);
+      throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
     }
     pruefeOffen(e);
     if (f.status !== 'ANGELEGT') {
@@ -569,8 +569,7 @@ export async function verwerfeFolge(
   pruefeKanzleiZugriff(ctx, mandantId);
   return aendere(ctx, async (tx, zeitpunkt) => {
     const { e, folge: f } = await ladeFolge(ctx, mandantId, x.ereignisId, x.folgeId);
-    if (!kannBearbeiten(ctx.akteur, mandantId))
-      throw new DienstFehler('NICHT_BERECHTIGT', KEIN_RECHT);
+    if (!kannBearbeiten(ctx.akteur, mandantId)) throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
     pruefeOffen(e);
     if (f.status !== 'VORGESCHLAGEN' && f.status !== 'ANGELEGT') {
       throw new DienstFehler('KONFLIKT', 'Die Folge ist bereits erledigt oder verworfen.');
@@ -713,7 +712,7 @@ export async function bestaetigeEreignisVerwerfen(
     const e = await ladeZumAendern(ctx, mandantId, x.ereignisId);
     if (!e.verwerfenBegruendung) throw new DienstFehler('KONFLIKT', KEIN_ANTRAG);
     const von = antragsteller(e);
-    if (!zweitePerson(ctx.akteur, von)) throw new DienstFehler('NICHT_BERECHTIGT', ZWEITE_PERSON);
+    if (!zweitePerson(ctx.akteur, von)) throw nichtBerechtigt('VIER_AUGEN', ZWEITE_PERSON);
     const offene = e.folgen.filter((f) => f.status === 'VORGESCHLAGEN');
     await tx.ereignisFolge.updateMany({
       where: { ereignisId: e.id, status: 'VORGESCHLAGEN' },
@@ -790,8 +789,7 @@ export async function erfasseEreignis(
   }
   return aendere(ctx, async (tx, zeitpunkt) => {
     await pruefeMandant(tx, mandantId);
-    if (!kannBearbeiten(ctx.akteur, mandantId))
-      throw new DienstFehler('NICHT_BERECHTIGT', KEIN_RECHT);
+    if (!kannBearbeiten(ctx.akteur, mandantId)) throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
     const programm = await programmVon(tx, mandantId);
     if (!programm) throw new DienstFehler('NICHT_GEFUNDEN', KEIN_PROGRAMM);
     const neu = await legeEreignisAn(tx, {

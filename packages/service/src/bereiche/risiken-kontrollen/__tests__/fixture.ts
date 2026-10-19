@@ -406,7 +406,12 @@ export async function fehlerVon(p: Promise<unknown>) {
       'code' in e &&
       (e as { name?: string }).name === 'DienstFehler'
     )
-      return e as { code: string; message: string; felder?: Record<string, string[]> };
+      return e as {
+        code: string;
+        message: string;
+        felder?: Record<string, string[]>;
+        grund?: string;
+      };
     throw e;
   }
   throw new Error('Kein Fehler, obwohl einer erwartet war');
