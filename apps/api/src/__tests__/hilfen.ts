@@ -5,10 +5,11 @@
 
 import { generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
 import { AKTEUR_HEADER, bodySha256, signiereAkteur, type AkteurClaims } from '@tcms/contract';
-import { erzeugeApp, type AppDeps, type Datenzugriff } from '../app';
+import { baueRoutentabelle, erzeugeApp, type AppDeps, type Datenzugriff } from '../app';
 import { SpeicherJti, type JtiSpeicher } from '../jti';
 import type { LogWert } from '../log';
 import type { Routen } from '../routen';
+import { mitVertragspruefung } from './vertrag';
 
 export const JETZT = new Date('2026-10-19T10:00:00.000Z');
 export const JETZT_S = JETZT.getTime() / 1000;
@@ -65,7 +66,7 @@ export function aufbau(
       pings.push(1);
     },
   };
-  const app = erzeugeApp({
+  const deps: AppDeps = {
     konfiguration: {
       dienstTokens: [TOKEN_ALT, TOKEN_NEU],
       akteurSchluessel: SCHLUESSEL,
@@ -82,7 +83,11 @@ export function aufbau(
     ...over,
     jti,
     daten,
-  });
+  };
+  const app = erzeugeApp(deps);
+  // Jede Antwort dieser App gegen den Vertrag prüfen (Endpunktregister, vertrag.ts);
+  // die Prüftabelle entsteht aus denselben Routen wie die App.
+  mitVertragspruefung(app, baueRoutentabelle(deps, { schreibe: () => undefined }));
   return { app, log, logRoh, tenants, jti, jtiAufrufe, pings };
 }
 
