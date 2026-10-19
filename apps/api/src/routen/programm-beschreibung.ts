@@ -10,9 +10,20 @@
 // ist tenantweit (/v1/nachrichten, nur Verwaltungsrecht, im Service geprüft).
 // =============================================================================
 
-import { NachrichtenOffenQuerySchema } from '@tcms/contract';
+import {
+  EinrichtungLesenQuerySchema,
+  EntwurfSpeichernBodySchema,
+  NachrichtenOffenQuerySchema,
+  ProgrammAnlegenBodySchema,
+} from '@tcms/contract';
 import type { Tx } from '@tcms/db';
-import { bestaetigeNachrichtZustellung, ladeOffeneNachrichten } from '@tcms/service';
+import {
+  bestaetigeNachrichtZustellung,
+  ladeEinrichtung,
+  ladeOffeneNachrichten,
+  legeProgrammAn,
+  speichereEinrichtungsschritt,
+} from '@tcms/service';
 import type { Routen } from '../routen';
 import { dienstKontext } from './kontext';
 
@@ -31,5 +42,28 @@ export function registriereProgrammBeschreibung(r: Routen<Tx>): void {
     pfad: '/v1/nachrichten/:nachrichtId/zugestellt',
     handler: (c) =>
       bestaetigeNachrichtZustellung(dienstKontext(c), { nachrichtId: c.params.nachrichtId! }),
+  });
+
+  // ---- Einrichtungsassistent ----
+  r.route({
+    methode: 'GET',
+    pfad: `${M}/einrichtung`,
+    query: EinrichtungLesenQuerySchema,
+    handler: (c) =>
+      ladeEinrichtung(dienstKontext(c), { mandantId: c.params.mandantId!, ...c.query }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${M}/einrichtung/entwurf`,
+    body: EntwurfSpeichernBodySchema,
+    handler: (c) =>
+      speichereEinrichtungsschritt(dienstKontext(c), { mandantId: c.params.mandantId!, ...c.body }),
+  });
+  r.route({
+    methode: 'POST',
+    pfad: `${M}/einrichtung/anlegen`,
+    status: 201,
+    body: ProgrammAnlegenBodySchema,
+    handler: (c) => legeProgrammAn(dienstKontext(c), { mandantId: c.params.mandantId!, ...c.body }),
   });
 }

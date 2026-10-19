@@ -1,13 +1,60 @@
 import 'server-only';
+import { DienstFehler, type EinrichtungPersonen, type EinrichtungView } from '@tcms/contract';
 import type { Geschaeftsprofil } from '@tcms/domain';
-import { db, demoPersonen, zustaendigkeit } from './demo';
+import { imDienst, ladeEinrichtung as ladeEinrichtungDienst } from '@tcms/service';
+import { db, DEMO_PORTS, demoPersonen, zustaendigkeit } from './demo';
 import { personKurz, type PersonKurz, type TcmsKontext } from './kontext';
 import type { Umfeld } from './programm-aufbau';
+import { demoAkteur } from './sitzung';
 
 // =============================================================================
-// Zusatzdaten für Einrichtungsassistent (S3) und Profil-Tab: Entwurf,
-// Personen-Umfeld, Profilhistorie und Risikoentscheidungen.
+// Zusatzdaten für Einrichtungsassistent (S3) und Profil-Tab. Der Assistent
+// liest über den Service-Lader (`ladeEinrichtung`); die Demo liefert wie die
+// kanzleikonsole die Personen der Kanzlei (Zuständigkeit aus dem
+// Demo-Verzeichnis). Profilhistorie und Umfeld für den Profil-Tab bleiben hier,
+// bis der Bereich risiken-kontrollen sie übernimmt.
 // =============================================================================
+
+/** Kanzleipersonen des Demo-Verzeichnisses, nach Name sortiert (Vorschlagsreihenfolge). */
+function kanzleiPersonen() {
+  return demoPersonen
+    .alle()
+    .filter((p) => p.art === 'KANZLEI')
+    .sort((a, b) => a.name.localeCompare(b.name, 'de'));
+}
+
+/** Personen für den Assistenten, wie sie die kanzleikonsole übergibt (nur Vorbelegung). */
+export function einrichtungsPersonen(mandantId: string): EinrichtungPersonen {
+  const z = zustaendigkeit(mandantId);
+  return {
+    berufstraegerId: z.berufstraegerId,
+    bearbeitungId: z.bearbeitungId,
+    kanzlei: kanzleiPersonen().map((p) => p.id),
+  };
+}
+
+/** Entwurf, Plan und Prüfpunkte des Assistenten über den Service (null: kein Zugriff). */
+export async function ladeEinrichtung(mandantId: string): Promise<EinrichtungView | null> {
+  const akteur = await demoAkteur(mandantId);
+  if (!akteur || !UUID.test(mandantId)) return null;
+  const p = einrichtungsPersonen(mandantId);
+  const vertretung = kanzleiPersonen().find(
+    (x) => x.id !== p.berufstraegerId && x.id !== p.bearbeitungId,
+  );
+  try {
+    return await imDienst(akteur, DEMO_PORTS, (ctx) =>
+      ladeEinrichtungDienst(ctx, {
+        mandantId,
+        ...(p.berufstraegerId ? { berufstraegerId: p.berufstraegerId } : {}),
+        ...(p.bearbeitungId ? { bearbeitungId: p.bearbeitungId } : {}),
+        ...(vertretung ? { vertretungId: vertretung.id } : {}),
+      }),
+    );
+  } catch (e) {
+    if (e instanceof DienstFehler && e.code === 'NICHT_GEFUNDEN') return null;
+    throw e;
+  }
+}
 
 export interface SetupProgramm {
   id: string;

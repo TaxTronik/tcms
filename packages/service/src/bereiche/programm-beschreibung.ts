@@ -7,8 +7,43 @@
 // =============================================================================
 
 export {
+  ladeEinrichtung,
+  legeProgrammAn,
+  speichereEinrichtungsschritt,
+} from './programm-beschreibung/einrichtung';
+export {
   bestaetigeNachrichtZustellung,
   ladeOffeneNachrichten,
   leseNachrichtAdresse,
   nachrichtAdresse,
 } from './programm-beschreibung/nachrichten';
+export {
+  appetitAusZielen,
+  AufbauFehler,
+  aufbauRollen,
+  berechnePlan,
+  nimmRisikoAuf,
+  pruefeKontrollZustaendigkeiten,
+  standardKontrollZustaendigkeit,
+  type AufbauAufnahmeErgebnis,
+  type AufbauPerson,
+  type AufbauPlan,
+  type AufbauPlanKontrolle,
+  type AufbauPlanRisiko,
+  type AufbauRollen,
+  type AufbauUmfeld,
+  type AufbauZustaendigkeit,
+} from './programm-beschreibung/aufbau';
+export {
+  leseEinrichtungsProfil,
+  leseEntwurf,
+  mindestEnde,
+  neuerEntwurf,
+  pruefeEinrichtungsProfil,
+  pruefeSchritt1,
+  pruefeSchritt2,
+  pruefeSchritt3,
+  pruefeSchritt4,
+  risikoEntscheidung,
+  standardZeitraum,
+} from './programm-beschreibung/entwurf';
