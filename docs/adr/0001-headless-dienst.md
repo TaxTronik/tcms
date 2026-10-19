@@ -194,6 +194,18 @@ Image per Digest gepinnt plus Signaturprüfung, Antwortgrößen begrenzt,
 Token- und Schlüsselrotation mit Überlappung, ein Vertragstest gegen den echten
 Dienst.
 
+Produktions-Image (RT-04, Advisories in Werkzeugen): Das Image des Dienstes
+enthält nur Laufzeitabhängigkeiten (`pnpm deploy --prod` o. ä. für
+`@tcms/api`), keine Prisma-CLI (`prisma`), kein `tsx`/`esbuild` und keine
+Test- oder Build-Werkzeuge. Der Prisma-Client wird im Build-Schritt erzeugt und
+übernommen; der Dienst wird dort übersetzt (heute startet `pnpm api` noch über
+`tsx`, das dafür in die devDependencies wandert). Migrationen laufen in einem
+getrennten, kurzlebigen Schritt mit eigenem Image als `tcms_owner`
+(`DATABASE_OWNER_URL` nur dort); der laufende Dienst kennt nur `DATABASE_URL`
+der Rolle `tcms_app`. Damit erreichen Advisories in Entwicklungswerkzeugen
+(CLI, Bundler, Testläufer) den Produktionsbetrieb nicht. Die Umsetzung des
+Images folgt in Stufe 2.
+
 ## 9. Sicherheitsbefunde des Prototyps, die diese Stufe behebt
 
 | ID    | Befund                                                                                                        | Behebung                                                                                                                                                                                |
