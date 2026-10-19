@@ -25,7 +25,8 @@ import { aendereProfil, nimmVorgeschlagenesRisikoAuf } from '@/server/actions/pr
 import { KEIN_RECHT } from '@/server/aktion';
 import { personKurzname } from '@/server/kontext';
 import { ladeStaffSeite, NUR_AKTUELL } from '@/server/seite';
-import { ladeProfilDaten, ladeSetupProgramm, type ProfilStandView } from '@/server/setup-daten';
+import { ladeProfilDaten, type ProfilStandView } from '@/server/profil-daten';
+import { ladeSetupProgramm } from '@/server/setup-daten';
 import { tagesende } from '@/server/zeit';
 
 export const metadata = { title: 'Geschäftsprofil' };
@@ -152,7 +153,7 @@ export default async function ProfilSeite({
   }
 
   // ---- Stände ----
-  const { staende, risiken } = await ladeProfilDaten(ctx.programm.id);
+  const { staende, risiken } = await ladeProfilDaten(ctx);
   const ende = tagesende(ctx.stand);
   const gueltigAm = (s: ProfilStandView) =>
     s.gueltigAb.getTime() <= ende.getTime() &&
@@ -273,7 +274,8 @@ export default async function ProfilSeite({
           </div>
           <ProfilAenderung
             aktion={aendereProfil}
-            programmId={ctx.programm.id}
+            mandantId={ctx.mandant.id}
+            profilStandId={juengster.id}
             start={juengster.antworten}
             personen={personen}
             heuteIso={seite.heuteIso}
@@ -515,7 +517,7 @@ export default async function ProfilSeite({
                 <VorschlagKopf v={v} />
                 <RisikoAufnehmen
                   aktion={nimmVorgeschlagenesRisikoAuf}
-                  programmId={ctx.programm!.id}
+                  mandantId={ctx.mandant.id}
                   code={v.code}
                   darf={darf}
                   grund={sperrGrund}
@@ -537,7 +539,7 @@ export default async function ProfilSeite({
                 </div>
                 <RisikoAufnehmen
                   aktion={nimmVorgeschlagenesRisikoAuf}
-                  programmId={ctx.programm!.id}
+                  mandantId={ctx.mandant.id}
                   code={v.code}
                   darf={darf}
                   grund={sperrGrund}

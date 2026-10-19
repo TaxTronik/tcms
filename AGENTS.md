@@ -25,6 +25,12 @@ für KI-Werkzeuge.
   Mandanten zu einem Stichtag (prüft `kannLesen`, maskiert vertrauliche
   Feststellungen), Nummernkreise je Tenant, reine Stichtag-Helfer. Änderungen
   hier brauchen Tests (`pnpm --filter @tcms/service test`).
+  Bereiche unter `src/bereiche/<bereich>` (z. B. `risiken-kontrollen`: Risiken,
+  Kontrollen, Geschäftsprofil). TS-05 dort: Zeile in der Transaktion sperren
+  (Reihenfolge Programm → Risiko → Kontrolle → Durchführung, je nach ID),
+  Zustand unter der Sperre lesen, versionierte Änderungen nur auf dem
+  gesehenen Stand (`standId`/`profilStandId`, sonst `KONFLIKT`), bedingte
+  Updates; Neuplanung löscht nur unberührte geplante Durchführungen.
 - `packages/contract` – gemeinsamer Vertrag mit der kanzleikonsole (ADR 0001
   §3, §7): Claims-Schema und `Akteur`, Signieren und Prüfen der
   Akteursbestätigung (`signiereAkteur`, `pruefeAkteur`, nur `node:crypto`),

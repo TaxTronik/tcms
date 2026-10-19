@@ -26,7 +26,7 @@ import { risikenFreigabeSchritt } from '@/server/actions/risiken';
 import { KEIN_RECHT } from '@/server/aktion';
 import { personName, type RisikoView } from '@/server/kontext';
 import { zweitePerson } from '@tcms/service';
-import { ladeAkzeptanzen, ladeNeuBewertenHinweise, ladeRisikoDetail } from '@/server/risiken-daten';
+import { ladeRisikenZusatz, ladeRisikoDetail } from '@/server/risiken-daten';
 import { ladeStaffSeite, NUR_AKTUELL } from '@/server/seite';
 
 export const metadata = { title: 'Risikoinventar' };
@@ -110,10 +110,7 @@ export default async function Risikoinventar({
   }
 
   const sperre = ctx.historisch ? NUR_AKTUELL : seite.darfBearbeiten ? null : KEIN_RECHT;
-  const [hinweise, akzeptanzen] = await Promise.all([
-    ladeNeuBewertenHinweise(ctx),
-    ladeAkzeptanzen(ctx),
-  ]);
+  const { hinweise, akzeptanzen } = await ladeRisikenZusatz(ctx);
   const betriebAktiv =
     !!ctx.programm.wirksamAb && ctx.programm.wirksamAb.getTime() <= ctx.stand.getTime();
   const kontrolleJe = new Map(ctx.kontrollen.map((k) => [k.id, k]));
@@ -155,7 +152,7 @@ export default async function Risikoinventar({
   const ansicht = param(sp, 'ansicht') === 'heatmap' ? 'heatmap' : 'liste';
   const risikoParam = param(sp, 'risiko');
   const auswahl = ctx.risiken.find((r) => r.id === risikoParam || r.code === risikoParam) ?? null;
-  const detail = auswahl ? await ladeRisikoDetail(auswahl, ctx.stand) : null;
+  const detail = auswahl ? await ladeRisikoDetail(ctx, auswahl.id) : null;
   const link = (aenderung: Record<string, string | null>) => mitParams(pfad, sp, aenderung);
 
   const ueberAppetit = ctx.risiken.filter((r) => r.ueberAppetit).length;
@@ -456,6 +453,7 @@ export default async function Risikoinventar({
           ) : mitAuswahl ? (
             <AktionsForm action={risikenFreigabeSchritt}>
               <input type="hidden" name="stand" value={seite.standIso} />
+              <input type="hidden" name="mandantId" value={ctx.mandant.id} />
               <div className="tbl-scroll">{tabelle}</div>
               {fuss}
             </AktionsForm>
