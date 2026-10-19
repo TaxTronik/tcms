@@ -285,9 +285,12 @@ vorhandenen Tokens aufsetzen.
   (`packages/contract/src/bereiche/lesepfade.ts`); keine eigenen Zeichenklassen
   in Vertrag, Dienst oder Demo. Einzige Ausnahme: gespeicherte Ereignis-Anlagen
   in Antworten (`DATEINAME_GESPEICHERT_UNZULAESSIG`, frühere Regel, weil das
-  Meldungs-Audit unveränderlich ist). `richtungszeichen.test.ts` (Vertrag) und
-  `packages/service/src/__tests__/ablage.test.ts` prüfen jeden Code Point der
-  BMP und die Tag-Zeichen.
+  Meldungs-Audit unveränderlich ist). Die Regel folgt aus Unicode-Eigenschaften
+  (`UNZULAESSIG_KLASSE`: Cc, Cf, Zl, Zp, Default_Ignorable_Code_Point, Cs), nie
+  aus einer Liste (RT4-T-01). `richtungszeichen.test.ts` (Vertrag) prüft sie für
+  jeden Code Point gegen die einzeln abgefragten Eigenschaften und eine
+  Pflichtliste, `packages/service/src/__tests__/ablage.test.ts` die BMP, die
+  Tag-Zeichen und die unsichtbaren Bereiche außerhalb der BMP.
 - Versionierte Dateien sind normale Dateien (Modus 100644), keine Symlinks oder
   Submodule. Ausführbar (100755) sind nur die direkt gestarteten Skripte
   `packages/db/betrieb/migrate.sh`, `scripts/pruefe-lieferkette.sh` und

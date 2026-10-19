@@ -932,24 +932,32 @@ export type PortalUebersichtAntwort = z.infer<typeof PortalUebersichtAntwortSche
 // ---------------------------------------------------------------------------
 
 /**
- * Zeichen, die in einzeiligen Texten (Stammdaten) und Dateinamen nie
- * vorkommen dürfen – eine Regel für den ganzen Vertrag und den Dienst
- * (`einzeilig`, Dateinamen von Anlagen und Nachweisen, `pruefeVerweis`):
+ * Zeichenregel: Zeichen, die in einzeiligen Texten (Stammdaten, Titel, Namen)
+ * und Dateinamen nie vorkommen dürfen – eine Regel für den ganzen Vertrag,
+ * den Dienst (`einzeilig`, Dateinamen von Anlagen und Nachweisen,
+ * `pruefeVerweis`) und den statischen Repo-Test (`repo-zeichen.test.ts`, dort
+ * ohne TAB und LF). Sie folgt aus Unicode-Eigenschaften statt aus einer Liste
+ * (RT4-T-01): Eine Liste übersah standardmäßig unsichtbare Zeichen wie die
+ * Variantenselektoren U+FE00–U+FE0F und U+E0100–U+E01EF, mit denen sich
+ * beliebige Bytes in einem sichtbaren Text verstecken lassen.
  *
- *   Steuerzeichen   C0 U+0000–U+001F, DEL U+007F, C1 U+0080–U+009F,
- *                   Zeilen-/Absatztrenner U+2028/U+2029
- *   Richtung        Einbettung/Überschreibung U+202A–U+202E, Isolierung
- *                   U+2066–U+2069, Marken LRM U+200E, RLM U+200F, ALM U+061C
- *   Nullbreite      ZWSP U+200B, ZWNJ U+200C, ZWJ U+200D, Wortverbinder und
- *                   unsichtbare Operatoren U+2060–U+2064, ZWNBSP/BOM U+FEFF,
- *                   Mongolischer Vokaltrenner U+180E, weiches Trennzeichen U+00AD
- *   Füller          unsichtbare Buchstaben U+115F, U+1160, U+3164, U+FFA0
- *   Tags            U+E0000–U+E007F (unsichtbare „ASCII-Schmuggel"-Zeichen)
+ *   Cc   Steuerzeichen: C0 U+0000–U+001F (auch TAB, LF, CR), DEL, C1
+ *   Cf   Formatzeichen: Richtung (LRM, RLM, ALM, Einbettung, Überschreibung,
+ *        Isolierung), Nullbreite (ZWSP, ZWNJ, ZWJ, Wortverbinder, BOM),
+ *        weiches Trennzeichen, Tag-Zeichen U+E0001–U+E007F u. a.
+ *   Zl   Zeilentrenner U+2028; Zp Absatztrenner U+2029
+ *   Default_Ignorable_Code_Point
+ *        alles standardmäßig Unsichtbare, auch ohne Formatkategorie: Füller
+ *        (U+115F, U+1160, U+3164, U+FFA0), Variantenselektoren, U+034F,
+ *        U+17B4/U+17B5, U+180B–U+180F, reservierte Bereiche (U+2065,
+ *        U+FFF0–U+FFF8, U+E0000–U+E0FFF)
+ *   Cs   einzelne Surrogate (kein gültiger Text; PostgreSQL speichert sie nicht)
  *
- * Alle Code Points stehen als Escape im Quelltext (keine rohen Zeichen,
- * repo-zeichen.test.ts). Der Ausdruck arbeitet auf Code Points (`u`).
+ * Der Umfang folgt der Unicode-Version der Laufzeit (Node 24: Unicode 17);
+ * Vertrag und kanzleikonsole laufen auf derselben Node-Version. Der Ausdruck
+ * arbeitet auf Code Points (`u`) und steht ohne rohe Zeichen im Quelltext.
  */
-const UNZULAESSIG_KLASSE = String.raw`\u0000-\u001f\u007f-\u009f\u00ad\u061c\u115f\u1160\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\u3164\ufeff\uffa0\u{e0000}-\u{e007f}`;
+export const UNZULAESSIG_KLASSE = String.raw`\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\p{Cs}`;
 export const UNZULAESSIGE_ZEICHEN = new RegExp(`[${UNZULAESSIG_KLASSE}]`, 'u');
 
 /** Dateiname: dieselben Zeichen und zusätzlich keine Pfadtrenner (`/`, Backslash). */
