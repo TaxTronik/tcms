@@ -4,7 +4,7 @@
 // Verweis und prüft ihn streng; Dateiinhalte weist es ab.
 // =============================================================================
 
-import { DienstFehler } from '@tcms/contract';
+import { DATEINAME_UNZULAESSIG, DienstFehler } from '@tcms/contract';
 import type { NachweisAblage, NachweisEingang, NachweisVerweis } from './kontext';
 
 /** Obergrenzen eines Verweises; die Spalte `groesse` ist ein INTEGER. */
@@ -18,8 +18,9 @@ export const VERWEIS_GRENZEN = {
 const DOKUMENT_ID = /^[A-Za-z0-9._:-]+$/;
 const MIME = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-// Steuerzeichen, Pfadtrenner und Unicode-Richtungszeichen (Dateinamen-Spoofing).
-const DATEINAME_VERBOTEN = /[\u0000-\u001f\u007f/\\\u202a-\u202e\u2066-\u2069]/;
+// Steuer-, Richtungs-, Nullbreiten- und Füllzeichen, Pfadtrenner (Dateinamen-
+// Spoofing): dieselbe Regel wie der Vertrag (`DATEINAME_UNZULAESSIG`).
+const DATEINAME_VERBOTEN = DATEINAME_UNZULAESSIG;
 
 /** Prüft einen Verweis; liefert die Feldfehler (leer = gültig). */
 export function pruefeVerweis(v: unknown): Record<string, string[]> {

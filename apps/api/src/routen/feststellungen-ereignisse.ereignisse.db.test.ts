@@ -5,6 +5,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { EreignisDetailSchema, PortalMeldungenSchema } from '@tcms/contract';
+import { schreibeAudit } from '@tcms/db';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   AKTIV,
@@ -270,6 +271,48 @@ describe.skipIf(!AKTIV)('API Ereignisse und Portal gegen PostgreSQL', () => {
     expect(selbst.status).toBe(403);
     expect(selbst.json['fehler']).toMatchObject({ grund: 'VIER_AUGEN' });
     expect((await lies(ZBT)).verwerfen.bestaetigen).toEqual({ erlaubt: true, verweigerung: null });
+  });
+
+  it('Anlagen: neue Dateinamen mit unzulässigen Zeichen → 400; gespeicherte (frühere Regel) lesbar', async () => {
+    const anlage = (dateiname: string) => {
+      const sha256 = randomBytes(32).toString('hex');
+      return {
+        dokumentId: `kk:${sha256.slice(0, 12)}`,
+        dateiname,
+        mime: 'application/pdf',
+        groesse: 10,
+        sha256,
+      };
+    };
+    // Neu (Portal-Meldung): ZWSP, LRM, weiches Trennzeichen → 400, nichts gemeldet.
+    for (const name of ['Vertrag\u200b.pdf', 'Vertrag\u200e.pdf', 'Ver\u00adtrag.pdf']) {
+      const r = await rufe(GV(), 'POST', `${B}/portal/ereignisse`, portalMeldung([anlage(name)]));
+      expect(r.status, name).toBe(400);
+      expect(r.json).toMatchObject({ ok: false, fehler: { code: 'UNGUELTIG' } });
+    }
+    // Vor der Angleichung gespeichert (Meldungs-Audit, unveränderlich): LRM und ZWSP
+    // im Namen waren zulässig – Detail und Anlage bleiben lesbar (Vertragsprüfung).
+    const e = await ereignis();
+    const alt = [anlage('Vertrag\u200e.pdf'), anlage('Ver\u200btrag.pdf')];
+    await db((tx) =>
+      schreibeAudit(tx, {
+        actorId: P.gv,
+        actorName: 'Testkontakt',
+        aktion: 'tcms.ereignis.gemeldet',
+        objektTyp: 'Ereignis',
+        objektId: e.id,
+        programmId: w.programm,
+        detail: { anlagen: alt },
+      }),
+    );
+    const d = await rufe(ZBT, 'GET', `${B}/ereignisse/${e.id}`);
+    expect(d.status).toBe(200);
+    expect(EreignisDetailSchema.parse(d.json['daten']).anlagen.map((a) => a.dateiname)).toEqual(
+      alt.map((a) => a.dateiname),
+    );
+    const a = await rufe(ZBT, 'GET', `${B}/ereignisse/${e.id}/anlagen/${alt[0]!.sha256}`);
+    expect(a.status).toBe(200);
+    expect(a.json['daten']).toEqual(alt[0]);
   });
 
   it('Portal-Meldungen: Melderecht (GV ja, Mitarbeitende nein) und Programm vorhanden', async () => {

@@ -283,6 +283,12 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
         '{}',
         JSON.stringify({ name: 'A', rechtsform: 'KapG', tenantId: randomUUID() }),
         JSON.stringify({ name: 'A\u0000', rechtsform: 'KapG' }),
+        // Unzulässige Zeichen (eine Regel, richtungszeichen.test.ts): ZWSP, LRM,
+        // weiches Trennzeichen, Tag-Zeichen.
+        JSON.stringify({ name: 'A\u200bB', rechtsform: 'KapG' }),
+        JSON.stringify({ name: 'A\u200eB', rechtsform: 'KapG' }),
+        JSON.stringify({ name: 'Neu GmbH', rechtsform: 'Kap\u00adG' }),
+        JSON.stringify({ name: 'A\u{e0041}', rechtsform: 'KapG' }),
       ]) {
         const r = await bestaetigtSenden(app(), {
           methode: 'PUT',
@@ -337,6 +343,8 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
         JSON.stringify({ kontaktId, rollen: ['GESETZLICHER_VERTRETER', 'GESETZLICHER_VERTRETER'] }),
         JSON.stringify({ kontaktId: 'x', rollen: [] }),
         JSON.stringify({ kontaktId, rollen: [], mandantId: randomUUID() }),
+        JSON.stringify({ kontaktId, rollen: [], funktion: 'G\u2060F' }),
+        JSON.stringify({ kontaktId, rollen: [], funktion: 'G\u061cF' }),
       ]) {
         const x = await bestaetigtSenden(app(), {
           methode: 'PUT',

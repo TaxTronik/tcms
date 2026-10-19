@@ -280,6 +280,14 @@ vorhandenen Tokens aufsetzen.
   Quelltext nur als Escape; alle Dateien UTF-8 ohne BOM. Der statische Test
   `packages/contract/src/__tests__/repo-zeichen.test.ts` prüft Index und
   Arbeitsbaum; Ausnahmen nur je Datei und Zeichen mit Begründung.
+- Einzeilige Texte und Dateinamen in Eingaben prüfen nur über die eine Regel
+  `UNZULAESSIGE_ZEICHEN` bzw. `DATEINAME_UNZULAESSIG`
+  (`packages/contract/src/bereiche/lesepfade.ts`); keine eigenen Zeichenklassen
+  in Vertrag, Dienst oder Demo. Einzige Ausnahme: gespeicherte Ereignis-Anlagen
+  in Antworten (`DATEINAME_GESPEICHERT_UNZULAESSIG`, frühere Regel, weil das
+  Meldungs-Audit unveränderlich ist). `richtungszeichen.test.ts` (Vertrag) und
+  `packages/service/src/__tests__/ablage.test.ts` prüfen jeden Code Point der
+  BMP und die Tag-Zeichen.
 - Versionierte Dateien sind normale Dateien (Modus 100644), keine Symlinks oder
   Submodule. Ausführbar (100755) sind nur die direkt gestarteten Skripte
   `packages/db/betrieb/migrate.sh`, `scripts/pruefe-lieferkette.sh` und

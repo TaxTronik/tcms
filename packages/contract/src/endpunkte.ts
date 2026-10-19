@@ -57,7 +57,7 @@ import {
   NachweiseJeDokumentSchema,
 } from './bereiche/durchfuehrung';
 import {
-  AnlageVerweisSchema,
+  AnlageGespeichertSchema,
   EreignisAktionSchema,
   EreignisAnlageLesenSchema,
   EreignisDetailSchema,
@@ -944,7 +944,7 @@ export const ENDPUNKTE = register({
     methode: 'GET',
     pfad: `${E}/anlagen/:sha256`,
     params: EreignisAnlageLesenSchema,
-    antwort: AnlageVerweisSchema,
+    antwort: AnlageGespeichertSchema,
   },
   ereignisErfassen: {
     methode: 'POST',

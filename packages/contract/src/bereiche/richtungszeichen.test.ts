@@ -1,24 +1,70 @@
 // =============================================================================
-// Richtungszeichen in Dateinamen und Stammdaten (Anzeige-Spoofing): Die Regexe
-// in `feststellungen-ereignisse.ts` (DATEINAME_VERBOTEN) und `lesepfade.ts`
-// (`einzeilig`) enthielten die Bereiche U+202A–U+202E und U+2066–U+2069 als
-// rohe Zeichen („Trojan Source", siehe __tests__/repo-zeichen.test.ts); sie
-// stehen jetzt als Escapes da. Dieser Test belegt, dass sich das Verhalten
-// dabei nicht geändert hat: Für jeden Code Point der BMP (ohne Surrogate)
-// entscheiden die Schemas wie die bisherigen Regexe. Die bisherigen Regexe
-// werden hier aus Code Points gebaut, damit auch dieser Test keine rohen
-// Zeichen enthält.
+// Unzulässige Zeichen in einzeiligen Stammdaten und Dateinamen (Anzeige-
+// Spoofing, „Trojan Source"): Eine Regel (`UNZULAESSIGE_ZEICHEN`,
+// `DATEINAME_UNZULAESSIG` in lesepfade.ts) gilt für `einzeilig` (Anker,
+// Kontaktfunktion), Dateinamen von Ereignis-Anlagen (`AnlageVerweisSchema`)
+// und Nachweisen (`gueltigerNachweisDateiname`). Der Test prüft jeden Code
+// Point der BMP (ohne Surrogate) und die Tag-Zeichen samt Nachbarn gegen eine
+// hier ausdrücklich aufgeschriebene Liste – unabhängig von der Umsetzung.
+// Gespeicherte Ereignis-Anlagen in Antworten (`AnlageGespeichertSchema`,
+// Detail `AnlageSchema`, `ereignisAnlageLesen`) prüft nur die frühere Regel,
+// damit Namen aus dem unveränderlichen Meldungs-Audit lesbar bleiben.
+// Die Code Points stehen nur als Zahlen im Test (keine rohen Zeichen).
 // =============================================================================
 
 import { describe, expect, it } from 'vitest';
-import { AnlageVerweisSchema } from './feststellungen-ereignisse';
-import { MandantAnkerBodySchema } from './lesepfade';
+import { gueltigerNachweisDateiname } from './durchfuehrung';
+import { ENDPUNKTE } from '../endpunkte';
+import {
+  AnlageGespeichertSchema,
+  AnlageSchema,
+  AnlageVerweisSchema,
+} from './feststellungen-ereignisse';
+import { KontaktRollenBodySchema, MandantAnkerBodySchema } from './lesepfade';
 
-const z = (cp: number) => String.fromCharCode(cp);
-/** Bisherige Zeichenklasse, Bereiche als rohe Zeichen (wie vor der Änderung). */
-const RICHTUNG_ROH = `${z(0x202a)}-${z(0x202e)}${z(0x2066)}-${z(0x2069)}`;
-const DATEINAME_BISHER = new RegExp(`[\\u0000-\\u001f\\u007f/\\\\${RICHTUNG_ROH}]`);
-const EINZEILIG_BISHER = new RegExp(`^[^\\u0000-\\u001f\\u007f${RICHTUNG_ROH}]*$`);
+const z = (cp: number) => String.fromCodePoint(cp);
+
+/** Erwartet unzulässig in einzeiligen Texten und Dateinamen (Bereiche, je inklusive). */
+const UNZULAESSIG: readonly [number, number, string][] = [
+  [0x0000, 0x001f, 'C0-Steuerzeichen'],
+  [0x007f, 0x009f, 'DEL und C1-Steuerzeichen'],
+  [0x00ad, 0x00ad, 'weiches Trennzeichen'],
+  [0x061c, 0x061c, 'ALM'],
+  [0x115f, 0x1160, 'Hangul-Füller'],
+  [0x180e, 0x180e, 'Mongolischer Vokaltrenner'],
+  [0x200b, 0x200d, 'ZWSP, ZWNJ, ZWJ'],
+  [0x200e, 0x200f, 'LRM, RLM'],
+  [0x2028, 0x2029, 'Zeilen- und Absatztrenner'],
+  [0x202a, 0x202e, 'Einbettung, Überschreibung'],
+  [0x2060, 0x2064, 'Wortverbinder, unsichtbare Operatoren'],
+  [0x2066, 0x2069, 'Isolierung'],
+  [0x3164, 0x3164, 'Hangul-Füller'],
+  [0xfeff, 0xfeff, 'ZWNBSP/BOM'],
+  [0xffa0, 0xffa0, 'Hangul-Füller (halbbreit)'],
+  [0xe0000, 0xe007f, 'Tag-Zeichen'],
+];
+/** Nur in Dateinamen zusätzlich: Pfadtrenner. */
+const PFADTRENNER = [0x2f, 0x5c];
+/** Frühere Eingaberegel für Anlagen; gilt für gespeicherte Namen in Antworten. */
+const FRUEHER_UNZULAESSIG: readonly [number, number][] = [
+  [0x0000, 0x001f],
+  [0x002f, 0x002f],
+  [0x005c, 0x005c],
+  [0x007f, 0x007f],
+  [0x202a, 0x202e],
+  [0x2066, 0x2069],
+];
+
+const unzulaessig = (cp: number) => UNZULAESSIG.some(([a, b]) => cp >= a && cp <= b);
+
+/** Alle BMP-Code-Points ohne Surrogate, dazu Tag-Zeichen, Nachbarn und Beispiele außerhalb. */
+function codePoints(): number[] {
+  const out: number[] = [];
+  for (let cp = 0; cp <= 0xffff; cp += 1) if (cp < 0xd800 || cp > 0xdfff) out.push(cp);
+  for (let cp = 0xdffff; cp <= 0xe0080; cp += 1) out.push(cp);
+  out.push(0x10000, 0x1f600, 0x1f1e9, 0x10ffff);
+  return out;
+}
 
 const VERWEIS = {
   dokumentId: 'ab/0123',
@@ -27,48 +73,67 @@ const VERWEIS = {
   sha256: 'a'.repeat(64),
 };
 
-/** Alle BMP-Code-Points außer Surrogaten (kein gültiges einzelnes Zeichen). */
-function* bmp(): Generator<number> {
-  for (let cp = 0; cp <= 0xffff; cp += 1) if (cp < 0xd800 || cp > 0xdfff) yield cp;
-}
-
-describe('Richtungszeichen als Escapes: Verhalten unverändert', () => {
-  it('Dateiname einer Anlage (DATEINAME_VERBOTEN) entscheidet wie bisher', () => {
+describe('unzulässige Zeichen: eine Regel für Stammdaten und Dateinamen', () => {
+  it('einzeilig (Anker, Kontaktfunktion) weist genau die Liste ab', () => {
     const abweichend: string[] = [];
-    for (const cp of bmp()) {
+    for (const cp of codePoints()) {
+      const text = `A${z(cp)}B`;
+      const erwartet = !unzulaessig(cp);
+      const anker = MandantAnkerBodySchema.safeParse({ name: text, rechtsform: 'GmbH' }).success;
+      const funktion = KontaktRollenBodySchema.safeParse({
+        kontaktId: '11111111-1111-4111-8111-111111111111',
+        rollen: [],
+        funktion: text,
+      }).success;
+      if (anker !== erwartet || funktion !== erwartet) abweichend.push(cp.toString(16));
+    }
+    expect(abweichend).toEqual([]);
+  });
+
+  it('Dateinamen (Ereignis-Anlage, Nachweis) weisen die Liste und Pfadtrenner ab', () => {
+    const abweichend: string[] = [];
+    for (const cp of codePoints()) {
       const dateiname = `a${z(cp)}b.pdf`;
-      const bisher = !DATEINAME_BISHER.test(dateiname);
-      const jetzt = AnlageVerweisSchema.safeParse({ ...VERWEIS, dateiname }).success;
-      if (bisher !== jetzt) abweichend.push(cp.toString(16));
+      const erwartet = !unzulaessig(cp) && !PFADTRENNER.includes(cp);
+      const anlage = AnlageVerweisSchema.safeParse({ ...VERWEIS, dateiname }).success;
+      const nachweis = gueltigerNachweisDateiname(dateiname);
+      if (anlage !== erwartet || nachweis !== erwartet) abweichend.push(cp.toString(16));
     }
     expect(abweichend).toEqual([]);
   });
 
-  it('Stammdaten des Mandantenankers (einzeilig) entscheiden wie bisher', () => {
+  it('gespeicherte Anlagen (Antworten) prüfen nur die frühere Regel', () => {
     const abweichend: string[] = [];
-    for (const cp of bmp()) {
-      const name = `A${z(cp)}B`;
-      const bisher = EINZEILIG_BISHER.test(name);
-      const jetzt = MandantAnkerBodySchema.safeParse({ name, rechtsform: 'GmbH' }).success;
-      if (bisher !== jetzt) abweichend.push(cp.toString(16));
+    const antwort = ENDPUNKTE.ereignisAnlageLesen.antwortSchema;
+    for (const cp of codePoints()) {
+      const dateiname = `a${z(cp)}b.pdf`;
+      const erwartet = !FRUEHER_UNZULAESSIG.some(([a, b]) => cp >= a && cp <= b);
+      const { dokumentId: _d, ...ohneId } = VERWEIS;
+      const gespeichert = AnlageGespeichertSchema.safeParse({ ...VERWEIS, dateiname }).success;
+      const detail = AnlageSchema.safeParse({ ...ohneId, dateiname }).success;
+      const endpunkt = antwort.safeParse({ ...VERWEIS, dateiname }).success;
+      if (gespeichert !== erwartet || detail !== erwartet || endpunkt !== erwartet) {
+        abweichend.push(cp.toString(16));
+      }
     }
     expect(abweichend).toEqual([]);
+    // Neue Verweise bleiben streng: LRM und ZWSP nur in gespeicherten Namen lesbar.
+    for (const cp of [0x200e, 0x200b]) {
+      const dateiname = `a${z(cp)}b.pdf`;
+      expect(AnlageVerweisSchema.safeParse({ ...VERWEIS, dateiname }).success).toBe(false);
+      expect(AnlageGespeichertSchema.safeParse({ ...VERWEIS, dateiname }).success).toBe(true);
+    }
   });
 
-  it('weist jedes Richtungszeichen ab und lässt Umlaute zu', () => {
-    for (const cp of [0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069]) {
-      expect(
-        AnlageVerweisSchema.safeParse({ ...VERWEIS, dateiname: `a${z(cp)}.pdf` }).success,
-      ).toBe(false);
-      expect(
-        MandantAnkerBodySchema.safeParse({ name: `A${z(cp)}B`, rechtsform: 'KG' }).success,
-      ).toBe(false);
+  it('lässt übliche Namen zu (Umlaute, Akzente, Leerzeichen, Emoji)', () => {
+    for (const name of ['Müller & Söhne', 'Café Crème', 'A B']) {
+      expect(MandantAnkerBodySchema.safeParse({ name, rechtsform: 'KG' }).success, name).toBe(true);
     }
-    expect(AnlageVerweisSchema.safeParse({ ...VERWEIS, dateiname: 'Prüfung.pdf' }).success).toBe(
-      true,
-    );
-    expect(
-      MandantAnkerBodySchema.safeParse({ name: 'Müller & Söhne', rechtsform: 'KG' }).success,
-    ).toBe(true);
+    for (const dateiname of ['Prüfung 2026.pdf', `Bericht ${z(0x1f600)}.pdf`]) {
+      expect(AnlageVerweisSchema.safeParse({ ...VERWEIS, dateiname }).success, dateiname).toBe(
+        true,
+      );
+      expect(gueltigerNachweisDateiname(dateiname), dateiname).toBe(true);
+    }
   });
 });

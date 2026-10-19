@@ -641,6 +641,27 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
     expect(a.pruefung.ausserhalb).toEqual(['Saldo']);
   });
 
+  it('Nachweis anhängen: Dateiname mit unzulässigen Zeichen → 400, nichts angehängt', async () => {
+    const did = await durchfuehrung(k1);
+    // ZWSP, RLM, Zeilentrenner, Tag-Zeichen (eine Regel, richtungszeichen.test.ts).
+    for (const dateiname of [
+      'Salden\u200bliste.pdf',
+      'Salden\u200fliste.pdf',
+      'Salden\u2028liste.pdf',
+      'Salden\u{e0041}.pdf',
+    ]) {
+      const r = await senden('POST', `${D(did)}/nachweise`, C.bearbeiter, {
+        verweis: { ...verweis(), dateiname },
+      });
+      expect(r.status, dateiname).toBe(400);
+      expect(await json(r)).toMatchObject({ ok: false, fehler: { code: 'UNGUELTIG' } });
+    }
+    const anzahl = await mitTenant(tenant, (tx) =>
+      tx.nachweis.count({ where: { durchfuehrungId: did } }),
+    );
+    expect(anzahl).toBe(0);
+  });
+
   it('GET nachweise?dokumentId= (Abgleich): aktive und entfernte Nachweise; nur Kanzlei mit Bezug', async () => {
     const dok = randomUUID();
     const did = await durchfuehrung(k1);

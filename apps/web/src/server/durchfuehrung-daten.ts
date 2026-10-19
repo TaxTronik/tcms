@@ -4,6 +4,7 @@ import {
   DF_MIN_BEGRUENDUNG,
   DienstFehler,
   gueltigerNachweisDateiname,
+  UNZULAESSIGE_ZEICHEN,
   type PersonAkteur,
 } from '@tcms/contract';
 import { leseDatei } from '@tcms/db/demo-ablage';
@@ -469,12 +470,14 @@ export function alsErgebnis(e: unknown, nichtGefunden: string): Ergebnis {
 /** Ports der Demo für das Anhängen: Der Service erhält nur Verweise (ADR 0001 §6). */
 export const VERWEIS_PORTS: DienstPorts = { ...DEMO_PORTS, ablage: verweisAblage };
 
-const RICHTUNG_UND_STEUER = /[\u0000-\u001f\u007f"\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+// Dieselben unzulässigen Zeichen wie der Vertrag (Steuer-, Richtungs-, Nullbreiten-,
+// Füllzeichen), dazu Anführungszeichen; Pfadanteile entfernt `split` unten.
+const RICHTUNG_UND_STEUER = new RegExp(UNZULAESSIGE_ZEICHEN, 'gu');
 const MIME = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/;
 
 function dateinameBereinigt(name: string): string {
   const basis = name.split(/[\\/]/).pop() ?? '';
-  const sauber = basis.replace(RICHTUNG_UND_STEUER, '').trim().slice(0, 180);
+  const sauber = basis.replace(RICHTUNG_UND_STEUER, '').replace(/"/g, '').trim().slice(0, 180);
   return sauber && gueltigerNachweisDateiname(sauber) ? sauber : 'Nachweis';
 }
 

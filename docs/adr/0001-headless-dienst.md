@@ -303,7 +303,12 @@ gegen `antwortSchema` bzw. `FehlerSchema`. Antwortschemas sind streng
 CMS-Beschreibungen (Snapshot, `BausteinSatzSnapshotSchema`: später ergänzte
 Felder optional, weil der SHA-256 den Inhalt festschreibt). Die lebenden
 Bausteine sind streng, und neue Snapshots entstehen nur in dieser strengen
-Form. Die kanzleikonsole speist ihren Client direkt aus einem Eintrag.
+Form. Ebenso prüfen Antworten mit gespeicherten Ereignis-Anlagen
+(`AnlageGespeichertSchema`: Detail, `ereignisAnlageLesen`) den Dateinamen nur
+nach der früheren Zeichenregel (`DATEINAME_GESPEICHERT_UNZULAESSIG`), weil die
+Anlagen im hash-verketteten Meldungs-Audit stehen; neue Verweise prüft die
+strengere Regel (`DATEINAME_UNZULAESSIG`). Die kanzleikonsole speist ihren
+Client direkt aus einem Eintrag.
 
 ## 8. Betrieb (Stufe 2, in der kanzleikonsole)
 

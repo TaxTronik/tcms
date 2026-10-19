@@ -931,14 +931,51 @@ export type PortalUebersichtAntwort = z.infer<typeof PortalUebersichtAntwortSche
 // Mandantenanker und Kontaktrollen (ADR 0001 §5): Pflege durch die kanzleikonsole
 // ---------------------------------------------------------------------------
 
-/** Einzeiliger Text ohne Steuerzeichen und Richtungszeichen (Anzeige-Spoofing). */
+/**
+ * Zeichen, die in einzeiligen Texten (Stammdaten) und Dateinamen nie
+ * vorkommen dürfen – eine Regel für den ganzen Vertrag und den Dienst
+ * (`einzeilig`, Dateinamen von Anlagen und Nachweisen, `pruefeVerweis`):
+ *
+ *   Steuerzeichen   C0 U+0000–U+001F, DEL U+007F, C1 U+0080–U+009F,
+ *                   Zeilen-/Absatztrenner U+2028/U+2029
+ *   Richtung        Einbettung/Überschreibung U+202A–U+202E, Isolierung
+ *                   U+2066–U+2069, Marken LRM U+200E, RLM U+200F, ALM U+061C
+ *   Nullbreite      ZWSP U+200B, ZWNJ U+200C, ZWJ U+200D, Wortverbinder und
+ *                   unsichtbare Operatoren U+2060–U+2064, ZWNBSP/BOM U+FEFF,
+ *                   Mongolischer Vokaltrenner U+180E, weiches Trennzeichen U+00AD
+ *   Füller          unsichtbare Buchstaben U+115F, U+1160, U+3164, U+FFA0
+ *   Tags            U+E0000–U+E007F (unsichtbare „ASCII-Schmuggel"-Zeichen)
+ *
+ * Alle Code Points stehen als Escape im Quelltext (keine rohen Zeichen,
+ * repo-zeichen.test.ts). Der Ausdruck arbeitet auf Code Points (`u`).
+ */
+const UNZULAESSIG_KLASSE = String.raw`\u0000-\u001f\u007f-\u009f\u00ad\u061c\u115f\u1160\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\u3164\ufeff\uffa0\u{e0000}-\u{e007f}`;
+export const UNZULAESSIGE_ZEICHEN = new RegExp(`[${UNZULAESSIG_KLASSE}]`, 'u');
+
+/** Dateiname: dieselben Zeichen und zusätzlich keine Pfadtrenner (`/`, Backslash). */
+export const DATEINAME_UNZULAESSIG = new RegExp(`[${UNZULAESSIG_KLASSE}/\\\\]`, 'u');
+
+/**
+ * Gespeicherte Dateinamen in Antworten (Ereignis-Anlagen aus dem Meldungs-Audit,
+ * das hash-verkettet ist und nie umgeschrieben wird): nur die Zeichen, die schon
+ * die frühere Eingaberegel abwies – C0, DEL, Pfadtrenner, Einbettung/
+ * Überschreibung, Isolierung. Vor der Angleichung gespeicherte Namen (etwa mit
+ * LRM oder Nullbreitenzeichen) bleiben so lesbar, wie eingefrorene Snapshots
+ * (ADR 0001 §7); jede neue Eingabe prüft `DATEINAME_UNZULAESSIG`.
+ */
+export const DATEINAME_GESPEICHERT_UNZULAESSIG = new RegExp(
+  String.raw`[\u0000-\u001f\u007f/\\\u202a-\u202e\u2066-\u2069]`,
+  'u',
+);
+
+/** Einzeiliger Text ohne Steuer-, Richtungs- und unsichtbare Zeichen (Anzeige-Spoofing). */
 const einzeilig = (max: number) =>
   z
     .string()
     .trim()
     .min(1)
     .max(max)
-    .regex(/^[^\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]*$/, 'Unzulässige Zeichen');
+    .refine((s) => !UNZULAESSIGE_ZEICHEN.test(s), 'Unzulässige Zeichen');
 
 /** Body von `PUT /v1/mandanten/:mandantId`: Stammdaten des Mandantenankers. */
 export const MandantAnkerBodySchema = z

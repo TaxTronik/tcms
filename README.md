@@ -330,6 +330,17 @@ nicht erlaubter oder gleichzeitig geänderter Status `409`, Mängel beim Einreic
 
 Nachweise sind Verweise der kanzleikonsole (`{ verweis: { dokumentId (UUID), dateiname, mime,
 groesse, sha256 } }`); eine Dokument-ID gehört zu genau einem Mandanten und einem Inhalt.
+Einzeilige Texte (`einzeilig`: Mandantenname, Rechtsform, Kontaktfunktion) und Dateinamen
+(Nachweis, Ereignis-Anlage) folgen einer Zeichenregel (`UNZULAESSIGE_ZEICHEN`,
+`DATEINAME_UNZULAESSIG` in `packages/contract/src/bereiche/lesepfade.ts`): abgewiesen werden
+C0-/C1-Steuerzeichen und DEL, weiches Trennzeichen, ALM, LRM/RLM, Einbettungen/Überschreibungen
+und Isolierungen, Nullbreitenzeichen (ZWSP, ZWNJ, ZWJ, Wortverbinder, ZWNBSP/BOM), unsichtbare
+Operatoren, Zeilen-/Absatztrenner U+2028/U+2029, Hangul- und mongolische Füller sowie Tag-Zeichen;
+in Dateinamen zusätzlich `/` und `\`. Der Dienst prüft Dateinamen mit derselben Regel. Antworten
+mit gespeicherten Ereignis-Anlagen (Detail `anlagen`, `ereignisAnlageLesen`) prüfen nur die frühere
+Regel (`DATEINAME_GESPEICHERT_UNZULAESSIG`: Steuerzeichen, Pfadtrenner, Einbettung/Überschreibung,
+Isolierung), damit früher gemeldete Anlagen lesbar bleiben; Anzeigen behandeln Dateinamen immer als
+reinen Text.
 Die Prüfung einer Durchführung (`pruefung`, Kanzlei-Detail, Portal-Aufgabe, Speichern) liefert je
 Kennzahl die vom Dienst berechneten Werte (`kennzahlen`: erfasster Wert bzw. Differenz a − b, Abweichung
 gegen Soll, Toleranzlage) – dieselbe Rechnung wie beim Einreichen.
