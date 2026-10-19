@@ -71,6 +71,12 @@ const AUSNAHMEN: Record<string, { regeln: Regel[]; begruendung: string }> = {
       'RLS-Test: prüft jede Tabelle des Katalogs mit generiertem SQL (feste Tabellenliste) und ' +
       'setzt den Kontext auf einer rohen Verbindung, um RLS ohne mitTenant nachzuweisen.',
   },
+  'packages/db/src/__tests__/migrate.db.test.ts': {
+    regeln: ['pg-text'],
+    begruendung:
+      'Test des Migrationsläufers (nur mit TCMS_MIGRATE_TESTS=1, Superuser einer Testinstanz): ' +
+      'CREATE/DROP/ALTER DATABASE mit vom Test erzeugten Namen (Hex), keine Eingabewerte.',
+  },
   'packages/db/src/__tests__/roh-sql.test.ts': {
     regeln: ['tenant-guc'],
     begruendung: 'Dieser Test: Testfälle des Prüfers enthalten verbotene Muster als Text.',

@@ -1,0 +1,89 @@
+-- =============================================================================
+-- Rollen des Tax-CMS (ADR 0001 §4) – die eine Quelle der Rollenattribute und
+-- Rechte für Entwicklung (01_bootstrap.sql) und Betrieb
+-- (packages/db/betrieb/bootstrap.sql, Image tcms-migrate).
+--
+-- Läuft als Superuser in der Zieldatenbank (psql, nicht als Migration) und
+-- erwartet die psql-Variablen `tcms_owner_passwort` und `tcms_app_passwort`.
+-- Idempotent: legt die Rollen an oder gleicht sie an (Attribute, Passwort,
+-- Mitgliedschaften) und richtet Schema- und Datenbankrechte der aktuellen
+-- Datenbank ein.
+--
+--   tcms_owner  Eigentümer der Tabellen, nur für Migrationen und Seed.
+--               Kein Superuser, kein BYPASSRLS: auch der Seed läuft im
+--               Tenant-Kontext (FORCE ROW LEVEL SECURITY).
+--   tcms_app    Laufzeitrolle des Dienstes und der Demo. NOBYPASSRLS, kein
+--               Superuser, keine Mitgliedschaft in einer anderen Rolle, nur
+--               DML (die Grants je Tabelle setzt die Migration).
+--
+-- Passwörter gelangen nur als psql-Variable in die Anweisung (`format('%L')`,
+-- `\gexec`), nie in eine Kommandozeile. Vorher schaltet die Transaktion das
+-- Anweisungsprotokoll des Servers und pg_stat_statements ab (SET LOCAL, nur
+-- als Superuser möglich), und psql meldet Fehler knapp (ohne Anweisungstext),
+-- damit kein Passwort im Server-Log, in der Statistik oder in der Ausgabe
+-- landet. Die Datei ist bewusst kein `.sql`: Das Init-Verzeichnis des
+-- Postgres-Images führt nur `*.sql`/`*.sh` aus; eingebunden wird sie mit `\ir`.
+-- =============================================================================
+
+\set ON_ERROR_STOP on
+\set VERBOSITY terse
+\set SHOW_CONTEXT never
+
+\if :{?tcms_owner_passwort}
+\else
+  \warn 'rollen.psql: psql-Variable tcms_owner_passwort fehlt'
+  DO $fehlt$ BEGIN RAISE EXCEPTION 'Passwort für tcms_owner fehlt'; END $fehlt$;
+\endif
+\if :{?tcms_app_passwort}
+\else
+  \warn 'rollen.psql: psql-Variable tcms_app_passwort fehlt'
+  DO $fehlt$ BEGIN RAISE EXCEPTION 'Passwort für tcms_app fehlt'; END $fehlt$;
+\endif
+
+BEGIN;
+-- Kein Anweisungstext mit Passwort in Server-Log oder Statistik (gilt bis COMMIT).
+SET LOCAL log_statement = 'none';
+SET LOCAL log_min_duration_statement = -1;
+SET LOCAL log_min_error_statement = 'panic';
+SET LOCAL log_duration = off;
+SET LOCAL pg_stat_statements.track = 'none';
+SET LOCAL pg_stat_statements.track_utility = off;
+SET LOCAL password_encryption = 'scram-sha-256';
+SET LOCAL client_min_messages = warning;
+-- Gleichzeitige Bootstraps nacheinander (Rollen sind clusterweit).
+-- Schlüssel = 'tcmsrole' als int8.
+SELECT pg_catalog.pg_advisory_xact_lock(8386667273702567013) AS tcms_rollen_sperre \gset
+
+SELECT 'CREATE ROLE tcms_owner'
+WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'tcms_owner') \gexec
+SELECT 'CREATE ROLE tcms_app'
+WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'tcms_app') \gexec
+
+-- Rollenattribute (eine Quelle; Test: packages/db/src/__tests__/bootstrap.test.ts).
+ALTER ROLE tcms_owner WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+  NOBYPASSRLS INHERIT;
+ALTER ROLE tcms_app WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+  NOBYPASSRLS NOINHERIT;
+
+SELECT pg_catalog.format('ALTER ROLE tcms_owner PASSWORD %L', :'tcms_owner_passwort') \gexec
+SELECT pg_catalog.format('ALTER ROLE tcms_app PASSWORD %L', :'tcms_app_passwort') \gexec
+
+-- Die Laufzeitrolle darf keine andere Rolle übernehmen können (SET ROLE auf
+-- eine Rolle, die Tabellen besitzt oder RLS umgeht): jede Mitgliedschaft weg.
+SELECT pg_catalog.format('REVOKE %I FROM tcms_app GRANTED BY %I', r.rolname, g.rolname)
+FROM pg_catalog.pg_auth_members m
+JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
+JOIN pg_catalog.pg_roles g ON g.oid = m.grantor
+WHERE m.member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'tcms_app') \gexec
+
+-- Schema: nur der Eigentümer legt Objekte an; die App-Rolle darf es benutzen.
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE, CREATE ON SCHEMA public TO tcms_owner;
+GRANT USAGE ON SCHEMA public TO tcms_app;
+
+-- Temporäre Objekte braucht keine der Rollen; Verbindung nur in diese Datenbank.
+SELECT pg_catalog.format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC',
+  pg_catalog.current_database()) \gexec
+SELECT pg_catalog.format('GRANT CONNECT ON DATABASE %I TO tcms_owner, tcms_app',
+  pg_catalog.current_database()) \gexec
+COMMIT;
