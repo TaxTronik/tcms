@@ -102,7 +102,7 @@ const AUSNAHMEN: Record<string, { regeln: Partial<Record<Regel, number>>; begrue
     begruendung: 'jti-Speicher im Speicher (ohne pg), eigene Meldungen.',
   },
   'apps/api/src/__tests__/register.test.ts': {
-    regeln: { 'text-matcher': 5 },
+    regeln: { 'text-matcher': 6 },
     begruendung: 'Abgleich Routentabelle/Register beim Start (eigene Texte), Fake-Datenzugriff.',
   },
   'apps/api/src/__tests__/systemakteur.test.ts': {
@@ -127,7 +127,7 @@ const AUSNAHMEN: Record<string, { regeln: Partial<Record<Regel, number>>; begrue
     begruendung: 'Sitzungsregeln der Demo (Cookies, Geheimnis), ohne Datenbank.',
   },
   'packages/contract/src/__tests__/endpunkte.test.ts': {
-    regeln: { 'text-matcher': 2 },
+    regeln: { 'text-matcher': 6 },
     begruendung: 'Laden des Endpunktregisters (eigene Texte), ohne Datenbank.',
   },
   'packages/contract/src/__tests__/signatur.test.ts': {

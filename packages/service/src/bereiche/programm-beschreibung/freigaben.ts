@@ -24,6 +24,7 @@
 
 import {
   DienstFehler,
+  konfliktMitGrund,
   nichtBerechtigt,
   FreigabeNeuadressierungEingabeSchema,
   PortalCodeAnfordernEingabeSchema,
@@ -98,6 +99,13 @@ const ERLEDIGT = 'Diese Freigabe ist bereits erledigt.';
 const GESPERRT = `Der Bestätigungscode ist nach ${MAX_FEHLVERSUCHE} Fehlversuchen gesperrt. Bitte wenden Sie sich an Ihre Kanzlei.`;
 const ABGELAUFEN = 'Der Code ist abgelaufen. Bitte fordern Sie einen neuen Code an.';
 const ZU_VIELE_CODES = `Sie haben in der letzten Stunde bereits ${MAX_CODE_ANFORDERUNGEN_JE_STUNDE} Codes angefordert. Bitte verwenden Sie den zuletzt erhaltenen Code oder versuchen Sie es später erneut.`;
+const GEAENDERT = 'Die Freigabe wurde zwischenzeitlich geändert. Bitte laden Sie die Seite neu.';
+const NICHT_VORGELEGT = 'Diese Version liegt nicht mehr zur Freigabe vor.';
+
+// Code anfordern und Freigeben (Portal) melden jedes `409` mit einem Grund aus
+// KONFLIKT_GRUENDE (`konfliktMitGrund(grund, meldung)`, tcms-s10); die Register-
+// einträge portalFreigabeCodeAnfordern/-Erteilen nennen genau diese Gründe
+// (`packages/service/src/__tests__/konflikt.test.ts`).
 
 /**
  * Code-Nachrichten dieser Freigabe an diesen Kontakt in der letzten Stunde
@@ -337,7 +345,7 @@ function pruefeFreigabeRecht(
       'Diese Anforderung ist eine Kenntnisnahme.',
     ]);
   }
-  if (f.status !== 'OFFEN') throw new DienstFehler('KONFLIKT', ERLEDIGT);
+  if (f.status !== 'OFFEN') throw konfliktMitGrund('BEREITS_ERLEDIGT', ERLEDIGT);
   if (!istGesetzlicherVertreter(ctx.akteur, mandantId, rollen))
     throw nichtBerechtigt('PORTAL_ROLLE', NUR_GV);
   // TS-06: nur die adressierte Person; eine Neuadressierung ist Sache der Kanzlei.
@@ -355,13 +363,13 @@ export async function fordereFreigabeCodeAn(
   const { f, rollen, mandant } = await portalFreigabe(ctx, mandantId, e.freigabeId);
   pruefeFreigabeRecht(ctx, mandantId, rollen, f);
   const z = leseCodeZustand(f);
-  if (istGesperrt(z)) throw new DienstFehler('KONFLIKT', GESPERRT);
+  if (istGesperrt(z)) throw konfliktMitGrund('CODE_GESPERRT', GESPERRT);
   // H1: Mengenbegrenzung je Freigabe und Kontakt (zusätzlich zur Fehlversuchsgrenze).
   if (
     (await codesDerLetztenStunde(ctx.tx, mandantId, f.id, ctx.akteur.id)) >=
     MAX_CODE_ANFORDERUNGEN_JE_STUNDE
   ) {
-    throw new DienstFehler('KONFLIKT', ZU_VIELE_CODES);
+    throw konfliktMitGrund('ZU_VIELE_CODES', ZU_VIELE_CODES);
   }
   const { version, sha256 } = await vorgelegteVersion(ctx.tx, f);
   // Neuer Code ersetzt den alten; die Fehlversuche dieser Freigabe bleiben stehen.
@@ -380,7 +388,8 @@ export async function fordereFreigabeCodeAn(
       },
       data: { ...codeHash(schluessel, f.id, code), codeAblauf },
     });
-    if (r.count !== 1) throw new DienstFehler('KONFLIKT', ERLEDIGT);
+    // Unter der Zeilensperre unerwartet: die Zeile hatte nicht mehr den gelesenen Stand.
+    if (r.count !== 1) throw konfliktMitGrund('ZWISCHENZEITLICH_GEAENDERT', GEAENDERT);
     await legeNachrichtAn(tx, {
       mandantId,
       empfaengerId: ctx.akteur.id,
@@ -428,14 +437,14 @@ export async function erteileFreigabe(
   const { f, rollen } = await portalFreigabe(ctx, mandantId, e.freigabeId);
   pruefeFreigabeRecht(ctx, mandantId, rollen, f);
   const z = leseCodeZustand(f);
-  if (istGesperrt(z)) throw new DienstFehler('KONFLIKT', GESPERRT);
+  if (istGesperrt(z)) throw konfliktMitGrund('CODE_GESPERRT', GESPERRT);
   if (!z.hash || !f.codeAblauf)
-    throw new DienstFehler('KONFLIKT', 'Bitte fordern Sie zuerst einen Bestätigungscode an.');
+    throw konfliktMitGrund('CODE_FEHLT', 'Bitte fordern Sie zuerst einen Bestätigungscode an.');
   // H5: Code des früheren Verfahrens (ohne Schlüsselkennung) oder mit einem nicht mehr
   // konfigurierten Schlüssel gilt als abgelaufen – kein Fehlversuch, neuer Code nötig.
-  if (!codeVerfahrenGueltig(schluessel, z)) throw new DienstFehler('KONFLIKT', ABGELAUFEN);
+  if (!codeVerfahrenGueltig(schluessel, z)) throw konfliktMitGrund('CODE_ABGELAUFEN', ABGELAUFEN);
   // Echte Zeit: Die Demo-Uhr verlängert keine Codefrist.
-  if (f.codeAblauf.getTime() < Date.now()) throw new DienstFehler('KONFLIKT', ABGELAUFEN);
+  if (f.codeAblauf.getTime() < Date.now()) throw konfliktMitGrund('CODE_ABGELAUFEN', ABGELAUFEN);
 
   // Beschreibung: nur ein eingefrorener, unverfälschter Inhalt kann freigegeben
   // werden – vor dem Codevergleich, damit kein Versuch verbraucht wird.
@@ -451,10 +460,10 @@ export async function erteileFreigabe(
       where: { id: f.refId, programmId: f.programmId },
     });
     if (!v || v.status !== 'BEIM_MANDANTEN')
-      throw new DienstFehler('KONFLIKT', 'Diese Version liegt nicht mehr zur Freigabe vor.');
+      throw konfliktMitGrund('VERSION_NICHT_VORGELEGT', NICHT_VORGELEGT);
     if (!v.snapshot || !v.snapshotSha256 || pruefeSnapshot(v.snapshot, v.snapshotSha256) !== true) {
-      throw new DienstFehler(
-        'KONFLIKT',
+      throw konfliktMitGrund(
+        'INHALT_VERAENDERT',
         'Der vorgelegte Inhalt ist nicht eingefroren oder nicht unverändert. Die Kanzlei muss die Freigabe neu anfordern.',
       );
     }
@@ -485,7 +494,7 @@ export async function erteileFreigabe(
           ? { codeFehlversuche: versuch, codeHash: null, codeSchluesselId: null, codeAblauf: null }
           : { codeFehlversuche: versuch },
       });
-      if (r.count !== 1) throw new DienstFehler('KONFLIKT', 'Der Code ist nicht mehr gültig.');
+      if (r.count !== 1) throw konfliktMitGrund('ZWISCHENZEITLICH_GEAENDERT', GEAENDERT);
       const protokoll: Protokoll[] = [
         {
           aktion: 'tcms.freigabe.code_falsch',
@@ -535,11 +544,8 @@ export async function erteileFreigabe(
         codeAblauf: null,
       },
     });
-    if (r.count !== 1)
-      throw new DienstFehler(
-        'KONFLIKT',
-        'Die Freigabe ist bereits erledigt oder der Code ist nicht mehr gültig.',
-      );
+    // Unter der Zeilensperre nur, wenn der Code genau zwischen Prüfung und Schreiben abläuft.
+    if (r.count !== 1) throw konfliktMitGrund('ZWISCHENZEITLICH_GEAENDERT', GEAENDERT);
     const protokoll: Protokoll[] = [
       {
         aktion: 'tcms.freigabe.erteilt',
@@ -554,8 +560,8 @@ export async function erteileFreigabe(
         where: { id: version.id, status: 'BEIM_MANDANTEN', snapshotSha256: version.snapshotSha256 },
         data: { status: 'FREIGEGEBEN', freigegebenVon: ctx.akteur.id, freigegebenAm: zeitpunkt },
       });
-      if (u.count !== 1)
-        throw new DienstFehler('KONFLIKT', 'Diese Version liegt nicht mehr zur Freigabe vor.');
+      // Die Version ist nicht gesperrt: Eine gleichzeitige Änderung zeigt sich hier.
+      if (u.count !== 1) throw konfliktMitGrund('VERSION_NICHT_VORGELEGT', NICHT_VORGELEGT);
       // Vorgänger (freigegeben oder noch beim Mandanten) werden abgelöst.
       const vorgaenger = await tx.beschreibungVersion.findMany({
         where: {

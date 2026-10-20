@@ -135,6 +135,23 @@ describe('Routentabelle und Endpunktregister', () => {
     }
   });
 
+  it('bricht ab, wenn die Konfliktgründe einer Route vom Register abweichen (tcms-s10)', () => {
+    const eintraege = tabelle(registriereAlle, ENDPUNKT_LISTE).eintraege();
+    for (const r of eintraege) expect(r.konflikte, r.pfad).toBe(r.endpunkt!.konflikte);
+    for (const [name, konflikte] of [
+      ['portalFreigabeErteilen', ['CODE_FEHLT']],
+      ['portalFreigabeCodeAnfordern', []],
+      ['kontextLesen', ['BEREITS_ERLEDIGT']],
+    ] as const) {
+      const geaendert = eintraege.map((r) =>
+        r.endpunkt?.name === name ? { ...r, konflikte: Object.freeze([...konflikte]) } : r,
+      );
+      expect(() => pruefeGegenRegister(geaendert, ENDPUNKT_LISTE), name).toThrow(
+        new RegExp(`weicht von ${name} ab`),
+      );
+    }
+  });
+
   it('prüft Pfadparameter mit dem Schema aus dem Register, bevor der Handler läuft', async () => {
     let aufrufe = 0;
     const t = aufbau({

@@ -21,6 +21,7 @@ import {
   type Akteur,
   type AkteurArt,
   type Endpunkt,
+  type KonfliktGrund,
 } from '@tcms/contract';
 import type { z } from 'zod';
 
@@ -97,6 +98,8 @@ export interface RoutenEintrag<Tx> {
   query: z.ZodType | undefined;
   params: z.ZodType | undefined;
   status: 200 | 201;
+  /** Konfliktgründe aus dem Register (freie Routen: keine); `pruefeKonfliktGrund`. */
+  konflikte: readonly KonfliktGrund[];
   /** Registereintrag, aus dem die Route entstand (`undefined` bei freien Routen). */
   endpunkt: Endpunkt | undefined;
   handler: (ctx: RoutenKontext<Tx, unknown, unknown>) => Promise<unknown>;
@@ -106,6 +109,8 @@ export interface Treffer<Tx> {
   eintrag: RoutenEintrag<Tx>;
   params: Record<string, string>;
 }
+
+const KEINE_KONFLIKTE: readonly KonfliktGrund[] = Object.freeze([]);
 
 const SEGMENT_FEST = /^[a-z0-9-]+$/;
 const SEGMENT_PARAM = /^:[a-zA-Z][a-zA-Z0-9]*$/;
@@ -139,6 +144,7 @@ export class RoutenTabelle<Tx> {
       query: def.query,
       params: def.params,
       status: def.status ?? 200,
+      konflikte: endpunkt?.konflikte ?? KEINE_KONFLIKTE,
       endpunkt,
       handler: def.handler as RoutenEintrag<Tx>['handler'],
     });
@@ -188,6 +194,7 @@ export class RoutenTabelle<Tx> {
       query: undefined,
       params: undefined,
       status: 200,
+      konflikte: endpunkt.konflikte,
       endpunkt,
       handler: async () => {
         throw new Error('Routen: Route ohne Akteur hat keinen Akteur-Handler');
@@ -315,6 +322,7 @@ export function pruefeGegenRegister<Tx>(
       r.akteur === e.akteur &&
       r.mandantGebunden === e.mandantenbezogen &&
       r.status === e.erfolgStatus &&
+      r.konflikte === e.konflikte &&
       r.body === (e.bodySchema ?? undefined) &&
       r.query === (e.querySchema ?? undefined) &&
       r.params === (e.akteur ? e.paramsSchema : undefined);
@@ -327,6 +335,30 @@ export function pruefeGegenRegister<Tx>(
   if (fehler.length > 0) {
     throw new Error(`Routen weichen vom Endpunktregister ab:\n- ${fehler.join('\n- ')}`);
   }
+}
+
+/** Ein `409` einer Route trug einen Grund, den ihr Registereintrag nicht nennt (oder keinen). */
+export class KonfliktUndokumentiert extends Error {
+  constructor() {
+    super('Konfliktgrund weicht vom Endpunktregister ab');
+    this.name = 'KonfliktUndokumentiert';
+  }
+}
+
+/**
+ * Konfliktgrund eines Fehlers der Route gegen ihren Registereintrag (tcms-s10,
+ * fail closed wie ein 403 ohne Grund): Nennt der Eintrag `konflikte`, trägt
+ * jedes `409` genau einen davon, sonst keines einen Grund. Abweichung →
+ * `KonfliktUndokumentiert` (`500 INTERN`): Der Vertrag sagt der kanzleikonsole
+ * zu, dass sie an diesen Endpunkten nie raten muss.
+ */
+export function pruefeKonfliktGrund(konflikte: readonly KonfliktGrund[], e: unknown): unknown {
+  if (!(e instanceof DienstFehler) || e.code !== 'KONFLIKT') return e;
+  const passt =
+    konflikte.length === 0
+      ? e.konflikt === undefined
+      : e.konflikt !== undefined && konflikte.includes(e.konflikt);
+  return passt ? e : new KonfliktUndokumentiert();
 }
 
 /** Gleiche Akteursarten in gleicher Reihenfolge (Abgleich mit dem Register). */

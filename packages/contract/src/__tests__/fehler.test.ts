@@ -9,9 +9,12 @@ import {
   DienstFehler,
   FEHLER_STATUS,
   FehlerSchema,
+  konfliktMitGrund,
+  KONFLIKT_GRUENDE,
   nichtBerechtigt,
   VERWEIGERUNG_GRUENDE,
   type FehlerCode,
+  type KonfliktGrund,
   type VerweigerungGrund,
 } from '../index';
 
@@ -93,5 +96,64 @@ describe('FehlerSchema: grund genau bei NICHT_BERECHTIGT', () => {
       s.safeParse({ ok: false, fehler: { code: 'NICHT_BERECHTIGT', grund: 'VERTRAULICH' } })
         .success,
     ).toBe(true);
+  });
+});
+
+describe('Konfliktgrund (`fehler.konflikt`, tcms-s10): nur bei KONFLIKT, aus der festen Liste', () => {
+  it('ist eine feste Liste eindeutiger Bezeichner', () => {
+    expect(new Set(KONFLIKT_GRUENDE).size).toBe(KONFLIKT_GRUENDE.length);
+    for (const g of KONFLIKT_GRUENDE) expect(g).toMatch(/^[A-Z][A-Z_]{2,30}$/);
+  });
+
+  it('konflikt setzt Code, Status, Meldung und Grund', () => {
+    for (const g of KONFLIKT_GRUENDE) {
+      const f = konfliktMitGrund(g, 'Feste Meldung.');
+      expect([f.code, f.status, f.message, f.konflikt, f.grund, f.felder]).toEqual([
+        'KONFLIKT',
+        409,
+        'Feste Meldung.',
+        g,
+        undefined,
+        undefined,
+      ]);
+    }
+    expect(new DienstFehler('KONFLIKT', 'x').konflikt).toBeUndefined();
+  });
+
+  it('weist einen Konfliktgrund an anderen Codes und unbekannte Gründe zur Laufzeit ab', () => {
+    const roh = DienstFehler as unknown as new (...a: unknown[]) => DienstFehler;
+    for (const code of CODES.filter((c) => c !== 'KONFLIKT')) {
+      expect(() => new roh(code, 'x', undefined, undefined, 'CODE_FEHLT'), code).toThrow(TypeError);
+    }
+    expect(() => new roh('KONFLIKT', 'x', undefined, undefined, 'ERFUNDEN')).toThrow(TypeError);
+    expect(() => konfliktMitGrund('code_fehlt' as KonfliktGrund, 'x')).toThrow(TypeError);
+    // Ein Verweigerungsgrund ist kein Konfliktgrund und umgekehrt.
+    expect(() => new roh('KONFLIKT', 'x', undefined, 'VIER_AUGEN', 'CODE_FEHLT')).toThrow(
+      TypeError,
+    );
+    expect(() => new roh('NICHT_BERECHTIGT', 'x', undefined, 'VIER_AUGEN', 'CODE_FEHLT')).toThrow(
+      TypeError,
+    );
+  });
+
+  it('FehlerSchema: konflikt nur bei KONFLIKT und nur aus der Liste', () => {
+    for (const k of KONFLIKT_GRUENDE) {
+      expect(FehlerSchema.safeParse({ code: 'KONFLIKT', meldung: 'x', konflikt: k }).success).toBe(
+        true,
+      );
+    }
+    expect(FehlerSchema.safeParse({ code: 'KONFLIKT' }).success).toBe(true);
+    expect(FehlerSchema.safeParse({ code: 'KONFLIKT', konflikt: 'ERFUNDEN' }).success).toBe(false);
+    for (const code of CODES.filter((c) => c !== 'KONFLIKT')) {
+      const f = code === 'NICHT_BERECHTIGT' ? { code, grund: 'VIER_AUGEN' } : { code };
+      expect(FehlerSchema.safeParse({ ...f, konflikt: 'CODE_FEHLT' }).success, code).toBe(false);
+    }
+    // Insbesondere nie an 404 (kein Existenz-Orakel).
+    expect(
+      antwortSchema(z.object({}).strict()).safeParse({
+        ok: false,
+        fehler: { code: 'NICHT_GEFUNDEN', konflikt: 'BEREITS_ERLEDIGT' },
+      }).success,
+    ).toBe(false);
   });
 });

@@ -155,6 +155,13 @@ für KI-Werkzeuge.
   Kennzeichen und Operation rechnen mit derselben Funktion). Eine neue Stelle
   gehört mit ihrem Grund ins Inventar von
   `packages/service/src/__tests__/verweigerung.test.ts`.
+- Ein `409` in einem Ablauf, dessen Endpunkt im Register `konflikte` nennt (Code anfordern,
+  Freigeben), entsteht nur über `konfliktMitGrund(grund, meldung)` mit einem Grund aus
+  `KONFLIKT_GRUENDE`, und der Registereintrag nennt genau die Gründe seines Ablaufs (tcms-s10). Ein
+  `409` ohne Grund oder mit einem nicht genannten Grund beantwortet der Dienst mit `500 INTERN`. Eine
+  neue Stelle gehört mit ihrem Grund ins Inventar von
+  `packages/service/src/__tests__/konflikt.test.ts`; fremde und unbekannte Objekte bleiben `404` ohne
+  Grund.
 - Vertrauliche Feststellungen (Fachkonzept §13): Für Personen ohne
   `kannVertraulichLesen` ist jede Ausgabe eine eigene Variante
   `maskiert: true` mit genau den Feldern des dedizierten Lesepfads (Nummer,

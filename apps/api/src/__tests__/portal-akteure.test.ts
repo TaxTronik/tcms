@@ -13,6 +13,7 @@ import {
   ENDPUNKT_LISTE,
   ENDPUNKTE,
   bodySha256,
+  konfliktMitGrund,
   type AkteurClaims,
 } from '@tcms/contract';
 import { describe, expect, it } from 'vitest';
@@ -49,7 +50,10 @@ function aufbauMitPlatzhaltern() {
         r.endpunkt(e, async () => {
           erreicht.push(e.name);
           // Fester Fehler statt Daten: beweist nur, dass der Handler lief.
-          throw new DienstFehler('KONFLIKT');
+          // Ein 409 nach dem Register: mit Grund, wo der Eintrag `konflikte` nennt (tcms-s10).
+          throw e.konflikte[0]
+            ? konfliktMitGrund(e.konflikte[0], 'Platzhalter')
+            : new DienstFehler('KONFLIKT');
         });
       }
     },

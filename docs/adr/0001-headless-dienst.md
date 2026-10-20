@@ -201,7 +201,7 @@ dieselbe leere Liste wie eine unbekannte.
 ## 7. HTTP-Vertrag
 
 - Basis `/v1`. JSON, UTF-8. Body höchstens 256 KiB (`413`). Antworten
-  `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder?, grund? } }`.
+  `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder?, grund?, konflikt? } }`.
 - Codes: `400 UNGUELTIG` (zod, mit `felder`; ebenso Text, den die Datenbank
   nicht speichern kann – 22021, 22P05, 22P02 –, dann ohne `felder`, RT4-T-08),
   `401 NICHT_AUTHENTIFIZIERT`,
@@ -224,6 +224,20 @@ dieselbe leere Liste wie eine unbekannte.
   erzwingt das (Typ und Konstruktor; ein 403 ohne Grund wird `500 INTERN`),
   `FehlerSchema` ebenso, ein statischer Test hält jede Stelle mit ihrem Grund
   fest (`packages/service/src/__tests__/verweigerung.test.ts`).
+- `konflikt` (tcms-s10) steht höchstens bei `409`: ein Wert aus
+  `KONFLIKT_GRUENDE`, nur an Endpunkten, deren Registereintrag ihn in
+  `konflikte` nennt, und dort an jedem `409` (sonst nie). Bisher sind das
+  `portalFreigabeCodeAnfordern` (`BEREITS_ERLEDIGT`, `CODE_GESPERRT`,
+  `ZU_VIELE_CODES`, `ZWISCHENZEITLICH_GEAENDERT`) und `portalFreigabeErteilen`
+  (`BEREITS_ERLEDIGT`, `CODE_GESPERRT`, `CODE_FEHLT`, `CODE_ABGELAUFEN`,
+  `VERSION_NICHT_VORGELEGT`, `INHALT_VERAENDERT`, `ZWISCHENZEITLICH_GEAENDERT`);
+  die kanzleikonsole wählt danach ihre feste Meldung. Wie `grund` erst nach der
+  Sichtbarkeitsprüfung, nie an `404`. Erzwungen in vier Schichten:
+  `DienstFehler` (nur `KONFLIKT`, nur über `konfliktMitGrund`), Register
+  (`pruefeKonflikte` beim Laden, `fehlerSchemaFuer` für Antworten), Dienst (ein
+  `409` mit fehlendem oder nicht genanntem Grund wird `500 INTERN`;
+  `pruefeGegenRegister` vergleicht `konflikte` beim Start) und ein statischer
+  Test über den Ablauf je Endpunkt (`packages/service/src/__tests__/konflikt.test.ts`).
 - Datumswerte als ISO-8601-Strings, keine `Map`/`Set`/`Date` im JSON.
 - Lesen zu einem Stichtag: `?stand=YYYY-MM-DD`. Schreibende Endpunkte nehmen
   **keinen** Stichtag an und arbeiten immer auf dem aktuellen Stand.

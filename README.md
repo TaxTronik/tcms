@@ -288,9 +288,12 @@ await fetch(`<interne-url>${pfad}`, {
 });
 ```
 
-Antworten: `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder?, grund? } }`;
+Antworten: `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder?, grund?, konflikt? } }`;
 `grund` steht genau bei `403 NICHT_BERECHTIGT` (feste Liste `VERWEIGERUNG_GRUENDE`, je Wert eine
-Rechtefunktion, nie bei `404`). Jeder
+Rechtefunktion, nie bei `404`). `konflikt` (feste Liste `KONFLIKT_GRUENDE`) steht an jedem `409` der
+Endpunkte, deren Registereintrag `konflikte` nennt (Code anfordern und Freigeben im Portal), und sonst
+nie; `fehlerSchemaFuer(ENDPUNKTE.<name>)` prüft das, der Dienst antwortet bei einer Abweichung
+`500 INTERN`. Jeder
 Fehler bei Token, Bestätigung oder `jti` ergibt dieselbe Antwort `401 NICHT_AUTHENTIFIZIERT` (mit
 `Connection: close`); der Grund steht nur im Log (JSON-Zeilen auf stdout, mit Request-ID, ohne
 Header-Werte und Bodys). Fremde Mandanten und nicht kanonische Pfade ergeben `404`.
@@ -477,7 +480,7 @@ Rechte prüft `packages/service`, Eingaben und Antworten in
 | POST    | `…/freigaben/:freigabeId/neuadressierung`              | `kannBearbeiten` (TS-06, auditiert)                                                                      |
 | GET     | `…/kommunikation/freigaben?stand=`                     | `kannLesen`                                                                                              |
 | GET     | `…/portal/freigaben`                                   | Mandantenkontakt mit aktiver Rolle                                                                       |
-| POST    | `…/portal/freigaben/:freigabeId/code` bzw. `freigeben` | adressierte gesetzliche Vertretung; Code höchstens 5-mal je Stunde (`409`)                               |
+| POST    | `…/portal/freigaben/:freigabeId/code` bzw. `freigeben` | adressierte gesetzliche Vertretung; Code höchstens 5-mal je Stunde; `409` mit `konflikt`                 |
 | POST    | `…/portal/freigaben/:freigabeId/kenntnisnahme`         | adressierte Person                                                                                       |
 
 Die lebenden Bausteine der Beschreibung (`bausteine`, Portal `live`) sind streng (`BausteinSatzSchema`:

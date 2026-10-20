@@ -45,6 +45,7 @@ import { jsonLogger, type Logger, type LogWert } from './log';
 import {
   MANDANT_PARAM,
   RoutenTabelle,
+  pruefeKonfliktGrund,
   pruefeZugang,
   pruefeGegenRegister,
   type Methode,
@@ -219,9 +220,22 @@ export function erzeugeApp<Tx = unknown>(deps: AppDeps<Tx>): Hono<{ Bindings: Bi
 
     // 10. Route in genau einer Tenant-Transaktion.
     const jetzt = deps.uhr.jetzt();
-    const daten = await deps.daten.mitTenant(akteur.tenantId, (tx) =>
-      route.handler({ tx, akteur, params: treffer.params, body: eingabe, query, requestId, jetzt }),
-    );
+    //     Ein 409 trägt genau die Konfliktgründe des Registereintrags (sonst 500).
+    const daten = await deps.daten
+      .mitTenant(akteur.tenantId, (tx) =>
+        route.handler({
+          tx,
+          akteur,
+          params: treffer.params,
+          body: eingabe,
+          query,
+          requestId,
+          jetzt,
+        }),
+      )
+      .catch((e: unknown) => {
+        throw pruefeKonfliktGrund(route.konflikte, e);
+      });
     return antwort(route.status, { ok: true, daten }, requestId);
   }
 
@@ -309,6 +323,11 @@ function fehlerAntwort(
     if (e.grund !== undefined) {
       f.grund = e.grund;
       felder.verweigerung = e.grund;
+    }
+    // Konfliktgrund nur bei 409 (DienstFehler erzwingt das; tcms-s10), feste Werte.
+    if (e.konflikt !== undefined) {
+      f.konflikt = e.konflikt;
+      felder.konflikt = e.konflikt;
     }
     felder.fehler = e.code;
     // Nach 413 immer schließen, auch ohne angekündigte Länge (gestreamter Body).

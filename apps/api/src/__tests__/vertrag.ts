@@ -7,7 +7,9 @@
 //     `erfolgStatus` und `daten` gegen `antwortSchema` des Registereintrags,
 //     aus dem die getroffene Route entstand (dieselbe Routentabelle wie die
 //     App, also genau die Route, die geantwortet hat);
-//   - Fehler: Umschlag `{ ok: false, fehler }` gegen `FehlerSchema`.
+//   - Fehler: Umschlag `{ ok: false, fehler }` gegen `fehlerSchemaFuer` des
+//     Registereintrags (`konflikt` genau an jedem 409 der Endpunkte mit
+//     `konflikte`, tcms-s10), bei freien Testrouten gegen `FehlerSchema`.
 // Eine Verletzung wirft `VertragsVerletzung` im Test (nur Endpunkt, Pfade und
 // Codes der zod-Befunde, keine Werte). Freie Testrouten ohne Registereintrag
 // (app.test.ts) prüfen nur den Umschlag.
@@ -17,7 +19,7 @@
 // =============================================================================
 
 import { appendFileSync } from 'node:fs';
-import { FehlerSchema, type Endpunkt } from '@tcms/contract';
+import { FehlerSchema, fehlerSchemaFuer, type Endpunkt } from '@tcms/contract';
 import { z } from 'zod';
 import type { RoutenTabelle } from '../routen';
 
@@ -68,7 +70,11 @@ export function pruefeAntwortGegenVertrag(
     if (datei) appendFileSync(datei, `${endpunkt.name}\n`);
     return;
   }
-  const fehler = FEHLER.safeParse(json);
+  const fehler = (
+    endpunkt
+      ? z.object({ ok: z.literal(false), fehler: fehlerSchemaFuer(endpunkt) }).strict()
+      : FEHLER
+  ).safeParse(json);
   if (!fehler.success) {
     throw new VertragsVerletzung(`${wo}: Fehlerumschlag ungültig (${befunde(fehler.error)})`);
   }

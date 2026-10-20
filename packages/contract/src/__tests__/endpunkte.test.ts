@@ -9,10 +9,13 @@ import {
   ENDPUNKT_LISTE,
   ENDPUNKT_METHODEN,
   ENDPUNKTE,
+  fehlerSchemaFuer,
   pruefeAkteure,
+  pruefeKonflikte,
   pruefePortal,
   type Endpunkt,
 } from '../endpunkte';
+import { KONFLIKT_GRUENDE } from '../fehler';
 
 const SEGMENT_FEST = /^[a-z0-9-]+$/;
 const SEGMENT_PARAM = /^:[a-zA-Z][a-zA-Z0-9]*$/;
@@ -300,5 +303,60 @@ describe('Endpunktregister', () => {
         mandantId: '3c3c3c3c-3333-4333-8333-33333333abcd',
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('Konfliktgründe je Endpunkt (`konflikte`, tcms-s10)', () => {
+  it('genau die Portal-Abläufe mit fester Meldung je Lage nennen Gründe', () => {
+    expect(
+      Object.fromEntries(
+        ENDPUNKT_LISTE.filter((e) => e.konflikte.length > 0).map((e) => [e.name, e.konflikte]),
+      ),
+    ).toEqual({
+      portalFreigabeCodeAnfordern: [
+        'BEREITS_ERLEDIGT',
+        'CODE_GESPERRT',
+        'ZU_VIELE_CODES',
+        'ZWISCHENZEITLICH_GEAENDERT',
+      ],
+      portalFreigabeErteilen: [
+        'BEREITS_ERLEDIGT',
+        'CODE_GESPERRT',
+        'CODE_FEHLT',
+        'CODE_ABGELAUFEN',
+        'VERSION_NICHT_VORGELEGT',
+        'INHALT_VERAENDERT',
+        'ZWISCHENZEITLICH_GEAENDERT',
+      ],
+    });
+    for (const e of ENDPUNKT_LISTE) expect(Object.isFrozen(e.konflikte), e.name).toBe(true);
+  });
+
+  it('jeder Grund der Liste ist einem Endpunkt zugeordnet', () => {
+    const genutzt = new Set(ENDPUNKT_LISTE.flatMap((e) => e.konflikte));
+    expect(KONFLIKT_GRUENDE.filter((g) => !genutzt.has(g))).toEqual([]);
+  });
+
+  it('pruefeKonflikte weist unbekannte, doppelte und Gründe ohne Bestätigung ab', () => {
+    expect(pruefeKonflikte('x', true, undefined)).toEqual([]);
+    expect(pruefeKonflikte('x', true, ['CODE_FEHLT'])).toEqual(['CODE_FEHLT']);
+    expect(() => pruefeKonflikte('x', true, ['ERFUNDEN'])).toThrow(/unbekannter Konfliktgrund/);
+    expect(() => pruefeKonflikte('x', true, ['VIER_AUGEN'])).toThrow(/unbekannter Konfliktgrund/);
+    expect(() => pruefeKonflikte('x', true, ['CODE_FEHLT', 'CODE_FEHLT'])).toThrow(/doppelt/);
+    expect(() => pruefeKonflikte('health', false, ['CODE_FEHLT'])).toThrow(/ohne Bestätigung/);
+  });
+
+  it('fehlerSchemaFuer: an Endpunkten mit Gründen trägt jedes 409 einen davon, sonst keines', () => {
+    const mit = fehlerSchemaFuer(ENDPUNKTE.portalFreigabeCodeAnfordern);
+    const ohne = fehlerSchemaFuer(ENDPUNKTE.kontextLesen);
+    const ok = (s: typeof mit, f: unknown) => s.safeParse(f).success;
+    expect(ok(mit, { code: 'KONFLIKT', konflikt: 'ZU_VIELE_CODES' })).toBe(true);
+    expect(ok(mit, { code: 'KONFLIKT' })).toBe(false);
+    expect(ok(mit, { code: 'KONFLIKT', konflikt: 'CODE_FEHLT' })).toBe(false);
+    expect(ok(mit, { code: 'NICHT_GEFUNDEN' })).toBe(true);
+    expect(ok(mit, { code: 'NICHT_GEFUNDEN', konflikt: 'BEREITS_ERLEDIGT' })).toBe(false);
+    expect(ok(mit, { code: 'NICHT_BERECHTIGT', grund: 'PORTAL_ROLLE' })).toBe(true);
+    expect(ok(ohne, { code: 'KONFLIKT' })).toBe(true);
+    expect(ok(ohne, { code: 'KONFLIKT', konflikt: 'ZU_VIELE_CODES' })).toBe(false);
   });
 });

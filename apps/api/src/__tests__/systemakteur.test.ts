@@ -20,6 +20,7 @@ import {
   DienstFehler,
   ENDPUNKT_LISTE,
   bodySha256,
+  konfliktMitGrund,
   type Akteur,
   type AkteurArt,
   type AkteurClaims,
@@ -86,7 +87,10 @@ describe('Systemakteur: Routentabelle über alle Registereinträge', () => {
           r.endpunkt(e, async () => {
             erreicht.push(e.name);
             // Fester Fehler statt Daten: beweist nur, dass der Handler lief.
-            throw new DienstFehler('KONFLIKT');
+            // Ein 409 nach dem Register: mit Grund, wo der Eintrag `konflikte` nennt (tcms-s10).
+            throw e.konflikte[0]
+              ? konfliktMitGrund(e.konflikte[0], 'Platzhalter')
+              : new DienstFehler('KONFLIKT');
           });
         }
       },
@@ -124,7 +128,10 @@ describe('Systemakteur: Routentabelle über alle Registereinträge', () => {
           if (e.name === 'health' || e.name === 'ich') continue;
           r.endpunkt(e, async () => {
             erreicht.push(e.name);
-            throw new DienstFehler('KONFLIKT');
+            // Ein 409 nach dem Register: mit Grund, wo der Eintrag `konflikte` nennt (tcms-s10).
+            throw e.konflikte[0]
+              ? konfliktMitGrund(e.konflikte[0], 'Platzhalter')
+              : new DienstFehler('KONFLIKT');
           });
         }
       },
