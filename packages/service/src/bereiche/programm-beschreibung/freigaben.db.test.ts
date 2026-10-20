@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PortalFreigabenViewSchema } from '@tcms/contract';
 import { pruefeAuditKette, type PrismaClient } from '@tcms/db';
+import { dbAbgewiesen, regel } from '@tcms/db/testhilfe';
 import {
   fordereBeschreibungsfreigabeAn,
   gibBeschreibungZurReview,
@@ -439,14 +440,15 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
     );
     const verfaelscht = { ...(original.snapshot as Record<string, unknown>), nummer: '9.9' };
     // Die Laufzeitrolle kann eingefrorenen Inhalt nicht ändern (Trigger).
-    await expect(
+    await dbAbgewiesen(
       inWelt(w, (tx) =>
         tx.beschreibungVersion.update({
           where: { id: versionId },
           data: { snapshot: verfaelscht },
         }),
       ),
-    ).rejects.toThrow(/unveränderlich/);
+      regel.trigger('tcms: eingefrorene CMS-Beschreibung ist unveränderlich'),
+    );
     // Unterhalb des Dienstes verändert (Eigentümerrechte): der Hash fällt auf.
     const setze = (snapshot: unknown) =>
       alsEigentuemerOhneTrigger(

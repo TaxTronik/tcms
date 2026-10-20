@@ -10,6 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { dbAbgewiesen, regel } from '@tcms/db/testhilfe';
 import { MAX_FEHLVERSUCHE } from './code';
 import { adressiereFreigabeNeu, erteileFreigabe, fordereFreigabeCodeAn } from './freigaben';
 import {
@@ -352,10 +353,11 @@ describe.skipIf(!AKTIV)('Lebensdauer der Code-Nachrichten (Service, PostgreSQL)'
       { zugestelltAm: jetzt },
       { unzustellbarAm: jetzt, unzustellbarGrund: 'SONSTIGES' as const },
     ]) {
-      const e = await inWelt(w, (tx) => tx.nachricht.update({ where: { id }, data })).catch(
-        (x: unknown) => x as Error,
+      await dbAbgewiesen(
+        inWelt(w, (tx) => tx.nachricht.update({ where: { id }, data })),
+        regel.check('Nachricht', 'Nachricht_verworfen_ausgeliefert_check'),
+        JSON.stringify(data),
       );
-      expect(String((e as Error).message), JSON.stringify(data)).toMatch(/check constraint|23514/i);
     }
     await inWelt(w, (tx) =>
       tx.nachricht.update({ where: { id }, data: { abgerufenAm: jetzt, zugestelltAm: jetzt } }),

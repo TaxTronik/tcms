@@ -275,6 +275,14 @@ für KI-Werkzeuge.
   und Codes. Keine Secrets in Logs, Fehlermeldungen, Tests oder Commits.
 - Jede Sicherheitsannahme hat einen Negativtest, der ohne die Schutzmaßnahme
   scheitert.
+- Abweisungen der Datenbank (Trigger, RLS, CHECK, eindeutige Schlüssel, Rechte) prüfen Tests nur
+  über `dbAbgewiesen(aufruf, regel.…)` aus `@tcms/db/testhilfe`: SQLSTATE und Meldung des Servers
+  mit dem Namen der Regel, gelesen aus den strukturierten Feldern. Nie `toThrow(/Muster/)` oder ein
+  Abgleich gegen die `message` eines Fehlers, der von Prisma stammen kann – Prisma hängt einen
+  Codeausschnitt der aufrufenden Stelle an, und ein allgemeines Muster trifft auch jede andere Regel
+  derselben Art (tcms-s10). Eigene Fehler mit Datenbankbezug über Typ und Code (`DienstFehler`) oder
+  `abgewiesenOhneDb`. `packages/db/src/__tests__/fehlerabgleich.test.ts` prüft alle Tests statisch;
+  Ausnahmen nur für Tests ohne Datenbank, je Datei und Regel begründet.
 
 ## UI-Sprache (verbindlich)
 

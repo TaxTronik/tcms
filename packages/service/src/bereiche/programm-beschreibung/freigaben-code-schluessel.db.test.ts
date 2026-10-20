@@ -11,6 +11,7 @@
 
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { abgewiesenOhneDb, dbAbgewiesen, regel } from '@tcms/db/testhilfe';
 import { imDienst, imSystemdienst, type DienstKontext } from '../../kontext';
 import { erzeugeCodeSchluessel, type CodeSchluessel } from './code';
 import { erteileFreigabe, fordereFreigabeCodeAn, ladePortalFreigaben } from './freigaben';
@@ -166,12 +167,15 @@ describe.skipIf(!AKTIV)('Bestätigungscodes mit geheimem Schlüssel (H5)', () =>
 
   it('ohne Schlüsselbund stellt der Dienst keinen Code aus und prüft keinen (fail closed)', async () => {
     const id = await freigabe();
-    await expect(alsGv(undefined, (ctx) => fordereFreigabeCodeAn(ctx, fa(id)))).rejects.toThrow(
-      /Kein Code-Schlüssel/,
+    const ohneSchluessel = '[service] Kein Code-Schlüssel konfiguriert';
+    await abgewiesenOhneDb(
+      alsGv(undefined, (ctx) => fordereFreigabeCodeAn(ctx, fa(id))),
+      ohneSchluessel,
     );
-    await expect(
+    await abgewiesenOhneDb(
       alsGv(undefined, (ctx) => erteileFreigabe(ctx, { ...fa(id), code: '123456' })),
-    ).rejects.toThrow(/Kein Code-Schlüssel/);
+      ohneSchluessel,
+    );
     expect(await zeile(id)).toMatchObject({
       codeHash: null,
       codeSchluesselId: null,
@@ -186,11 +190,10 @@ describe.skipIf(!AKTIV)('Bestätigungscodes mit geheimem Schlüssel (H5)', () =>
       { codeHash: 'a'.repeat(64), codeSchluesselId: 'ABCDEF0123456789' },
       { codeHash: 'a'.repeat(64), codeSchluesselId: '0123' },
     ]) {
-      const fehler = await inWelt(w, (tx) => tx.freigabe.update({ where: { id }, data })).catch(
-        (e: unknown) => e as Error,
-      );
-      expect(String((fehler as Error).message), JSON.stringify(data)).toMatch(
-        /check constraint|23514/i,
+      await dbAbgewiesen(
+        inWelt(w, (tx) => tx.freigabe.update({ where: { id }, data })),
+        regel.check('Freigabe', 'Freigabe_code_schluessel_check'),
+        JSON.stringify(data),
       );
     }
   });

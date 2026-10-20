@@ -527,7 +527,8 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
         begruendung: BEGRUENDUNG,
       }),
     );
-    expect((await fehlerVon(schliesse())).message).toMatch(/zweite Person/);
+    const zweite = await fehlerVon(schliesse());
+    expect(zweite.message).toMatch(/zweite Person/);
     const h = await folgeAn(e.id, 'HINWEIS');
     await im(A.hb, (ctx) =>
       legeFolgenAn(ctx, { mandantId: w.mandant, ereignisId: e.id, folgen: [{ folgeId: h.id }] }),

@@ -156,6 +156,14 @@ DB_TESTS=1 \
 
 `DATABASE_SUPERUSER_URL` (optional) prüft zusätzlich die Abweisung einer Superuser-Verbindung.
 
+Abweisungen der Datenbank prüfen alle DB-Tests über `@tcms/db/testhilfe`
+(`packages/db/src/__tests__/db-fehler.ts`): `dbAbgewiesen(aufruf, regel.check('Tabelle', 'Name'))`
+verlangt genau den SQLSTATE und die Meldung des Servers mit dem Namen der Regel und liest sie aus den
+strukturierten Feldern (Prisma: `meta.driverAdapterError.cause`, `pg`: `code`). Die `message` eines
+Prisma-Fehlers enthält einen Codeausschnitt der aufrufenden Stelle; ein `toThrow(/Muster/)` bestünde
+auch, wenn das Muster nur dort steht oder eine andere Regel abweist. Der statische Test
+`fehlerabgleich.test.ts` verbietet solche Abgleiche in allen Tests.
+
 Die Web-DB-Tests (`DB_TESTS=1 pnpm --filter @tcms/web test`) laufen gegen eine geseedete Datenbank
 mit `DATABASE_URL` und `DATABASE_OWNER_URL`. Sie legen ihre Fixtures selbst an bzw. räumen
 verbrauchte Demodaten ab (Bergkamm wird vor dem Einrichtungstest über die Eigentümerrolle auf „ohne

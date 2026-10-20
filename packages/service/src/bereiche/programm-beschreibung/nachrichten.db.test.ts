@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NachrichtenOffenSchema } from '@tcms/contract';
 import type { PrismaClient } from '@tcms/db';
+import { abgewiesenOhneDb, dbAbgewiesen, regel } from '@tcms/db/testhilfe';
 import type { DienstKontext, SystemKontext } from '../../kontext';
 import { codeAblaufAb, codeHash } from './code';
 import {
@@ -140,17 +141,20 @@ describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
       [{ zweck: 'FREIGABE_CODE', daten: datenAngefordert() }, /Vorlagendaten/],
       [{ zweck: 'EREIGNIS_GEMELDET', daten: datenAngefordert() }, /Vorlagendaten/],
     ] as const) {
-      const fehler = await inWelt(w, (tx) =>
-        legeNachrichtAn(tx, { ...basis, ...over } as never),
-      ).catch((e: unknown) => e as Error);
-      expect((fehler as Error).message, JSON.stringify(over)).toMatch(meldung);
+      // Abgewiesen vom Dienstkern selbst (kein Datenbankfehler).
+      const fehler = await abgewiesenOhneDb(
+        inWelt(w, (tx) => legeNachrichtAn(tx, { ...basis, ...over } as never)),
+        meldung,
+        JSON.stringify(over),
+      );
       // Meldung ohne Werte (kein Code, kein Name).
-      expect((fehler as Error).message).not.toMatch(/12345|Jana/);
+      expect(fehler.message).not.toMatch(/12345|Jana/);
     }
     // Mandant eines anderen Tenants bzw. unbekannter Mandant: Fremdschlüssel (tenant_id, id).
-    await expect(
+    await dbAbgewiesen(
       inWelt(w, (tx) => legeNachrichtAn(tx, { ...basis, mandantId: randomUUID() } as never)),
-    ).rejects.toThrow();
+      regel.fremdschluessel('Nachricht', 'Nachricht_tenant_id_mandantId_fkey'),
+    );
     // Schreibweise der IDs wird kanonisch gespeichert; Empfängerart folgt aus dem Zweck.
     const id = randomUUID();
     const nid = await inWelt(w, (tx) =>
@@ -210,26 +214,43 @@ describe.skipIf(!AKTIV)('Postausgang (Service, PostgreSQL)', () => {
           } as never,
         }),
       );
-    for (const [name, data] of [
-      ['Ereignis an Kontakt', { zweck: 'EREIGNIS_GEMELDET' }],
-      ['Freigabe an Kanzlei', { empfaengerArt: 'KANZLEI' }],
-      ['Code bei anderem Zweck', { code: '123456' }],
-      ['Code nicht sechs Ziffern', { zweck: 'FREIGABE_CODE', code: '12a456' }],
-      ['offene Code-Nachricht ohne Code', { zweck: 'FREIGABE_CODE' }],
-      ['daten kein Objekt', { daten: ['x'] }],
-      ['zugestellt mit Text', { zugestelltAm: new Date() }],
+    // Je Fall genau die verletzte Regel (CHECK mit Namen): Ein bloßes „scheitert“
+    // bestünde auch an jeder anderen Regel oder einem Fehler des Tests.
+    const check = (name: string) => regel.check('Nachricht', name);
+    for (const [name, data, erwartet] of [
+      [
+        'Ereignis an Kontakt',
+        { zweck: 'EREIGNIS_GEMELDET' },
+        check('Nachricht_empfaengerArt_check'),
+      ],
+      ['Freigabe an Kanzlei', { empfaengerArt: 'KANZLEI' }, check('Nachricht_empfaengerArt_check')],
+      ['Code bei anderem Zweck', { code: '123456' }, check('Nachricht_code_check')],
+      [
+        'Code nicht sechs Ziffern',
+        { zweck: 'FREIGABE_CODE', code: '12a456' },
+        check('Nachricht_code_check'),
+      ],
+      [
+        'offene Code-Nachricht ohne Code',
+        { zweck: 'FREIGABE_CODE' },
+        check('Nachricht_code_offen_check'),
+      ],
+      ['daten kein Objekt', { daten: ['x'] }, check('Nachricht_daten_check')],
+      ['zugestellt mit Text', { zugestelltAm: new Date() }, check('Nachricht_klartext_check')],
       [
         'verworfen mit Code',
         { zweck: 'FREIGABE_CODE', code: '123456', text: '', verworfenAm: new Date() },
+        check('Nachricht_klartext_check'),
       ],
     ] as const) {
-      await expect(roh(data), name).rejects.toThrow();
+      await dbAbgewiesen(roh(data), erwartet, name);
     }
-    await expect(
+    await dbAbgewiesen(
       inWelt(w, (tx) =>
         tx.nachricht.update({ where: { id: ids[0] }, data: { zugestelltAm: new Date() } }),
       ),
-    ).rejects.toThrow();
+      check('Nachricht_klartext_check'),
+    );
   });
 
   it('liefert offene Nachrichten nach Alter, begrenzt; Abruf im Audit (Systemakteur erkennbar, ohne Text)', async () => {

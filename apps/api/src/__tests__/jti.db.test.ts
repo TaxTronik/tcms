@@ -13,6 +13,7 @@ import {
   type PrismaClient,
   type Tx,
 } from '@tcms/db';
+import { dbAbgewiesen, regel } from '@tcms/db/testhilfe';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Datenzugriff } from '../app';
@@ -50,10 +51,11 @@ describe.skipIf(!AKTIV)('PostgreSQL als Laufzeitrolle tcms_app', () => {
   });
 
   it('tcms_app darf akteur_jti weder ändern noch leeren', async () => {
-    await expect(app.query("UPDATE akteur_jti SET exp = now() WHERE jti = 'x'")).rejects.toThrow(
-      /permission denied/,
+    await dbAbgewiesen(
+      app.query("UPDATE akteur_jti SET exp = now() WHERE jti = 'x'"),
+      regel.keinRecht('akteur_jti'),
     );
-    await expect(app.query('TRUNCATE akteur_jti')).rejects.toThrow(/permission denied/);
+    await dbAbgewiesen(app.query('TRUNCATE akteur_jti'), regel.keinRecht('akteur_jti'));
   });
 
   it('trägt eine jti genau einmal ein', async () => {

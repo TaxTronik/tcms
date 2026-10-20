@@ -254,7 +254,9 @@ describe.skipIf(!AKTIV)('Demo risiken-kontrollen gegen PostgreSQL', () => {
           ereignisse: 'on',
         }),
       ),
-    ).rejects.toThrow(/Umleitung nach \/staff\/clients\/.+\/profil\?geaendert=1/);
+    ).rejects.toMatchObject({
+      ziel: expect.stringMatching(/^\/staff\/clients\/.+\/profil\?geaendert=1/),
+    });
     // Doppelte Schlüssel im Profil-JSON werden wie im Dienst abgewiesen.
     expect(
       await P.aendereProfil(
@@ -280,12 +282,12 @@ describe.skipIf(!AKTIV)('Demo risiken-kontrollen gegen PostgreSQL', () => {
     if (vorschlag) {
       await expect(
         P.nimmVorgeschlagenesRisikoAuf(null, form({ mandantId: T, code: vorschlag.code })),
-      ).rejects.toThrow(/aufgenommen=/);
+      ).rejects.toMatchObject({ ziel: expect.stringMatching(/aufgenommen=/) });
     }
     als(DEMO_IDS.jana);
     await expect(
       P.nimmVorgeschlagenesRisikoAuf(null, form({ mandantId: T, code: 'EC-UST-01' })),
-    ).rejects.toThrow(/Umleitung nach \/portal\/tcms/);
+    ).rejects.toMatchObject({ ziel: expect.stringMatching(/^\/portal\/tcms/) });
   });
 
   it('Lader: Hinweise und Akzeptanzen zum Stichtag', async () => {

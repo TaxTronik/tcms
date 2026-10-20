@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Akteur } from '@tcms/contract';
 import { mitTenant, pruefeAuditKette } from '@tcms/db';
+import { abgewiesenOhneDb } from '@tcms/db/testhilfe';
 import { verweisAblage } from '../ablage';
 import { mitAudit } from '../audit';
 import { echteUhr, imDienst, keinPersonenVerzeichnis } from '../kontext';
@@ -107,7 +108,7 @@ describe.skipIf(!AKTIV)('Dienstkontext gegen PostgreSQL', () => {
   });
 
   it('eine Änderung ohne Protokoll wird zurückgerollt', async () => {
-    await expect(
+    await abgewiesenOhneDb(
       imDienst(kanzlei, PORTS, (ctx) =>
         mitAudit(ctx, async (tx) => {
           await tx.mandant.updateMany({
@@ -117,7 +118,8 @@ describe.skipIf(!AKTIV)('Dienstkontext gegen PostgreSQL', () => {
           return { wert: null, protokoll: [] };
         }),
       ),
-    ).rejects.toThrow(/ohne Audit-Eintrag/);
+      '[service] Fachliche Änderung ohne Audit-Eintrag (AGENTS.md Regel 1).',
+    );
     const m = await mitTenant(tenantA, (tx) =>
       tx.mandant.findFirstOrThrow({ where: { id: mandantA } }),
     );

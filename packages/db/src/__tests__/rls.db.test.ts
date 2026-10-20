@@ -11,6 +11,9 @@
 // Die Tests sind so geschnitten, dass sie ohne die jeweilige Schutzmaßnahme
 // scheitern (RLS aus, FORCE fehlt, Policy fehlt oder zu weit, einfacher statt
 // zusammengesetzter Fremdschlüssel, Grants zu weit, Sperre global oder fehlend).
+// Abweisungen der Datenbank prüfen sie nur über `dbAbgewiesen` (SQLSTATE und
+// Meldung des Servers mit dem Namen der Regel, nie die Meldung eines
+// Prisma-Fehlers mit Codeausschnitt; db-fehler.ts, tcms-s10).
 // =============================================================================
 
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -19,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { GENESIS_HASH } from '@tcms/domain/audit';
 import { pruefeAuditKette, schreibeAudit } from '../audit';
+import { abgewiesenOhneDb, dbAbgewiesen, regel, type DbErwartung } from './db-fehler';
 import {
   erzeugeClient,
   mitTenant,
@@ -298,16 +302,6 @@ async function baueFixture(client: PrismaClient, tenant: string): Promise<Fixtur
 function pgClient(url: string | undefined): pg.Client {
   if (!url) throw new Error('Verbindungs-URL für den DB-Test fehlt');
   return new pg.Client({ connectionString: url });
-}
-
-/** Erwartet einen Fehler; liefert die Meldung (für Musterprüfungen). */
-async function fehlerVon(p: Promise<unknown>): Promise<string> {
-  try {
-    await p;
-  } catch (e) {
-    return e instanceof Error ? e.message : String(e);
-  }
-  throw new Error('Erwarteter Fehler blieb aus');
 }
 
 const q = (name: string) => `"${name.replaceAll('"', '""')}"`;
@@ -630,7 +624,7 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
         );
         const spalten = rows[0]!.spalten;
         const auswahl = spalten.map((s) => (s === 'tenant_id' ? `$1::uuid AS tenant_id` : s));
-        const meldung = await fehlerVon(
+        await dbAbgewiesen(
           mitTenant(
             A.tenant,
             (tx) =>
@@ -641,37 +635,43 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
               ),
             { client: app },
           ),
+          regel.rls(t),
+          t,
         );
-        expect(meldung, t).toMatch(/row-level security/);
       }
     });
 
     it('INSERT ohne Kontext scheitert (tenant_id bleibt NULL)', async () => {
-      const meldung = await fehlerVon(
+      await dbAbgewiesen(
         roh.query(
           `INSERT INTO "Nachricht" (id, "empfaengerId", zweck, betreff, text)
            VALUES ($1, $2, 'FREIGABE_CODE', 'x', 'x')`,
           [randomUUID(), randomUUID()],
         ),
+        // Ohne Kontext ist tenant_id NULL; die Policy weist vor NOT NULL ab.
+        regel.rls('Nachricht'),
       );
-      expect(meldung).toMatch(/null value in column "tenant_id"|row-level security/);
     });
 
     it('UPDATE auf fremde tenant_id scheitert in jeder Tabelle', async () => {
       for (const t of tenantTabellen) {
-        const meldung = await fehlerVon(
+        await dbAbgewiesen(
           mitTenant(
             A.tenant,
             (tx) => tx.$executeRawUnsafe(`UPDATE ${q(t)} SET tenant_id = $1::uuid`, B.tenant),
             { client: app },
           ),
+          t === 'AuditEvent' ? regel.keinRecht('AuditEvent') : regel.rls(t),
+          t,
         );
-        expect(meldung, t).toMatch(t === 'AuditEvent' ? /permission denied/ : /row-level security/);
       }
     });
 
     it('Prisma-INSERT mit ausdrücklich fremdem Tenant scheitert', async () => {
-      const meldung = await fehlerVon(
+      // Prisma schreibt mit RETURNING: Die Policy weist die Zeile über WITH CHECK
+      // und zusätzlich über USING (Sichtbarkeit der zurückgegebenen Zeile) ab –
+      // dieselbe Meldung. WITH CHECK allein prüft der Roh-INSERT oben.
+      await dbAbgewiesen(
         mitTenant(
           A.tenant,
           (tx) =>
@@ -680,17 +680,18 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
             }),
           { client: app },
         ),
+        regel.rls('Mandant'),
       );
-      expect(meldung).toMatch(/row-level security/);
     });
 
     it('Verweise auf Objekte von B scheitern wie Verweise auf nicht vorhandene (kein Orakel)', async () => {
-      const versuche: [string, (tx: Tx, id: string) => Promise<unknown>, string][] = [
+      const versuche: [string, (tx: Tx, id: string) => Promise<unknown>, string, DbErwartung][] = [
         [
           'Risiko → Programm',
           (tx, id) =>
             tx.risiko.create({ data: { programmId: id, code: 'X', aktivAb: new Date() } }),
           B.programmId,
+          regel.fremdschluessel('Risiko', 'Risiko_tenant_id_programmId_fkey'),
         ],
         [
           'Kontaktrolle → Mandant',
@@ -699,6 +700,10 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
               data: { mandantId: id, kontaktId: randomUUID(), rolle: 'MITARBEITER' },
             }),
           B.mandantId,
+          regel.fremdschluessel(
+            'MandantKontaktRolle',
+            'MandantKontaktRolle_tenant_id_mandantId_fkey',
+          ),
         ],
         [
           'Nachweis → Durchführung',
@@ -715,6 +720,7 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
               },
             }),
           B.durchfuehrungId,
+          regel.fremdschluessel('Nachweis', 'Nachweis_tenant_id_durchfuehrungId_fkey'),
         ],
         [
           'Feststellung-Risiko → Risiko',
@@ -723,6 +729,7 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
               data: { feststellungId: A.feststellungId, risikoId: id },
             }),
           B.risikoId,
+          regel.fremdschluessel('FeststellungRisiko', 'FeststellungRisiko_tenant_id_risikoId_fkey'),
         ],
         [
           'Durchführung → Kontrollstand',
@@ -738,23 +745,26 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
               },
             }),
           B.kontrolleStandId,
+          regel.fremdschluessel('Durchfuehrung', 'Durchfuehrung_tenant_id_kontrolleStandId_fkey'),
         ],
       ];
-      for (const [name, anlegen, fremdeId] of versuche) {
-        const fremd = await fehlerVon(
+      for (const [name, anlegen, fremdeId, erwartet] of versuche) {
+        const fremd = await dbAbgewiesen(
           mitTenant(A.tenant, (tx) => anlegen(tx, fremdeId), { client: app }),
+          erwartet,
+          name,
         );
         const unbekannteId = name.includes('Mandant') ? randomUUID() : `unbekannt-${randomUUID()}`;
-        const unbekannt = await fehlerVon(
+        const unbekannt = await dbAbgewiesen(
           mitTenant(A.tenant, (tx) => anlegen(tx, unbekannteId), { client: app }),
+          erwartet,
+          name,
         );
-        expect(fremd, name).toMatch(/Foreign key constraint/i);
-        expect(unbekannt, name).toMatch(/Foreign key constraint/i);
-        // Gleicher Fehler, ohne ID oder Inhalt des fremden Objekts.
-        expect(fremd.replaceAll(fremdeId, '<id>'), name).toBe(
-          unbekannt.replaceAll(unbekannteId, '<id>'),
-        );
-        expect(fremd).not.toContain(B.tenant);
+        // Gleicher Fehler (dieselbe Regel, derselbe Wortlaut), ohne ID oder Inhalt
+        // des fremden Objekts.
+        expect(fremd, name).toEqual(unbekannt);
+        expect(JSON.stringify(fremd)).not.toContain(B.tenant);
+        expect(JSON.stringify(fremd)).not.toContain(fremdeId);
       }
     });
   });
@@ -762,41 +772,75 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
   // ---------------------------------------------------- RLS nicht abschaltbar --
 
   describe('App-Rolle kann RLS nicht umgehen', () => {
+    // Alle 42501 (insufficient_privilege); die Meldung nennt das verweigerte Recht.
+    const recht = (meldung: string | RegExp): DbErwartung => ({ sqlstate: '42501', meldung });
     it.each([
       [
         'ALTER TABLE … DISABLE RLS',
         `ALTER TABLE "Mandant" DISABLE ROW LEVEL SECURITY`,
-        /must be owner/,
+        regel.nurEigentuemer('table', 'Mandant'),
       ],
       [
         'ALTER TABLE … NO FORCE RLS',
         `ALTER TABLE "Mandant" NO FORCE ROW LEVEL SECURITY`,
-        /must be owner/,
+        regel.nurEigentuemer('table', 'Mandant'),
       ],
-      ['DROP POLICY', `DROP POLICY tcms_tenant ON "Mandant"`, /must be owner/],
-      ['CREATE POLICY', `CREATE POLICY offen ON "Mandant" USING (true)`, /must be owner/],
-      ['ALTER POLICY', `ALTER POLICY tcms_tenant ON "Mandant" USING (true)`, /must be owner/],
+      [
+        'DROP POLICY',
+        `DROP POLICY tcms_tenant ON "Mandant"`,
+        recht(/^must be owner of (table|relation) Mandant$/),
+      ],
+      [
+        'CREATE POLICY',
+        `CREATE POLICY offen ON "Mandant" USING (true)`,
+        regel.nurEigentuemer('table', 'Mandant'),
+      ],
+      [
+        'ALTER POLICY',
+        `ALTER POLICY tcms_tenant ON "Mandant" USING (true)`,
+        regel.nurEigentuemer('table', 'Mandant'),
+      ],
       [
         'Tenant-Funktion ersetzen',
         `CREATE OR REPLACE FUNCTION tcms_aktueller_tenant() RETURNS uuid LANGUAGE sql AS $$ SELECT NULL::uuid $$`,
-        /must be owner|permission denied/,
+        recht('permission denied for schema public'),
       ],
-      ['ALTER TABLE … OWNER', `ALTER TABLE "Mandant" OWNER TO tcms_app`, /must be owner/],
-      ['TRUNCATE', `TRUNCATE "Mandant" CASCADE`, /permission denied/],
-      ['SET ROLE tcms_owner', `SET ROLE tcms_owner`, /permission denied/],
-      ['SET ROLE postgres', `SET ROLE postgres`, /permission denied/],
-      ['SET SESSION AUTHORIZATION', `SET SESSION AUTHORIZATION tcms_owner`, /permission denied/],
-      ['neue Tabelle', `CREATE TABLE schatten (id int)`, /permission denied/],
-      ['temporäre Tabelle', `CREATE TEMP TABLE schatten (id int)`, /permission denied/],
+      [
+        'ALTER TABLE … OWNER',
+        `ALTER TABLE "Mandant" OWNER TO tcms_app`,
+        regel.nurEigentuemer('table', 'Mandant'),
+      ],
+      ['TRUNCATE', `TRUNCATE "Mandant" CASCADE`, regel.keinRecht('Mandant')],
+      [
+        'SET ROLE tcms_owner',
+        `SET ROLE tcms_owner`,
+        recht('permission denied to set role "tcms_owner"'),
+      ],
+      ['SET ROLE postgres', `SET ROLE postgres`, recht('permission denied to set role "postgres"')],
+      [
+        'SET SESSION AUTHORIZATION',
+        `SET SESSION AUTHORIZATION tcms_owner`,
+        recht('permission denied to set session authorization "tcms_owner"'),
+      ],
+      [
+        'neue Tabelle',
+        `CREATE TABLE schatten (id int)`,
+        recht('permission denied for schema public'),
+      ],
+      [
+        'temporäre Tabelle',
+        `CREATE TEMP TABLE schatten (id int)`,
+        recht(/^permission denied to create temporary tables in database "[^"]+"$/),
+      ],
       [
         'Trigger anlegen',
         `CREATE TRIGGER t BEFORE INSERT ON "Mandant" FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()`,
-        /permission denied|must be owner/,
+        regel.keinRecht('Mandant'),
       ],
-      ['Audit ändern', `UPDATE "AuditEvent" SET "actorName" = 'x'`, /permission denied/],
-      ['Audit löschen', `DELETE FROM "AuditEvent"`, /permission denied/],
-    ])('%s scheitert', async (_name, sql, muster) => {
-      expect(await fehlerVon(roh.query(sql))).toMatch(muster);
+      ['Audit ändern', `UPDATE "AuditEvent" SET "actorName" = 'x'`, regel.keinRecht('AuditEvent')],
+      ['Audit löschen', `DELETE FROM "AuditEvent"`, regel.keinRecht('AuditEvent')],
+    ])('%s scheitert', async (name, sql, erwartet) => {
+      await dbAbgewiesen(roh.query(sql), erwartet, name);
     });
 
     it('SET row_security = off führt zu Fehlern statt zu Daten', async () => {
@@ -804,7 +848,10 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
       try {
         await roh.query(`SET LOCAL row_security = off`);
         await roh.query(`SELECT set_config('tcms.tenant_id', $1, true)`, [A.tenant]);
-        expect(await fehlerVon(roh.query(`SELECT * FROM "Mandant"`))).toMatch(/row-level security/);
+        await dbAbgewiesen(roh.query(`SELECT * FROM "Mandant"`), {
+          sqlstate: '42501',
+          meldung: 'query would be affected by row-level security policy for table "Mandant"',
+        });
       } finally {
         await roh.query('ROLLBACK');
       }
@@ -845,11 +892,12 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
     it('weist eine Eigentümer-Verbindung ab (könnte RLS abschalten)', async () => {
       const owner = erzeugeClient(OWNER_URL);
       try {
-        const meldung = await fehlerVon(
+        const f = await abgewiesenOhneDb(
           mitTenant(A.tenant, (tx) => tx.mandant.count(), { client: owner }),
+          /^\[db\] Laufzeitverbindung abgewiesen: /,
         );
-        expect(meldung).toMatch(/Laufzeitverbindung abgewiesen/);
-        expect(meldung).not.toMatch(/tcms_owner:|postgresql:\/\//);
+        expect(f).toBeInstanceOf(TenantFehler);
+        expect(f.message).not.toMatch(/tcms_owner:|postgresql:\/\//);
       } finally {
         await owner.$disconnect();
       }
@@ -862,9 +910,11 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
     it.skipIf(!SUPER_URL)('weist eine Superuser-Verbindung ab', async () => {
       const su = erzeugeClient(SUPER_URL);
       try {
-        expect(
-          await fehlerVon(mitTenant(A.tenant, (tx) => tx.mandant.count(), { client: su })),
-        ).toMatch(/Laufzeitverbindung abgewiesen/);
+        const f = await abgewiesenOhneDb(
+          mitTenant(A.tenant, (tx) => tx.mandant.count(), { client: su }),
+          /^\[db\] Laufzeitverbindung abgewiesen: /,
+        );
+        expect(f).toBeInstanceOf(TenantFehler);
       } finally {
         await su.$disconnect();
       }
@@ -980,8 +1030,11 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
     });
 
     it('schreibt nur mit Kontext; der Tenant kommt aus dem Kontext', async () => {
-      const ohne = await fehlerVon(app.$transaction((tx) => schreibeAudit(tx, eintrag('ohne'))));
-      expect(ohne).toMatch(/Kein Tenant-Kontext/);
+      const ohne = await abgewiesenOhneDb(
+        app.$transaction((tx) => schreibeAudit(tx, eintrag('ohne'))),
+        '[db] Kein Tenant-Kontext gesetzt.',
+      );
+      expect(ohne).toBeInstanceOf(TenantFehler);
       const neu = await mitTenant(
         A.tenant,
         async (tx) => {
@@ -1059,7 +1112,7 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
     });
 
     it('eine Verzweigung scheitert auch ohne Sperre am eindeutigen Vorgänger', async () => {
-      const meldung = await fehlerVon(
+      await dbAbgewiesen(
         mitTenant(
           A.tenant,
           async (tx) => {
@@ -1083,8 +1136,8 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
           },
           { client: app },
         ),
+        regel.eindeutig('AuditEvent_tenant_id_prevHash_key'),
       );
-      expect(meldung).toMatch(/Unique constraint/i);
     });
 
     // RT-03: Position je Tenant statt globaler Sequenz.
@@ -1116,8 +1169,8 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
     });
 
     it('doppelte Position scheitert am eindeutigen (tenant_id, pos), Position < 1 am CHECK', async () => {
-      const anlegen = (pos: (letzter: number) => number) =>
-        fehlerVon(
+      const anlegen = (pos: (letzter: number) => number, erwartet: DbErwartung) =>
+        dbAbgewiesen(
           mitTenant(
             A.tenant,
             async (tx) => {
@@ -1139,33 +1192,36 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
             },
             { client: app },
           ),
+          erwartet,
         );
-      expect(await anlegen((letzter) => letzter)).toMatch(/Unique constraint/i);
-      expect(await anlegen(() => 0)).toMatch(/AuditEvent_pos_check|check constraint/i);
+      await anlegen((letzter) => letzter, regel.eindeutig('AuditEvent_tenant_id_pos_key'));
+      await anlegen(() => 0, regel.check('AuditEvent', 'AuditEvent_pos_check'));
     });
   });
 
   // ---------------------------------------------------------------- TS-05 --
 
   describe('Eindeutigkeit (TS-05, je Tenant)', () => {
-    async function scheitert(fn: (tx: Tx) => Promise<unknown>): Promise<string> {
-      return fehlerVon(mitTenant(A.tenant, fn, { client: app }));
+    /** Schreiben in A scheitert an genau dieser Regel der Datenbank. */
+    async function scheitert(fn: (tx: Tx) => Promise<unknown>, erwartet: DbErwartung) {
+      return dbAbgewiesen(mitTenant(A.tenant, fn, { client: app }), erwartet);
     }
 
     it('höchstens ein Programm je Mandant', async () => {
-      expect(
-        await scheitert((tx) =>
+      await scheitert(
+        (tx) =>
           tx.tcmsProgramm.create({
             data: { mandantId: A.mandantId, paketId: 'ecommerce', paketVersion: '1.0' },
           }),
-        ),
-      ).toMatch(/Unique constraint/i);
+        regel.eindeutig('TcmsProgramm_tenant_id_mandantId_key'),
+      );
     });
 
     it('Risikostand: keine doppelte Version, höchstens ein offener Stand', async () => {
-      const stand = (version: number) => ({
+      const stand = (version: number, gueltigBis: Date | null = null) => ({
         risikoId: A.risikoId,
         version,
+        gueltigBis,
         titel: 't',
         fehlerquelle: 'f',
         folge: 'g',
@@ -1177,16 +1233,22 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
         modell: 'ec-1.0',
         gueltigAb: new Date(),
       });
-      expect(await scheitert((tx) => tx.risikoStand.create({ data: stand(1) }))).toMatch(
-        /Unique constraint/i,
+      // Je Fall genau eine Regel verletzt: Version 1 geschlossen (nur die Version
+      // ist doppelt), Version 2 offen (nur der offene Stand ist doppelt). Ein
+      // offener Stand 1 verletzte beide, und der Test bliebe ohne den
+      // Versionsschlüssel grün (Mutation tcms-s10).
+      await scheitert(
+        (tx) => tx.risikoStand.create({ data: stand(1, new Date()) }),
+        regel.eindeutig('RisikoStand_tenant_id_risikoId_version_key'),
       );
-      expect(await scheitert((tx) => tx.risikoStand.create({ data: stand(2) }))).toMatch(
-        /Unique constraint/i,
+      await scheitert(
+        (tx) => tx.risikoStand.create({ data: stand(2) }),
+        regel.eindeutig('RisikoStand_offen_key'),
       );
     });
 
     it('Kontrollstand und Profilstand: höchstens ein offener Stand, Version eindeutig', async () => {
-      const k = await scheitert(async (tx) => {
+      await scheitert(async (tx) => {
         const alt = await tx.kontrolleStand.findUniqueOrThrow({
           where: { id: A.kontrolleStandId },
         });
@@ -1200,17 +1262,16 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
             toleranzEur: null,
           },
         });
-      });
-      expect(k).toMatch(/Unique constraint/i);
-      expect(
-        await scheitert((tx) =>
+      }, regel.eindeutig('KontrolleStand_offen_key'));
+      await scheitert(
+        (tx) =>
           tx.profilStand.create({
             data: { programmId: A.programmId, version: 2, antworten: {}, gueltigAb: new Date() },
           }),
-        ),
-      ).toMatch(/Unique constraint/i);
-      expect(
-        await scheitert((tx) =>
+        regel.eindeutig('ProfilStand_offen_key'),
+      );
+      await scheitert(
+        (tx) =>
           tx.profilStand.create({
             data: {
               programmId: A.programmId,
@@ -1220,13 +1281,13 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
               gueltigBis: new Date(),
             },
           }),
-        ),
-      ).toMatch(/Unique constraint/i);
+        regel.eindeutig('ProfilStand_tenant_id_programmId_version_key'),
+      );
     });
 
     it('Ereignisnummer und Wiedervorlage je Tenant: doppelt in A scheitert, gleich in B erlaubt', async () => {
-      expect(
-        await scheitert((tx) =>
+      await scheitert(
+        (tx) =>
           tx.ereignis.create({
             data: {
               programmId: A.programmId,
@@ -1238,10 +1299,10 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
               ereignisDatum: new Date('2026-10-01'),
             },
           }),
-        ),
-      ).toMatch(/Unique constraint/i);
-      expect(
-        await scheitert((tx) =>
+        regel.eindeutig('Ereignis_tenant_id_nummer_key'),
+      );
+      await scheitert(
+        (tx) =>
           tx.massnahme.create({
             data: {
               feststellungId: A.feststellungId,
@@ -1251,8 +1312,8 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
               frist: new Date('2026-12-31'),
             },
           }),
-        ),
-      ).toMatch(/Unique constraint/i);
+        regel.eindeutig('Massnahme_tenant_id_wiedervorlageNr_key'),
+      );
       // Die Fixture von B nutzt dieselben Nummern: je Tenant eindeutig, nicht global.
       await mitTenant(
         B.tenant,
@@ -1267,8 +1328,9 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
   });
 
   describe('Schema-Nachträge Welle 2', () => {
-    async function scheitert(fn: (tx: Tx) => Promise<unknown>): Promise<string> {
-      return fehlerVon(mitTenant(A.tenant, fn, { client: app }));
+    /** Schreiben in A scheitert an genau dieser Regel der Datenbank. */
+    async function scheitert(fn: (tx: Tx) => Promise<unknown>, erwartet: DbErwartung) {
+      return dbAbgewiesen(mitTenant(A.tenant, fn, { client: app }), erwartet);
     }
     const inA = <T>(fn: (tx: Tx) => Promise<T>) => mitTenant(A.tenant, fn, { client: app });
 
@@ -1289,11 +1351,11 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
         { client: app },
       );
       // Ein zweites Mal im selben Tenant scheitert am Schlüssel.
-      expect(
-        await scheitert((tx) =>
+      await scheitert(
+        (tx) =>
           tx.mandant.create({ data: { id: B.mandantId, name: 'doppelt', rechtsform: 'KapG' } }),
-        ),
-      ).toMatch(/Unique constraint/i);
+        regel.eindeutig('Mandant_pkey'),
+      );
       const { rows } = await roh.query<{ spalten: string }>(
         `SELECT string_agg(a.attname, ',' ORDER BY k.ord) AS spalten
          FROM pg_constraint c
@@ -1320,7 +1382,7 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
           },
         });
       const erster = await inA(nachtrag('GEPLANT'));
-      expect(await scheitert(nachtrag('GEPLANT'))).toMatch(/Unique constraint/i);
+      await scheitert(nachtrag('GEPLANT'), regel.eindeutig('Durchfuehrung_nachtrag_offen_key'));
       // Abgeschlossene Nachträge zählen nicht.
       await inA(nachtrag('OHNE_BEFUND'));
       await inA((tx) =>
@@ -1340,7 +1402,7 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
           },
         });
       // Die Fixture hat bereits eine beantragte Übersteuerung (DESIGN).
-      expect(await scheitert(uebersteuerung('DESIGN'))).toMatch(/Unique constraint/i);
+      await scheitert(uebersteuerung('DESIGN'), regel.eindeutig('Uebersteuerung_beantragt_key'));
       await inA(uebersteuerung('BETRIEB'));
 
       const akzeptanz = (tx: Tx) =>
@@ -1355,7 +1417,7 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
           },
         });
       const offen = await inA(akzeptanz);
-      expect(await scheitert(akzeptanz)).toMatch(/Unique constraint/i);
+      await scheitert(akzeptanz, regel.eindeutig('Freigabe_risikoakzeptanz_offen_key'));
       await inA((tx) =>
         tx.freigabe.update({ where: { id: offen.id }, data: { status: 'ABGELEHNT' } }),
       );
@@ -1379,17 +1441,19 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
     });
 
     it('Freigabe: Fehlversuche nur 0–5, Code nur als SHA-256 (hex) gespeichert', async () => {
-      for (const data of [
-        { codeFehlversuche: 6 },
-        { codeFehlversuche: -1 },
-        { codeHash: `v1:0:${'a'.repeat(64)}` },
-        { codeHash: '123456' },
-        { codeHash: 'A'.repeat(64) },
-      ]) {
-        expect(
-          await scheitert((tx) => tx.freigabe.update({ where: { id: A.freigabeId }, data })),
-          JSON.stringify(data),
-        ).toMatch(/check constraint/i);
+      const versuche = regel.check('Freigabe', 'Freigabe_codeFehlversuche_check');
+      const hash = regel.check('Freigabe', 'Freigabe_codeHash_check');
+      for (const [data, erwartet] of [
+        [{ codeFehlversuche: 6 }, versuche],
+        [{ codeFehlversuche: -1 }, versuche],
+        [{ codeHash: `v1:0:${'a'.repeat(64)}` }, hash],
+        [{ codeHash: '123456' }, hash],
+        [{ codeHash: 'A'.repeat(64) }, hash],
+      ] as const) {
+        await scheitert(
+          (tx) => tx.freigabe.update({ where: { id: A.freigabeId }, data }),
+          erwartet,
+        );
       }
       await inA((tx) =>
         tx.freigabe.update({
@@ -1406,14 +1470,25 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
     });
 
     it('Nachricht: Empfänger nur als UUID, Zweck nur aus dem Enum', async () => {
-      for (const sql of [
-        `INSERT INTO "Nachricht" (id, "empfaengerId", zweck, betreff, text) VALUES ('${randomUUID()}', 'Jana Weller', 'FREIGABE_CODE', 'x', 'x')`,
-        `INSERT INTO "Nachricht" (id, "empfaengerId", zweck, betreff, text) VALUES ('${randomUUID()}', '${randomUUID()}', 'UNBEKANNT', 'x', 'x')`,
-        `INSERT INTO "Nachricht" (id, zweck, betreff, text) VALUES ('${randomUUID()}', 'FREIGABE_CODE', 'x', 'x')`,
-      ]) {
-        expect(await scheitert((tx) => tx.$executeRawUnsafe(sql))).toMatch(
-          /invalid input|null value|violates not-null/i,
-        );
+      // Jede Zeile verletzt außer der geprüften Regel auch NOT NULL anderer Spalten
+      // (Mandant, Vorlagendaten); erwartet ist genau die Regel des Falls, sonst
+      // bliebe der Test ohne sie grün (Mutation tcms-s10: Spalte als Text, Enum
+      // erweitert, NOT NULL entfernt).
+      for (const [sql, erwartet] of [
+        [
+          `INSERT INTO "Nachricht" (id, "empfaengerId", zweck, betreff, text) VALUES ('${randomUUID()}', 'Jana Weller', 'FREIGABE_CODE', 'x', 'x')`,
+          regel.eingabe('invalid input syntax for type uuid: "Jana Weller"'),
+        ],
+        [
+          `INSERT INTO "Nachricht" (id, "empfaengerId", zweck, betreff, text) VALUES ('${randomUUID()}', '${randomUUID()}', 'UNBEKANNT', 'x', 'x')`,
+          regel.eingabe('invalid input value for enum "NachrichtZweck": "UNBEKANNT"'),
+        ],
+        [
+          `INSERT INTO "Nachricht" (id, zweck, betreff, text) VALUES ('${randomUUID()}', 'FREIGABE_CODE', 'x', 'x')`,
+          regel.nichtNull('Nachricht', 'empfaengerId'),
+        ],
+      ] as const) {
+        await scheitert((tx) => tx.$executeRawUnsafe(sql), erwartet);
       }
     });
   });
@@ -1448,41 +1523,59 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
     }
     const aendere = (id: string, data: Record<string, unknown>) =>
       inA((tx) => tx.beschreibungVersion.update({ where: { id }, data }));
+    // Je Fall der genaue Text des Triggers: Alle beginnen mit „tcms: “, ein
+    // allgemeines Muster bestünde auch, wenn ein anderer Zweig abweist.
+    const UNVERAENDERLICH = regel.trigger('tcms: eingefrorene CMS-Beschreibung ist unveränderlich');
+    const UEBERGANG = regel.trigger(
+      'tcms: unzulässiger Statusübergang einer eingefrorenen CMS-Beschreibung',
+    );
+    const OHNE_PERSON = regel.trigger('tcms: Freigabe ohne freigebende Person und Zeitpunkt');
+    const NICHT_LOESCHBAR = regel.trigger(
+      'tcms: eingefrorene CMS-Beschreibung kann nicht gelöscht werden',
+    );
+    const NUR_ENTWURF = regel.trigger('tcms: neue CMS-Beschreibung nur als Entwurf');
+    const NUR_AUS_BEIM_MANDANTEN = regel.trigger(
+      'tcms: Freigabe einer CMS-Beschreibung nur aus „beim Mandanten"',
+    );
 
     it('Inhalt, Metadaten und Löschen gesperrt; nur die vorgesehenen Statusübergänge', async () => {
       const id = await version('BEIM_MANDANTEN');
-      for (const data of [
-        { snapshot: { nummer: '9', eingefroren: false } },
-        { snapshotSha256: 'b'.repeat(64) },
-        { abschnitte: [] },
-        { nummer: '9.9' },
-        { createdAt: new Date('2020-01-01') },
-        { reviewVon: randomUUID() },
-        { status: 'ENTWURF' },
-        { status: 'KANZLEI_REVIEW' },
-        { status: 'FREIGEGEBEN' }, // ohne freigebende Person
-        { freigegebenVon: randomUUID() }, // ohne Statuswechsel
-      ]) {
-        expect(await fehlerVon(aendere(id, data)), JSON.stringify(data)).toMatch(/tcms: /);
+      for (const [data, erwartet] of [
+        [{ snapshot: { nummer: '9', eingefroren: false } }, UNVERAENDERLICH],
+        [{ snapshotSha256: 'b'.repeat(64) }, UNVERAENDERLICH],
+        [{ abschnitte: [] }, UNVERAENDERLICH],
+        [{ nummer: '9.9' }, UNVERAENDERLICH],
+        [{ createdAt: new Date('2020-01-01') }, UNVERAENDERLICH],
+        [{ reviewVon: randomUUID() }, UNVERAENDERLICH],
+        [{ status: 'ENTWURF' }, UEBERGANG],
+        [{ status: 'KANZLEI_REVIEW' }, UEBERGANG],
+        [{ status: 'FREIGEGEBEN' }, OHNE_PERSON],
+        [{ freigegebenVon: randomUUID() }, UNVERAENDERLICH], // ohne Statuswechsel
+      ] as const) {
+        await dbAbgewiesen(aendere(id, data), erwartet, JSON.stringify(data));
       }
-      expect(
-        await fehlerVon(inA((tx) => tx.beschreibungVersion.delete({ where: { id } }))),
-      ).toMatch(/nicht gelöscht/);
+      await dbAbgewiesen(
+        inA((tx) => tx.beschreibungVersion.delete({ where: { id } })),
+        NICHT_LOESCHBAR,
+      );
       await aendere(id, {
         status: 'FREIGEGEBEN',
         freigegebenVon: randomUUID(),
         freigegebenAm: new Date(),
       });
-      for (const data of [
-        { freigegebenAm: new Date('2020-01-01') },
-        { status: 'BEIM_MANDANTEN' },
-        { snapshotSha256: 'c'.repeat(64) },
-      ]) {
-        expect(await fehlerVon(aendere(id, data)), JSON.stringify(data)).toMatch(/tcms: /);
+      for (const [data, erwartet] of [
+        [{ freigegebenAm: new Date('2020-01-01') }, UNVERAENDERLICH],
+        [{ status: 'BEIM_MANDANTEN' }, UEBERGANG],
+        [{ snapshotSha256: 'c'.repeat(64) }, UNVERAENDERLICH],
+      ] as const) {
+        await dbAbgewiesen(aendere(id, data), erwartet, JSON.stringify(data));
       }
       await aendere(id, { status: 'ABGELOEST' });
-      for (const data of [{ status: 'FREIGEGEBEN' }, { abschnitte: [] }]) {
-        expect(await fehlerVon(aendere(id, data)), JSON.stringify(data)).toMatch(/tcms: /);
+      for (const [data, erwartet] of [
+        [{ status: 'FREIGEGEBEN' }, UEBERGANG],
+        [{ abschnitte: [] }, UNVERAENDERLICH],
+      ] as const) {
+        await dbAbgewiesen(aendere(id, data), erwartet, JSON.stringify(data));
       }
       // Beim Mandanten → abgelöst (zurückgezogen) ist ebenfalls vorgesehen.
       await aendere(await version('BEIM_MANDANTEN'), { status: 'ABGELOEST' });
@@ -1511,14 +1604,13 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
         { reviewAngefordertVon: randomUUID() },
       ] as const) {
         const nummer = `8.${Math.floor(Math.random() * 1e6)}`;
-        expect(
-          await fehlerVon(
-            inA((tx) =>
-              tx.beschreibungVersion.create({ data: { ...basis, nummer, ...data } as never }),
-            ),
+        await dbAbgewiesen(
+          inA((tx) =>
+            tx.beschreibungVersion.create({ data: { ...basis, nummer, ...data } as never }),
           ),
+          NUR_ENTWURF,
           JSON.stringify(data),
-        ).toMatch(/tcms: neue CMS-Beschreibung nur als Entwurf/);
+        );
       }
     });
 
@@ -1537,8 +1629,10 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
           { status: 'ABGELOEST' },
           { freigegebenVon: randomUUID(), freigegebenAm: new Date() },
         ]) {
-          expect(await fehlerVon(aendere(id, data)), `${ausgang} ${JSON.stringify(data)}`).toMatch(
-            /tcms: Freigabe einer CMS-Beschreibung nur aus/,
+          await dbAbgewiesen(
+            aendere(id, data),
+            NUR_AUS_BEIM_MANDANTEN,
+            `${ausgang} ${JSON.stringify(data)}`,
           );
         }
         // Der vorgesehene Weg bleibt offen: beim Mandanten, dann freigegeben.
@@ -1561,14 +1655,14 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
       try {
         await eigentuemer.query('BEGIN');
         await eigentuemer.query(`SELECT set_config('tcms.tenant_id', $1, true)`, [A.tenant]);
-        const meldung = await fehlerVon(
+        await dbAbgewiesen(
           eigentuemer.query(
             `INSERT INTO "BeschreibungVersion" (id, "programmId", nummer, status, abschnitte, snapshot, "snapshotSha256", "freigegebenVon", "freigegebenAm")
              VALUES ($1, $2, '7.1', 'FREIGEGEBEN', '[]'::jsonb, '{"eingefroren":true}'::jsonb, $3, $4, now())`,
             [`h4${randomUUID().replaceAll('-', '')}`, A.programmId, 'a'.repeat(64), randomUUID()],
           ),
+          NUR_ENTWURF,
         );
-        expect(meldung).toMatch(/nur als Entwurf/);
       } finally {
         await eigentuemer.query('ROLLBACK');
         await eigentuemer.end();
@@ -1583,24 +1677,23 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
 
     it('die App-Rolle kann den Trigger nicht abschalten; er gilt auch für den Eigentümer', async () => {
       const id = await version('BEIM_MANDANTEN');
-      expect(
-        await fehlerVon(
-          inA((tx) =>
-            tx.$executeRawUnsafe(
-              'ALTER TABLE "BeschreibungVersion" DISABLE TRIGGER "BeschreibungVersion_eingefroren"',
-            ),
+      await dbAbgewiesen(
+        inA((tx) =>
+          tx.$executeRawUnsafe(
+            'ALTER TABLE "BeschreibungVersion" DISABLE TRIGGER "BeschreibungVersion_eingefroren"',
           ),
         ),
-      ).toMatch(/must be owner/);
+        regel.nurEigentuemer('table', 'BeschreibungVersion'),
+      );
       const eigentuemer = pgClient(OWNER_URL);
       await eigentuemer.connect();
       try {
         await eigentuemer.query('BEGIN');
         await eigentuemer.query(`SELECT set_config('tcms.tenant_id', $1, true)`, [A.tenant]);
-        const meldung = await fehlerVon(
+        await dbAbgewiesen(
           eigentuemer.query(`UPDATE "BeschreibungVersion" SET nummer = 'x' WHERE id = $1`, [id]),
+          UNVERAENDERLICH,
         );
-        expect(meldung).toMatch(/unveränderlich/);
       } finally {
         await eigentuemer.query('ROLLBACK');
         await eigentuemer.end();
@@ -1617,11 +1710,12 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
       const sql = `INSERT INTO akteur_jti (jti, exp) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING jti`;
       expect((await roh.query(sql, [jti, exp])).rowCount).toBe(1);
       expect((await roh.query(sql, [jti, exp])).rowCount).toBe(0);
-      expect(
-        await fehlerVon(roh.query(`UPDATE akteur_jti SET exp = now() WHERE jti = $1`, [jti])),
-      ).toMatch(/permission denied/);
+      await dbAbgewiesen(
+        roh.query(`UPDATE akteur_jti SET exp = now() WHERE jti = $1`, [jti]),
+        regel.keinRecht('akteur_jti'),
+      );
       expect((await roh.query(`DELETE FROM akteur_jti WHERE jti = $1`, [jti])).rowCount).toBe(1);
-      expect(await fehlerVon(roh.query(`TRUNCATE akteur_jti`))).toMatch(/permission denied/);
+      await dbAbgewiesen(roh.query(`TRUNCATE akteur_jti`), regel.keinRecht('akteur_jti'));
     });
   });
 });

@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { NachrichtZweck } from '@tcms/contract';
 import type { PrismaClient } from '@tcms/db';
+import { dbAbgewiesen, regel } from '@tcms/db/testhilfe';
 import type { DienstKontext, SystemKontext } from '../../kontext';
 import {
   bestaetigeNachrichtZustellung,
@@ -295,9 +296,14 @@ describe.skipIf(!AKTIV)('Unzustellbarkeit melden (Service, PostgreSQL)', () => {
     const roh = async (id: string, data: Record<string, unknown>) =>
       inWelt(w, (tx) => tx.nachricht.update({ where: { id }, data: data as never }));
     const leer = { code: null, text: '' };
-    for (const [name, data] of [
-      ['unzustellbar ohne Grund', { ...leer, unzustellbarAm: new Date() }],
-      ['Grund ohne unzustellbar', { unzustellbarGrund: 'SONSTIGES' }],
+    // Je Fall genau der verletzte CHECK (mit Namen): Ein allgemeines Muster
+    // bestünde auch an jeder anderen Regel der Tabelle.
+    const grund = regel.check('Nachricht', 'Nachricht_unzustellbar_grund_check');
+    const zustellung = regel.check('Nachricht', 'Nachricht_zustellung_check');
+    const klartext = regel.check('Nachricht', 'Nachricht_klartext_check');
+    for (const [name, data, erwartet] of [
+      ['unzustellbar ohne Grund', { ...leer, unzustellbarAm: new Date() }, grund],
+      ['Grund ohne unzustellbar', { unzustellbarGrund: 'SONSTIGES' }, grund],
       [
         'zugestellt und unzustellbar',
         {
@@ -306,35 +312,37 @@ describe.skipIf(!AKTIV)('Unzustellbarkeit melden (Service, PostgreSQL)', () => {
           unzustellbarAm: new Date(),
           unzustellbarGrund: 'SONSTIGES',
         },
+        zustellung,
       ],
       [
         'unzustellbar mit Text',
         { code: null, unzustellbarAm: new Date(), unzustellbarGrund: 'SONSTIGES' },
+        klartext,
       ],
       [
         'unzustellbar mit Code',
         { text: '', unzustellbarAm: new Date(), unzustellbarGrund: 'SONSTIGES' },
+        klartext,
       ],
     ] as const) {
       const id = await nachricht();
-      await expect(roh(id, data), name).rejects.toThrow(/violates check constraint/);
+      await dbAbgewiesen(roh(id, data), erwartet, name);
       expect(await zeile(id), name).toMatchObject({ unzustellbarAm: null, code: CODE });
     }
     // Zulässig: unzustellbar mit Grund, ohne Klartext (auch die Code-Nachricht ohne Code).
     const ok = await nachricht();
     await roh(ok, { ...leer, unzustellbarAm: new Date(), unzustellbarGrund: 'SONSTIGES' });
     // Danach lässt sich die Zustellung nicht zusätzlich setzen.
-    await expect(roh(ok, { zugestelltAm: new Date() })).rejects.toThrow(
-      /Nachricht_zustellung_check/,
-    );
+    await dbAbgewiesen(roh(ok, { zugestelltAm: new Date() }), zustellung);
     // Unbekannter Grund: nur das Enum.
     const x = await nachricht();
-    await expect(
+    await dbAbgewiesen(
       inWelt(
         w,
         (tx) =>
           tx.$executeRaw`UPDATE "Nachricht" SET "unzustellbarAm" = now(), "unzustellbarGrund" = 'FREI', code = NULL, text = '' WHERE id = ${x}`,
       ),
-    ).rejects.toThrow(/invalid input value for enum/);
+      regel.eingabe('invalid input value for enum "NachrichtUnzustellbarGrund": "FREI"'),
+    );
   });
 });
