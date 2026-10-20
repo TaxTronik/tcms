@@ -62,6 +62,29 @@ describe('Kontrollvorlagen', () => {
     }
   });
 
+  it('unbekannte Berufsträger:in bzw. Hauptbearbeitung bleiben null (nie leer, nie gleichgesetzt)', () => {
+    const ohne: VorbelegungsRollen = { ...ROLLEN, bt: null, hb: null };
+    for (const kat of KATALOG_KONTROLLEN) {
+      const z = standardKontrollZustaendigkeit(kat, ohne);
+      for (const id of [z.durchfuehrendId, z.vertretungId, z.gegenzeichnerId]) {
+        expect(id === null || id.length > 0, kat.code).toBe(true);
+      }
+      if (kat.partei === 'KANZLEI') {
+        // Durchführung offen; zwei unbekannte Personen gelten nicht als dieselbe
+        // (sonst zeichnete die Vertretung gegen, als führte die BT durch).
+        expect(z.durchfuehrendId, kat.code).toBeNull();
+        expect(z.gegenzeichnerId, kat.code).toBeNull();
+        expect(z.vertretungId, kat.code).toBe('vertretung');
+      }
+    }
+    // Nur die Berufsträger:in bekannt: Kanzleikontrollen gegengezeichnet von ihr.
+    const k01 = KATALOG_KONTROLLEN.find((k) => k.code === 'K-EC-01')!;
+    expect(standardKontrollZustaendigkeit(k01, { ...ROLLEN, hb: null })).toMatchObject({
+      durchfuehrendId: null,
+      gegenzeichnerId: 'bt',
+    });
+  });
+
   it('gültiger Stand zu einem Zeitpunkt: jüngster mit gueltigAb ≤ t < gueltigBis', () => {
     const t = (s: string) => new Date(`${s}T00:00:00Z`);
     const staende = [

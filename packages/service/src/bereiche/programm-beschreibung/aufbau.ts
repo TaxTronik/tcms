@@ -61,8 +61,13 @@ export interface AufbauPerson {
 }
 
 export interface AufbauUmfeld {
-  /** `berufstraegerId`/`bearbeitungId`: Eingabe der kanzleikonsole, '' wenn unbekannt. */
-  mandant: { id: string; name: string; berufstraegerId: string; bearbeitungId: string };
+  /** `berufstraegerId`/`bearbeitungId`: Eingabe der kanzleikonsole, `null` wenn unbekannt. */
+  mandant: {
+    id: string;
+    name: string;
+    berufstraegerId: string | null;
+    bearbeitungId: string | null;
+  };
   kanzlei: readonly AufbauPerson[];
   mandantPersonen: readonly AufbauPerson[];
   heute: Date;

@@ -486,6 +486,8 @@ ob beim Mandanten gegengezeichnet wird; ältere Snapshots ohne das Feld tragen �
 
 `GET …/einrichtung` liefert in beiden Zuständen (Assistent offen oder eingerichtet) `heute`: den
 Kalendertag der Uhr des Dienstes (Europe/Berlin), mit dem auch die Prüfung beim Speichern rechnet.
+Nennt die Query keine Berufsträger:in bzw. Hauptbearbeitung, bleiben die damit vorbelegten Personen
+im Plan `null` (offen, Prüfpunkt in Schritt 5), nie eine leere Zeichenkette (tcms-s10).
 
 Bestätigungscodes erreichen die Empfänger nur über den Postausgang (Adresse = Personen-ID); keine
 andere Antwort, kein Log und kein Audit enthält einen Code. Eine offene Nachricht ist nach `zweck`

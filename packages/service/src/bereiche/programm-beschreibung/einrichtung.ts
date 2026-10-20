@@ -98,8 +98,9 @@ async function baueUmfeld(
       mandant: {
         id: mandant.id,
         name: mandant.name,
-        berufstraegerId: bt ?? '',
-        bearbeitungId: hb ?? '',
+        // Unbekannt bleibt null (nie '': keine Personen-ID, Vertrag uuid.nullable).
+        berufstraegerId: bt,
+        bearbeitungId: hb,
       },
       kanzlei,
       mandantPersonen,

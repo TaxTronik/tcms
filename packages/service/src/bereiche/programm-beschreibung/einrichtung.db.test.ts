@@ -90,6 +90,38 @@ describe.skipIf(!AKTIV)('Einrichtungsassistent (Service, PostgreSQL)', () => {
     expect(await inWelt(w, (tx) => tx.tcmsProgramm.count())).toBe(0);
   });
 
+  it('ohne Entwurf und ohne Zuständigkeit: unbekannte Personen null, nie leer (Vertrag)', async () => {
+    // kanzleikonsole s7nach (Bergkamm der Demo): ohne berufstraegerId/bearbeitungId
+    // belegte der Plan Personen mit '' vor.
+    for (const personenQuery of [
+      {},
+      { berufstraegerId: w.bt },
+      { bearbeitungId: w.hb, vertretungId: w.dritte },
+    ]) {
+      const v = await im(btA(w), (ctx) =>
+        ladeEinrichtung(ctx, { mandantId: w.mandantA, ...personenQuery }),
+      );
+      const wo = JSON.stringify(personenQuery);
+      expect(EinrichtungViewSchema.parse(v), wo).toEqual(v);
+      const zust = v.plan!.kontrollen.map((k) => k.zust);
+      expect(zust.length, wo).toBeGreaterThan(0);
+      for (const z of zust) {
+        for (const id of [z.durchfuehrendId, z.vertretungId, z.gegenzeichnerId]) {
+          expect(id === null || id.length === 36, wo).toBe(true);
+        }
+      }
+      // Unbekannte Zuständigkeit bleibt offen und erscheint als Prüfpunkt von Schritt 5.
+      if (!('bearbeitungId' in personenQuery)) {
+        expect(
+          zust.some((z) => z.partei === 'KANZLEI' && z.durchfuehrendId === null),
+          wo,
+        ).toBe(true);
+        expect(v.pruefung.find((p) => p.schritt === 5)?.fehler.length, wo).toBeGreaterThan(0);
+      }
+    }
+    expect(await inWelt(w, (tx) => tx.tcmsProgramm.count())).toBe(0);
+  });
+
   it('Schritt unvollständig mit „weiter": UNGUELTIG, nichts gespeichert', async () => {
     const f = await fehlerVon(
       speichere(btA(w), 1, {

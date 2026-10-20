@@ -50,6 +50,39 @@ describe.skipIf(!AKTIV)('Endpunkte Einrichtungsassistent (App + PostgreSQL)', ()
     expect(nochmal.status).toBe(409);
   });
 
+  // kanzleikonsole s7nach (Bergkamm der Demo): Ohne Entwurf und ohne Zuständigkeit in der
+  // Query belegte der Plan Personen mit '' vor – Antwort verletzte EntwurfKontrolleSchema.
+  it('ohne Entwurf und ohne Zuständigkeit: unbekannte Personen sind null, nie leer', async () => {
+    for (const query of ['', `?berufstraegerId=${w.BT}`, `?bearbeitungId=${w.HB}`]) {
+      // Vertragsprüfung der Test-App (antwortSchema) läuft bei jeder Antwort mit.
+      const lesen = await ok(await senden(w, 'GET', `${m(w.B)}/einrichtung${query}`, a.bt(w.B)));
+      expect(lesen, query).toMatchObject({ eingerichtet: false, programm: null });
+      const plan = lesen['plan'] as {
+        kontrollen: { code: string; zust: { partei: string } & Record<string, unknown> }[];
+      };
+      expect(plan.kontrollen.length, query).toBeGreaterThan(0);
+      const ids = plan.kontrollen.flatMap((k) =>
+        Object.entries(k.zust)
+          .filter(([f]) => f.endsWith('Id'))
+          .map(([f, id]) => [k.code, f, id] as const),
+      );
+      for (const [code, feld, id] of ids) {
+        expect(id === null || /^[0-9a-f-]{36}$/.test(String(id)), `${query} ${code} ${feld}`).toBe(
+          true,
+        );
+      }
+      // Kanzleikontrollen (außer K-EC-20/24, die die Berufsträger:in durchführt):
+      // Durchführung = Hauptbearbeitung, ohne Angabe offen (null).
+      const kanzlei = plan.kontrollen.find(
+        (k) => k.zust.partei === 'KANZLEI' && !['K-EC-20', 'K-EC-24'].includes(k.code),
+      );
+      expect(kanzlei, query).toBeDefined();
+      expect(kanzlei!.zust['durchfuehrendId'], query).toBe(
+        query.includes('bearbeitungId') ? w.HB : null,
+      );
+    }
+  });
+
   pruefeEndpunkte(w, [
     {
       name: 'Einrichtung lesen',

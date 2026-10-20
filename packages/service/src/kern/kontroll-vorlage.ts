@@ -17,8 +17,9 @@ import type { MandantRolle } from '../rechte';
 
 /** Personen für die Vorbelegung der Zuständigkeiten neuer Kontrollen. */
 export interface VorbelegungsRollen {
-  bt: string;
-  hb: string;
+  /** Zuständige:r Berufsträger:in bzw. Hauptbearbeitung; `null`, wenn die kanzleikonsole sie nicht nennt. */
+  bt: string | null;
+  hb: string | null;
   /** Vertretung der Kanzleiseite (nicht Berufsträger:in, nicht Hauptbearbeitung). */
   kanzleiVertretung: string | null;
   tcb: string | null;
@@ -53,7 +54,11 @@ export function mandantSeiteVorbelegen(
   return { gv, tcb, mandantVertretung };
 }
 
-/** Startbelegung wie im Seed: Kanzleikontrollen Hauptbearbeitung, Mandantenkontrollen TCB, Gegenzeichnung Berufsträger:in. */
+/**
+ * Startbelegung wie im Seed: Kanzleikontrollen Hauptbearbeitung, Mandantenkontrollen TCB,
+ * Gegenzeichnung Berufsträger:in. Unbekannte Personen bleiben `null` (offen, die Prüfung des
+ * Assistenten meldet sie); zwei unbekannte gelten nie als dieselbe Person.
+ */
 export function standardKontrollZustaendigkeit(
   kat: KatalogKontrolle,
   r: VorbelegungsRollen,
@@ -65,7 +70,7 @@ export function standardKontrollZustaendigkeit(
   const gegenzeichnungMandant = kat.code === 'K-EC-23' && r.mandantVertretung != null;
   const gegenzeichner = gegenzeichnungMandant
     ? r.mandantVertretung
-    : durchfuehrend === r.bt
+    : durchfuehrend !== null && durchfuehrend === r.bt
       ? r.kanzleiVertretung
       : r.bt;
   return {
