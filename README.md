@@ -140,7 +140,10 @@ auf ein Objekt eines anderen Tenants scheitert also schon in der Datenbank.
   (Fremdschlüssel), Empfängerart, Vorlagendaten, Code und `verworfenAm` samt CHECKs (Stufe 4, ohne
   Bestandsdaten). `20261019234500_nachricht_unzustellbar` ergänzt `unzustellbarAm`/`unzustellbarGrund`
   (Enum) mit CHECKs: Grund genau bei „unzustellbar", zugestellt und unzustellbar schließen sich aus,
-  kein Klartext danach.
+  kein Klartext danach. `20261020100000_portal_meldung_idempotenz` legt `PortalMeldungIdempotenz` an
+  (Idempotenzschlüssel der Portal-Meldung, tcms-s10): `tenant_id`, RLS mit Policy `tcms_tenant`,
+  eindeutig je Tenant, Mandant, Person und Schlüssel sowie je Ereignis, `tcms_app` nur SELECT, INSERT,
+  DELETE.
 
 DB-Tests (RLS je Tabelle aus dem Katalog, Rechte, Tenantgrenzen, Audit-Kette bei parallelen
 Schreibern) laufen gegen eine migrierte Datenbank:
@@ -429,23 +432,30 @@ keine §-153-Angaben, keine Schwere. Kennzahlen (Portfolio, Lücken) zählen ver
 nur, wo die Zahl aus Sichtbarem folgt (Status, Zahl der Maßnahmen); §-153 und Schwere zählen nur
 lesbare (RT-01).
 
-| Methode | Pfad                                                                      | Recht                                                                                           |
-| ------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| GET     | `feststellungen`, `feststellungen/{id}`                                   | Kanzlei mit Bezug (`kannLesen`)                                                                 |
-| POST    | `feststellungen` (201), `…/{id}/weiter` (`von`), `…/{id}/wuerdigung`      | `kannBearbeiten`; „NEIN" nur `kannWuerdigen`                                                    |
-| POST    | `…/{id}/erklaerungen`, `…/{id}/massnahmen`, `…/{id}/nachkontrolle`        | `kannBearbeiten` (201)                                                                          |
-| POST    | `…/{id}/p153` (`entscheidung`, `bisher`), `…/{id}/vertraulich`            | `kannWuerdigen`                                                                                 |
-| POST    | `…/{id}/verwerfen/beantragen` · `bestaetigen` · `ablehnen`                | `kannBearbeiten`, Bestätigung zweite Person; bei Auswirkung ≠ „NEIN" zusätzlich `kannWuerdigen` |
-| POST    | `massnahmen/{id}/erledigen`                                               | `kannBearbeiten` oder verantwortlich                                                            |
-| GET     | `ereignisse`, `ereignisse/{id}`, `ereignisse/{id}/anlagen/{sha256}`       | Kanzlei mit Bezug                                                                               |
-| POST    | `ereignisse` (201), `…/{id}/in-pruefung`, `…/{id}/folgen` (201)           | `kannBearbeiten`                                                                                |
-| POST    | `…/{id}/folgen/anlegen`, `…/folgen/{folgeId}/verwerfen`, `…/abschliessen` | `kannBearbeiten`                                                                                |
-| POST    | `…/folgen/{folgeId}/erledigen`                                            | `kannBearbeiten` oder zuständig                                                                 |
-| POST    | `…/{id}/verwerfen/beantragen` · `bestaetigen` · `ablehnen`                | `kannBearbeiten`, Bestätigung zweite Person                                                     |
-| GET     | `portal/ereignisse` (Portal)                                              | aktive Rolle beim eigenen Mandanten; GV/TCB alle Meldungen, sonst nur eigene (RT4-T-04)         |
-| POST    | `portal/ereignisse` (Portal, 201, Anlagen nur als Verweise)               | GV oder TCB des eigenen Mandanten                                                               |
-| GET     | `laender`                                                                 | Kanzlei mit Bezug                                                                               |
-| POST    | `laender` (201), `laender/staende` (201)                                  | `kannBearbeiten`                                                                                |
+| Methode | Pfad                                                                                         | Recht                                                                                           |
+| ------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| GET     | `feststellungen`, `feststellungen/{id}`                                                      | Kanzlei mit Bezug (`kannLesen`)                                                                 |
+| POST    | `feststellungen` (201), `…/{id}/weiter` (`von`), `…/{id}/wuerdigung`                         | `kannBearbeiten`; „NEIN" nur `kannWuerdigen`                                                    |
+| POST    | `…/{id}/erklaerungen`, `…/{id}/massnahmen`, `…/{id}/nachkontrolle`                           | `kannBearbeiten` (201)                                                                          |
+| POST    | `…/{id}/p153` (`entscheidung`, `bisher`), `…/{id}/vertraulich`                               | `kannWuerdigen`                                                                                 |
+| POST    | `…/{id}/verwerfen/beantragen` · `bestaetigen` · `ablehnen`                                   | `kannBearbeiten`, Bestätigung zweite Person; bei Auswirkung ≠ „NEIN" zusätzlich `kannWuerdigen` |
+| POST    | `massnahmen/{id}/erledigen`                                                                  | `kannBearbeiten` oder verantwortlich                                                            |
+| GET     | `ereignisse`, `ereignisse/{id}`, `ereignisse/{id}/anlagen/{sha256}`                          | Kanzlei mit Bezug                                                                               |
+| POST    | `ereignisse` (201), `…/{id}/in-pruefung`, `…/{id}/folgen` (201)                              | `kannBearbeiten`                                                                                |
+| POST    | `…/{id}/folgen/anlegen`, `…/folgen/{folgeId}/verwerfen`, `…/abschliessen`                    | `kannBearbeiten`                                                                                |
+| POST    | `…/folgen/{folgeId}/erledigen`                                                               | `kannBearbeiten` oder zuständig                                                                 |
+| POST    | `…/{id}/verwerfen/beantragen` · `bestaetigen` · `ablehnen`                                   | `kannBearbeiten`, Bestätigung zweite Person                                                     |
+| GET     | `portal/ereignisse` (Portal)                                                                 | aktive Rolle beim eigenen Mandanten; GV/TCB alle Meldungen, sonst nur eigene (RT4-T-04)         |
+| POST    | `portal/ereignisse` (Portal, 201, Anlagen nur als Verweise, `idempotenzSchluessel` optional) | GV oder TCB des eigenen Mandanten                                                               |
+| GET     | `laender`                                                                                    | Kanzlei mit Bezug                                                                               |
+| POST    | `laender` (201), `laender/staende` (201)                                                     | `kannBearbeiten`                                                                                |
+
+`POST portal/ereignisse` nimmt optional `idempotenzSchluessel` (UUID, von der kanzleikonsole je Meldung
+neu gesetzt): Mit demselben Schlüssel meldet dieselbe Person beim selben Mandanten innerhalb von 24 h
+genau ein Ereignis – eine Wiederholung (auch gleichzeitig) liefert `201` mit derselben Antwort, ohne
+neues Ereignis, Nachricht oder Audit; ein anderer Inhalt ergibt `409` mit `konflikt:
+IDEMPOTENZ_ABWEICHUNG`. So lässt sich eine Meldung mit unklarem Ausgang gefahrlos wiederholen und die
+Anlagen-Bindung abschließen. Nach 24 h gilt der Schlüssel als verbraucht.
 
 `POST …/{id}/weiter` antwortet `409` nur, wenn der Status inzwischen ein anderer als `von` ist
 (gleichzeitige Änderung); ist der Schritt auf dem gesehenen Stand fachlich gesperrt (abgeschlossen, kein

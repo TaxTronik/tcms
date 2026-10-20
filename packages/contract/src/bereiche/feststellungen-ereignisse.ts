@@ -622,6 +622,15 @@ export const PortalMeldungBodySchema = z
       .strict()
       .nullable()
       .optional(),
+    /**
+     * Idempotenzschlüssel der kanzleikonsole (UUID, je Meldung neu, tcms-s10):
+     * Dieselbe Person meldet beim selben Mandanten mit demselben Schlüssel
+     * innerhalb von 24 h genau ein Ereignis. Eine Wiederholung mit gleichem
+     * Inhalt liefert dieselbe Antwort (`201`, dasselbe Ereignis, kein neues
+     * Audit), ein anderer Inhalt `409` mit `konflikt: IDEMPOTENZ_ABWEICHUNG`.
+     * Nach 24 h gilt der Schlüssel als verbraucht (neue Meldung).
+     */
+    idempotenzSchluessel: z.uuid().optional(),
   })
   .strict();
 export const PortalMeldungSchema = PortalMeldungBodySchema.extend(mandant).strict();

@@ -228,9 +228,10 @@ dieselbe leere Liste wie eine unbekannte.
   `KONFLIKT_GRUENDE`, nur an Endpunkten, deren Registereintrag ihn in
   `konflikte` nennt, und dort an jedem `409` (sonst nie). Bisher sind das
   `portalFreigabeCodeAnfordern` (`BEREITS_ERLEDIGT`, `CODE_GESPERRT`,
-  `ZU_VIELE_CODES`, `ZWISCHENZEITLICH_GEAENDERT`) und `portalFreigabeErteilen`
+  `ZU_VIELE_CODES`, `ZWISCHENZEITLICH_GEAENDERT`), `portalFreigabeErteilen`
   (`BEREITS_ERLEDIGT`, `CODE_GESPERRT`, `CODE_FEHLT`, `CODE_ABGELAUFEN`,
-  `VERSION_NICHT_VORGELEGT`, `INHALT_VERAENDERT`, `ZWISCHENZEITLICH_GEAENDERT`);
+  `VERSION_NICHT_VORGELEGT`, `INHALT_VERAENDERT`, `ZWISCHENZEITLICH_GEAENDERT`)
+  und `portalMeldungErfassen` (`IDEMPOTENZ_ABWEICHUNG`, `ZWISCHENZEITLICH_GEAENDERT`);
   die kanzleikonsole wählt danach ihre feste Meldung. Wie `grund` erst nach der
   Sichtbarkeitsprüfung, nie an `404`. Erzwungen in vier Schichten:
   `DienstFehler` (nur `KONFLIKT`, nur über `konfliktMitGrund`), Register
@@ -238,6 +239,18 @@ dieselbe leere Liste wie eine unbekannte.
   `409` mit fehlendem oder nicht genanntem Grund wird `500 INTERN`;
   `pruefeGegenRegister` vergleicht `konflikte` beim Start) und ein statischer
   Test über den Ablauf je Endpunkt (`packages/service/src/__tests__/konflikt.test.ts`).
+- Idempotente Portal-Meldung (tcms-s10): `POST …/portal/ereignisse` nimmt optional
+  `idempotenzSchluessel` (UUID der kanzleikonsole, je Meldung neu). Dieselbe Person
+  meldet beim selben Mandanten mit demselben Schlüssel innerhalb von 24 h (echte
+  Zeit) genau ein Ereignis: Eine Wiederholung mit gleichem Inhalt (SHA-256 der
+  geprüften Eingabe) liefert dieselbe Antwort (`201`, dasselbe Ereignis, keine
+  neue Nachricht, kein Audit), ein anderer Inhalt `409` mit
+  `konflikt: IDEMPOTENZ_ABWEICHUNG`; nach 24 h gilt der Schlüssel als verbraucht.
+  Gleiche Schlüssel laufen unter einer transaktionsgebundenen Sperre
+  nacheinander; Tabelle `PortalMeldungIdempotenz` mit eindeutigem Index
+  `(tenant_id, mandantId, personId, schluessel)`, RLS und für `tcms_app` nur
+  SELECT, INSERT, DELETE. Rechte prüft der Dienst vor dem Schlüssel; der
+  Schlüssel einer anderen Person liefert nie deren Ereignis.
 - Datumswerte als ISO-8601-Strings, keine `Map`/`Set`/`Date` im JSON.
 - Lesen zu einem Stichtag: `?stand=YYYY-MM-DD`. Schreibende Endpunkte nehmen
   **keinen** Stichtag an und arbeiten immer auf dem aktuellen Stand.

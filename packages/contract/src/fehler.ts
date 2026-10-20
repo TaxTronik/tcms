@@ -85,7 +85,10 @@ export type VerweigerungGrund = (typeof VERWEIGERUNG_GRUENDE)[number];
  *   INHALT_VERAENDERT          Beschreibung: eingefrorener Inhalt fehlt oder
  *                              passt nicht zum Hash; die Kanzlei fordert neu an
  *   ZWISCHENZEITLICH_GEAENDERT gleichzeitige Änderung: die Zeile hatte beim
- *                              bedingten Schreiben einen anderen Stand
+ *                              bedingten Schreiben einen anderen Stand (bzw.
+ *                              Schreibkonflikt der Datenbank)
+ *   IDEMPOTENZ_ABWEICHUNG      Portal-Meldung: derselbe Idempotenzschlüssel
+ *                              derselben Person mit anderem Inhalt (24 h)
  *
  * Wie `grund` nur für sichtbare Objekte: Fremdes und Unbekanntes bleibt
  * `NICHT_GEFUNDEN` ohne Grund (kein Existenz-Orakel).
@@ -99,6 +102,7 @@ export const KONFLIKT_GRUENDE = [
   'VERSION_NICHT_VORGELEGT',
   'INHALT_VERAENDERT',
   'ZWISCHENZEITLICH_GEAENDERT',
+  'IDEMPOTENZ_ABWEICHUNG',
 ] as const;
 
 export type KonfliktGrund = (typeof KONFLIKT_GRUENDE)[number];

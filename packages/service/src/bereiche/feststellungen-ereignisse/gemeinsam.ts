@@ -58,12 +58,15 @@ export function pruefe<T>(schema: Pruefbar<T>, eingabe: unknown): T {
 /** Prisma-Fehlercodes: P2002 eindeutiger Schlüssel verletzt, P2034 Schreibkonflikt/Verklemmung. */
 const KONFLIKT_CODES = new Set(['P2002', 'P2034']);
 
+/** Unique-Verletzung oder Schreibkonflikt/Verklemmung der Datenbank (Prisma-Code)? */
+export function istSchreibkonflikt(e: unknown): boolean {
+  const code = typeof e === 'object' && e !== null ? (e as { code?: unknown }).code : undefined;
+  return typeof code === 'string' && KONFLIKT_CODES.has(code);
+}
+
 /** Übersetzt Unique-Verletzung und Schreibkonflikt in `KONFLIKT` (TS-05), sonst unverändert. */
 export function alsKonflikt(e: unknown): unknown {
-  const code = typeof e === 'object' && e !== null ? (e as { code?: unknown }).code : undefined;
-  return typeof code === 'string' && KONFLIKT_CODES.has(code)
-    ? new DienstFehler('KONFLIKT', GEAENDERT)
-    : e;
+  return istSchreibkonflikt(e) ? new DienstFehler('KONFLIKT', GEAENDERT) : e;
 }
 
 /**

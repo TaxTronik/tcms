@@ -3,7 +3,7 @@
 // über `erzeugeApp` mit echter Datenbank und signierten Akteursbestätigungen.
 // =============================================================================
 
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { EreignisDetailSchema, PortalMeldungenSchema } from '@tcms/contract';
 import { schreibeAudit } from '@tcms/db';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -331,5 +331,43 @@ describe.skipIf(!AKTIV)('API Ereignisse und Portal gegen PostgreSQL', () => {
       portalMeldung([]),
     );
     expect(melden.status).toBe(403);
+  });
+
+  // tcms-s10: Die kanzleikonsole wiederholt eine Meldung mit unklarem Ausgang gefahrlos.
+  it('Portal-Meldung mit Idempotenzschlüssel: Wiederholung 201 mit derselben Antwort, anderer Inhalt 409 mit Grund', async () => {
+    const schluessel = randomUUID();
+    const titel = `Lager idempotent ${randomBytes(3).toString('hex')}`;
+    const body = { ...portalMeldung([]), titel, idempotenzSchluessel: schluessel };
+    // Zwei gleichzeitige Anfragen (Antwort verloren, Client wiederholt sofort).
+    const [a, b] = await Promise.all([
+      rufe(GV(), 'POST', `${B}/portal/ereignisse`, body),
+      rufe(GV(), 'POST', `${B}/portal/ereignisse`, body),
+    ]);
+    expect([a.status, b.status]).toEqual([201, 201]);
+    expect(b.json).toEqual(a.json);
+    const c = await rufe(GV(), 'POST', `${B}/portal/ereignisse`, body);
+    expect(c).toEqual(a);
+    const anders = await rufe(GV(), 'POST', `${B}/portal/ereignisse`, {
+      ...body,
+      beschreibung: 'Ab Dezember lagern wir Ware in Posen.',
+    });
+    expect(anders).toEqual({
+      status: 409,
+      json: {
+        ok: false,
+        fehler: {
+          code: 'KONFLIKT',
+          meldung: expect.any(String),
+          konflikt: 'IDEMPOTENZ_ABWEICHUNG',
+        },
+      },
+    });
+    expect(await db((tx) => tx.ereignis.count({ where: { titel } }))).toBe(1);
+    // Nur UUID als Schlüssel.
+    const kaputt = await rufe(GV(), 'POST', `${B}/portal/ereignisse`, {
+      ...body,
+      idempotenzSchluessel: 'meldung-1',
+    });
+    expect(kaputt.status).toBe(400);
   });
 });

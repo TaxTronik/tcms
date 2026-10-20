@@ -328,6 +328,7 @@ describe('Konfliktgründe je Endpunkt (`konflikte`, tcms-s10)', () => {
         'INHALT_VERAENDERT',
         'ZWISCHENZEITLICH_GEAENDERT',
       ],
+      portalMeldungErfassen: ['IDEMPOTENZ_ABWEICHUNG', 'ZWISCHENZEITLICH_GEAENDERT'],
     });
     for (const e of ENDPUNKT_LISTE) expect(Object.isFrozen(e.konflikte), e.name).toBe(true);
   });

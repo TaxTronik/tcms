@@ -1081,6 +1081,8 @@ export const ENDPUNKTE = register({
     body: PortalMeldungBodySchema,
     antwort: PortalMeldungErgebnisSchema,
     status: 201,
+    // Jedes 409 mit Grund (meldeEreignis, packages/service; tcms-s10).
+    konflikte: ['IDEMPOTENZ_ABWEICHUNG', 'ZWISCHENZEITLICH_GEAENDERT'],
   },
 
   // ---- Länder-Monitor ---------------------------------------------------------

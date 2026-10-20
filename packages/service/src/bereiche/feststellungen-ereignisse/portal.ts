@@ -3,10 +3,23 @@
 // gesetzliche Vertretung und Tax-Compliance-Beauftragte des eigenen
 // Mandanten (aktive Rolle, Fachkonzept §13); Anlagen kommen nur als Verweise
 // der kanzleikonsole (ADR 0001 §6).
+//
+// Idempotenz (tcms-s10): Mit `idempotenzSchluessel` meldet dieselbe Person beim
+// selben Mandanten innerhalb von 24 h (echte Zeit) genau ein Ereignis. Die
+// Wiederholung mit gleichem Inhalt (SHA-256 der geprüften Eingabe) liefert
+// dieselbe Antwort ohne neues Ereignis, ohne Nachricht und ohne Audit; ein
+// anderer Inhalt ist `409 IDEMPOTENZ_ABWEICHUNG`. Gleiche Schlüssel laufen
+// unter einer transaktionsgebundenen Sperre nacheinander (die zweite Anfrage
+// sieht das Ergebnis der ersten); der eindeutige Index
+// (tenant_id, mandantId, personId, schluessel) hält zusätzlich. Rechte werden
+// vor dem Schlüssel geprüft: Eine Wiederholung ohne Recht bleibt abgewiesen.
+// Jedes `409` trägt einen Grund (Registereintrag portalMeldungErfassen).
 // =============================================================================
 
+import { createHash } from 'node:crypto';
 import {
   DienstFehler,
+  konfliktMitGrund,
   nichtBerechtigt,
   PortalMeldungenLesenSchema,
   type Akteur,
@@ -16,7 +29,9 @@ import {
   type PortalMeldungenLesen,
   type PortalMeldungErgebnis,
 } from '@tcms/contract';
+import { tenantSperre, type Tx } from '@tcms/db';
 import { EREIGNISTYPEN, ereignistyp, fmtDatumZeit, PORTAL_SONSTIGES } from '@tcms/domain';
+import { mitAudit } from '../../audit';
 import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { kannLesen, kannPortalLesen, siehtPortalMeldung, type KontaktRolle } from '../../rechte';
@@ -24,8 +39,9 @@ import { ladeKontaktRollen } from '../../rollen';
 import { legeNachrichtAn } from '../programm-beschreibung/nachrichten';
 import { legeEreignisAn } from './ereignisse';
 import {
-  aendere,
   alsTag,
+  GEAENDERT,
+  istSchreibkonflikt,
   isoZeit,
   namenListe,
   programmVon,
@@ -44,6 +60,70 @@ export const NUR_GV_TCB =
 const KEIN_TCMS =
   'Für Ihr Unternehmen ist noch kein Tax-CMS eingerichtet. Bitte wenden Sie sich an Ihre Kanzlei.';
 const ZWEI_JAHRE_MS = 730 * 86_400_000;
+/** Gültigkeit eines Idempotenzschlüssels (echte Zeit, ab der Erstmeldung). */
+export const IDEMPOTENZ_FENSTER_MS = 24 * 3_600_000;
+const ABWEICHUNG =
+  'Diese Meldung wurde mit demselben Schlüssel bereits mit anderem Inhalt übermittelt.';
+
+/** JSON mit sortierten Objektschlüsseln (Listen in ihrer Reihenfolge) für den Inhalts-Hash. */
+function kanonisch(wert: unknown): string {
+  if (Array.isArray(wert)) return `[${wert.map(kanonisch).join(',')}]`;
+  if (wert !== null && typeof wert === 'object') {
+    const o = wert as Record<string, unknown>;
+    return `{${Object.keys(o)
+      .filter((k) => o[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${kanonisch(o[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(wert);
+}
+
+/** SHA-256 des geprüften Inhalts einer Meldung ohne Schlüssel (IDs kanonisch klein). */
+function inhaltHash(x: PortalMeldung, mandantId: string): string {
+  const { idempotenzSchluessel: _schluessel, ...inhalt } = x;
+  return createHash('sha256')
+    .update(
+      kanonisch({
+        ...inhalt,
+        mandantId,
+        benachrichtigen: x.benachrichtigen
+          ? { id: x.benachrichtigen.id.toLowerCase(), name: x.benachrichtigen.name }
+          : null,
+      }),
+    )
+    .digest('hex');
+}
+
+/**
+ * Früheres Ergebnis zu einem Schlüssel (unter der Sperre gelesen): gleicher
+ * Inhalt innerhalb von 24 h → dieselbe Antwort; anderer Inhalt → Konflikt;
+ * abgelaufen → Schlüssel verbraucht und gelöscht (neue Meldung).
+ */
+async function frueheresErgebnis(
+  tx: Tx,
+  k: { mandantId: string; personId: string; schluessel: string; inhaltSha256: string },
+): Promise<PortalMeldungErgebnis | null> {
+  const alt = await tx.portalMeldungIdempotenz.findFirst({
+    where: { mandantId: k.mandantId, personId: k.personId, schluessel: k.schluessel },
+    select: { id: true, inhaltSha256: true, createdAt: true, ereignisId: true },
+  });
+  if (!alt) return null;
+  if (alt.createdAt.getTime() <= Date.now() - IDEMPOTENZ_FENSTER_MS) {
+    await tx.portalMeldungIdempotenz.deleteMany({ where: { id: alt.id } });
+    return null;
+  }
+  if (alt.inhaltSha256 !== k.inhaltSha256) {
+    throw konfliktMitGrund('IDEMPOTENZ_ABWEICHUNG', ABWEICHUNG);
+  }
+  const e = await tx.ereignis.findFirst({
+    where: { id: alt.ereignisId },
+    select: { id: true, nummer: true },
+  });
+  // Fremdschlüssel (tenant_id, ereignisId): das Ereignis besteht; sonst fail closed.
+  if (!e) throw new Error('[service] Ereignis zum Idempotenzschlüssel fehlt');
+  return { id: e.id, nummer: e.nummer };
+}
 
 /**
  * Meldet-Recht (Fachkonzept §13): Mandantenkontakt mit aktiver Rolle GV oder
@@ -88,7 +168,20 @@ export async function meldeEreignis(
     throw new DienstFehler('UNGUELTIG', text, { datum: [text] });
   }
   const akteurName = ctx.akteur.name;
-  return aendere(ctx, async (tx, zeitpunkt) => {
+  const schluessel = x.idempotenzSchluessel?.toLowerCase() ?? null;
+  const idempotenz = schluessel
+    ? { mandantId, personId: ctx.akteur.id, schluessel, inhaltSha256: inhaltHash(x, mandantId) }
+    : null;
+  if (idempotenz) {
+    // Gleiche Schlüssel nacheinander: Die zweite Anfrage wartet und sieht die erste.
+    await tenantSperre(
+      ctx.tx,
+      `portal-meldung|${mandantId}|${idempotenz.personId}|${idempotenz.schluessel}`,
+    );
+    const frueher = await frueheresErgebnis(ctx.tx, idempotenz);
+    if (frueher) return frueher;
+  }
+  return meldeMitAudit(ctx, async (tx, zeitpunkt) => {
     const programm = await programmVon(tx, mandantId);
     const mandant = await tx.mandant.findFirst({
       where: { id: mandantId },
@@ -126,6 +219,12 @@ export async function meldeEreignis(
         erstelltAm: zeitpunkt,
       });
     }
+    if (idempotenz) {
+      // Echte Zeit wie das 24-h-Fenster (die fachliche Uhr der Demo wirkt hier nie).
+      await tx.portalMeldungIdempotenz.create({
+        data: { ...idempotenz, ereignisId: e.id, createdAt: new Date() },
+      });
+    }
     return {
       wert: { id: e.id, nummer: e.nummer },
       protokoll: {
@@ -147,10 +246,27 @@ export async function meldeEreignis(
           })),
           zusageAenderungen: x.zusageAenderungen,
           benachrichtigt: x.benachrichtigen?.id.toLowerCase() ?? null,
+          idempotenzSchluessel: schluessel,
         },
       },
     };
   });
+}
+
+/**
+ * `mitAudit` der Meldung: Unique-Verletzung und Schreibkonflikt der Datenbank
+ * (auch der eindeutige Idempotenzschlüssel, falls die Sperre fehlte) werden zu
+ * `409 ZWISCHENZEITLICH_GEAENDERT` – nie ein Konflikt ohne Grund.
+ */
+async function meldeMitAudit<T>(
+  ctx: DienstKontext,
+  fn: Parameters<typeof mitAudit<T>>[1],
+): Promise<T> {
+  try {
+    return await mitAudit(ctx, fn);
+  } catch (e) {
+    throw istSchreibkonflikt(e) ? konfliktMitGrund('ZWISCHENZEITLICH_GEAENDERT', GEAENDERT) : e;
+  }
 }
 
 /**

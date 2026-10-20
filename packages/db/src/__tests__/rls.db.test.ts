@@ -45,6 +45,9 @@ const OHNE_TENANT: Record<string, string[]> = {
 };
 const DML = ['SELECT', 'INSERT', 'UPDATE', 'DELETE'];
 const NUR_ANHAENGEN = ['SELECT', 'INSERT'];
+/** Idempotenzschlüssel der Portal-Meldung: anlegen und abgelaufene löschen, nie ändern (tcms-s10). */
+const OHNE_UPDATE = ['SELECT', 'INSERT', 'DELETE'];
+const OHNE_UPDATE_TABELLEN = new Set(['PortalMeldungIdempotenz']);
 const ALLE_RECHTE = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
 const POLICY_AUSDRUCK = '(tenant_id = tcms_aktueller_tenant())';
 
@@ -68,6 +71,7 @@ interface Fixture {
   massnahmeId: string;
   ereignisId: string;
   folgeId: string;
+  idempotenzId: string;
   landId: string;
   beschreibungId: string;
   freigabeId: string;
@@ -223,6 +227,15 @@ async function baueFixture(client: PrismaClient, tenant: string): Promise<Fixtur
       const folge = await tx.ereignisFolge.create({
         data: { ereignisId: ereignis.id, art: 'HINWEIS', text: 'Folge' },
       });
+      const idempotenz = await tx.portalMeldungIdempotenz.create({
+        data: {
+          mandantId: mandant.id,
+          personId: randomUUID(),
+          schluessel: randomUUID(),
+          inhaltSha256: 'd'.repeat(64),
+          ereignisId: ereignis.id,
+        },
+      });
       const land = await tx.landStand.create({
         data: {
           programmId: programm.id,
@@ -288,6 +301,7 @@ async function baueFixture(client: PrismaClient, tenant: string): Promise<Fixtur
         massnahmeId: massnahme.id,
         ereignisId: ereignis.id,
         folgeId: folge.id,
+        idempotenzId: idempotenz.id,
         landId: land.id,
         beschreibungId: beschreibung.id,
         freigabeId: freigabe.id,
@@ -416,10 +430,16 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
       expect(rows.filter((r) => r.tablename in OHNE_TENANT)).toHaveLength(0);
     });
 
-    it('gibt der App-Rolle nur DML (Audit nur anhängen, akteur_jti ohne UPDATE)', async () => {
+    it('gibt der App-Rolle nur DML (Audit nur anhängen, akteur_jti und Idempotenz ohne UPDATE)', async () => {
       for (const t of [...tenantTabellen, ...Object.keys(OHNE_TENANT)]) {
         const erwartet =
-          t in OHNE_TENANT ? OHNE_TENANT[t]! : t === 'AuditEvent' ? NUR_ANHAENGEN : DML;
+          t in OHNE_TENANT
+            ? OHNE_TENANT[t]!
+            : t === 'AuditEvent'
+              ? NUR_ANHAENGEN
+              : OHNE_UPDATE_TABELLEN.has(t)
+                ? OHNE_UPDATE
+                : DML;
         const { rows } = await roh.query<{ recht: string; hat: boolean }>(
           `SELECT r AS recht, has_table_privilege('tcms_app', format('public.%I', $1::text), r) AS hat
            FROM unnest($2::text[]) AS r`,
@@ -661,7 +681,7 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
             (tx) => tx.$executeRawUnsafe(`UPDATE ${q(t)} SET tenant_id = $1::uuid`, B.tenant),
             { client: app },
           ),
-          t === 'AuditEvent' ? regel.keinRecht('AuditEvent') : regel.rls(t),
+          t === 'AuditEvent' || OHNE_UPDATE_TABELLEN.has(t) ? regel.keinRecht(t) : regel.rls(t),
           t,
         );
       }
@@ -746,6 +766,24 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
             }),
           B.kontrolleStandId,
           regel.fremdschluessel('Durchfuehrung', 'Durchfuehrung_tenant_id_kontrolleStandId_fkey'),
+        ],
+        [
+          'Idempotenzschlüssel → Ereignis',
+          (tx, id) =>
+            tx.portalMeldungIdempotenz.create({
+              data: {
+                mandantId: A.mandantId,
+                personId: randomUUID(),
+                schluessel: randomUUID(),
+                inhaltSha256: 'd'.repeat(64),
+                ereignisId: id,
+              },
+            }),
+          B.ereignisId,
+          regel.fremdschluessel(
+            'PortalMeldungIdempotenz',
+            'PortalMeldungIdempotenz_tenant_id_ereignisId_fkey',
+          ),
         ],
       ];
       for (const [name, anlegen, fremdeId, erwartet] of versuche) {

@@ -192,11 +192,13 @@ function dateien(verzeichnis: string): string[] {
 }
 
 const FREIGABEN = 'packages/service/src/bereiche/programm-beschreibung/freigaben.ts';
+const PORTAL = 'packages/service/src/bereiche/feststellungen-ereignisse/portal.ts';
 
 /** Operation je Endpunkt mit `konflikte` (Route in apps/api/src/routen/*). */
 const ABLAEUFE: Record<string, { datei: string; funktion: string }> = {
   portalFreigabeCodeAnfordern: { datei: FREIGABEN, funktion: 'fordereFreigabeCodeAn' },
   portalFreigabeErteilen: { datei: FREIGABEN, funktion: 'erteileFreigabe' },
+  portalMeldungErfassen: { datei: PORTAL, funktion: 'meldeEreignis' },
 };
 
 /** Jede Stelle mit Grund, Quelltextreihenfolge (Zuordnung: KONFLIKT_GRUENDE im Vertrag). */
@@ -215,6 +217,10 @@ const INVENTAR: Record<string, string[]> = {
     'ZWISCHENZEITLICH_GEAENDERT', // falscher Code: Zähler-Update ohne Treffer
     'ZWISCHENZEITLICH_GEAENDERT', // richtiger Code: Update ohne Treffer
     'VERSION_NICHT_VORGELEGT', // Version gleichzeitig geändert
+  ],
+  [PORTAL]: [
+    'IDEMPOTENZ_ABWEICHUNG', // gleicher Schlüssel, anderer Inhalt (24 h)
+    'ZWISCHENZEITLICH_GEAENDERT', // Unique-Verletzung oder Schreibkonflikt der Meldung
   ],
 };
 

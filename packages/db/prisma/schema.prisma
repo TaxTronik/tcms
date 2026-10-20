@@ -42,17 +42,18 @@ enum MandantRolle {
 /// Primärschlüssel (tenant_id, id): Dieselbe ID kann in zwei Tenants bestehen;
 /// das Anlegen verrät nie, ob es sie in einem anderen Tenant gibt (Welle 2).
 model Mandant {
-  id          String                @db.Uuid
-  tenantId    String                @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
-  name        String
-  rechtsform  String
-  datevNr     String?
-  aktiv       Boolean               @default(true)
-  createdAt   DateTime              @default(now())
-  updatedAt   DateTime              @default(now()) @updatedAt
-  programme   TcmsProgramm[]
-  kontakte    MandantKontaktRolle[]
-  nachrichten Nachricht[]
+  id                String                    @db.Uuid
+  tenantId          String                    @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  name              String
+  rechtsform        String
+  datevNr           String?
+  aktiv             Boolean                   @default(true)
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @default(now()) @updatedAt
+  programme         TcmsProgramm[]
+  kontakte          MandantKontaktRolle[]
+  nachrichten       Nachricht[]
+  meldungIdempotenz PortalMeldungIdempotenz[]
 
   @@id([tenantId, id])
   @@index([tenantId, name])
@@ -667,10 +668,10 @@ enum FolgeStatus {
 }
 
 model Ereignis {
-  id                    String          @id @default(cuid())
-  tenantId              String          @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  id                    String                   @id @default(cuid())
+  tenantId              String                   @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId            String
-  programm              TcmsProgramm    @relation(fields: [tenantId, programmId], references: [tenantId, id])
+  programm              TcmsProgramm             @relation(fields: [tenantId, programmId], references: [tenantId, id])
   /// `<Jahr>-T-<nnnn>`, je Kanzlei (Tenant) eindeutig.
   nummer                String
   typ                   String
@@ -678,15 +679,16 @@ model Ereignis {
   beschreibung          String
   quelle                EreignisQuelle
   gemeldetVon           String?
-  gemeldetAm            DateTime        @default(now())
-  ereignisDatum         DateTime        @db.Date
-  status                EreignisStatus  @default(NEU)
+  gemeldetAm            DateTime                 @default(now())
+  ereignisDatum         DateTime                 @db.Date
+  status                EreignisStatus           @default(NEU)
   verwerfenBegruendung  String?
   /// Antragsteller:in des offenen Antrags auf Verwerfen (Vier-Augen).
   verwerfenBeantragtVon String?
   triagiertVon          String?
   triagiertAm           DateTime?
   folgen                EreignisFolge[]
+  idempotenz            PortalMeldungIdempotenz?
 
   @@unique([tenantId, id])
   @@unique([tenantId, nummer])
@@ -939,4 +941,30 @@ model AkteurJti {
   exp DateTime @db.Timestamptz(6)
 
   @@map("akteur_jti")
+}
+
+/// Idempotenzschlüssel einer Portal-Meldung (tcms-s10): Die kanzleikonsole setzt
+/// ihn je Meldung (UUID). Dieselbe Person meldet beim selben Mandanten mit
+/// demselben Schlüssel innerhalb von 24 h genau ein Ereignis; eine Wiederholung
+/// liefert dieselbe Antwort ohne neues Ereignis und ohne Audit, ein anderer
+/// Inhalt ist ein Konflikt. Nach 24 h gilt der Schlüssel als verbraucht und wird
+/// bei der nächsten Verwendung ersetzt. Die App-Rolle liest, legt an und löscht
+/// (kein UPDATE): Bindung und Inhalt eines Schlüssels ändern sich nie.
+model PortalMeldungIdempotenz {
+  id           String   @id @default(cuid())
+  tenantId     String   @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
+  mandantId    String   @db.Uuid
+  mandant      Mandant  @relation(fields: [tenantId, mandantId], references: [tenantId, id])
+  /// Meldende Person (Mandantenkontakt, ID der kanzleikonsole).
+  personId     String   @db.Uuid
+  schluessel   String   @db.Uuid
+  /// SHA-256 (hex) des geprüften Inhalts der Meldung (ohne Schlüssel).
+  inhaltSha256 String
+  ereignisId   String
+  ereignis     Ereignis @relation(fields: [tenantId, ereignisId], references: [tenantId, id])
+  /// Zeitpunkt der Erstmeldung (echte Zeit); maßgeblich für die 24 h.
+  createdAt    DateTime @default(now())
+
+  @@unique([tenantId, mandantId, personId, schluessel], map: "PortalMeldungIdempotenz_schluessel_key")
+  @@unique([tenantId, ereignisId], map: "PortalMeldungIdempotenz_ereignis_key")
 }

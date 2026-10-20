@@ -156,7 +156,7 @@ für KI-Werkzeuge.
   gehört mit ihrem Grund ins Inventar von
   `packages/service/src/__tests__/verweigerung.test.ts`.
 - Ein `409` in einem Ablauf, dessen Endpunkt im Register `konflikte` nennt (Code anfordern,
-  Freigeben), entsteht nur über `konfliktMitGrund(grund, meldung)` mit einem Grund aus
+  Freigeben, Portal-Meldung), entsteht nur über `konfliktMitGrund(grund, meldung)` mit einem Grund aus
   `KONFLIKT_GRUENDE`, und der Registereintrag nennt genau die Gründe seines Ablaufs (tcms-s10). Ein
   `409` ohne Grund oder mit einem nicht genannten Grund beantwortet der Dienst mit `500 INTERN`. Eine
   neue Stelle gehört mit ihrem Grund ins Inventar von
@@ -237,6 +237,12 @@ für KI-Werkzeuge.
   `BeschreibungVersion_neu`), und aus Entwurf oder Kanzlei-Review führt kein Übergang direkt nach
   „freigegeben" oder „abgelöst": Freigegeben wird nur über „beim Mandanten" (Hinweis H4 aus RT4;
   Seed und Tests legen Versionen über diese Übergänge an).
+- Portal-Meldungen mit `idempotenzSchluessel` (tcms-s10): Rechte zuerst, dann unter der Sperre
+  `tenantSperre(tx, 'portal-meldung|<mandant>|<person>|<schlüssel>')` die Bindung lesen; innerhalb von
+  24 h (echte Zeit) gleicher Inhalt (SHA-256 der geprüften Eingabe) → dieselbe Antwort ohne Ereignis,
+  Nachricht oder Audit, anderer Inhalt → `IDEMPOTENZ_ABWEICHUNG`. Der Schlüssel gilt nur für die
+  Person, die ihn verwendet hat (nie die Antwort einer anderen); `PortalMeldungIdempotenz` hat kein
+  UPDATE für `tcms_app`.
 - Höchstens eine offene Risikoakzeptanz je Risiko, eine beantragte Übersteuerung je (Risiko,
   Sicht) und ein offener Nachtrag je Durchführung: unter Zeilensperre geprüft und zusätzlich als
   eindeutiger Teilindex (Verletzung → `KONFLIKT`).
