@@ -25,7 +25,17 @@ import {
   meldeNachrichtUnzustellbar,
 } from './nachrichten';
 import { richteEin } from './testprogramm';
-import { baueWelt, btA, im, imSystem, inWelt, ohneRechtA, system, type Welt } from './testwelt';
+import {
+  baueWelt,
+  btA,
+  im,
+  imSystem,
+  inWelt,
+  ohneRechtA,
+  system,
+  TEST_UHR,
+  type Welt,
+} from './testwelt';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 const CODE = '615243';
@@ -70,6 +80,9 @@ describe.skipIf(!AKTIV)('Zustellstatus an Freigaben (Service, PostgreSQL)', () =
           refId: randomUUID(),
           titel: 'CMS-Beschreibung v1.0',
           angefordertVon: w.bt,
+          // Fachliche Zeit wie beim Anlegen durch den Dienst (Uhr der Testwelt), nicht der
+          // Tag des Testlaufs: Die Historie liest bis zum Stichtag der Uhr.
+          angefordertAm: TEST_UHR.jetzt(),
           empfaengerId: w.gv,
         },
       });
@@ -96,6 +109,7 @@ describe.skipIf(!AKTIV)('Zustellstatus an Freigaben (Service, PostgreSQL)', () =
           refId: randomUUID(),
           titel: 'Kenntnisnahme ohne Nachricht',
           angefordertVon: w.bt,
+          angefordertAm: TEST_UHR.jetzt(),
           empfaengerId: w.tcb,
         },
       });
