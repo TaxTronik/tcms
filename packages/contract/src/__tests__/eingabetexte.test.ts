@@ -226,6 +226,99 @@ describe('Eingaben: Titel und Namen sind einzeilig (RT4-T-03)', () => {
   });
 });
 
+/**
+ * Mehrzeilige Freitexte des Registers (nehmen Zeilenumbruch, TAB, ZWJ und
+ * Variantenselektoren an): Begründungen, Kommentare, Sachverhalte,
+ * Beschreibungen, Nachweise und Abschnittstexte – Prosa mit Beweiswert. Jedes
+ * andere freie Textfeld ist einzeilig (tcms-s10). Ein neues mehrzeiliges Feld
+ * gehört bewusst hierher; sonst scheitert der Test.
+ */
+const MEHRZEILIG = new Set([
+  'durchfuehrungSpeichern body.schritte[].kommentar',
+  'durchfuehrungSpeichern body.werte[].bemerkung', // Erläuterung einer Abweichung
+  'durchfuehrungSpeichern body.ergebnisKommentar',
+  'durchfuehrungZurueckweisen body.begruendung',
+  'durchfuehrungGegenzeichnen body.feststellung.sachverhalt',
+  'entfallenBeantragen body.begruendung',
+  'entfallenAblehnen body.begruendung',
+  'nachtragAnlegen body.begruendung',
+  'portalAufgabeSpeichern body.schritte[].kommentar',
+  'portalAufgabeSpeichern body.werte[].bemerkung',
+  'portalAufgabeSpeichern body.ergebnisKommentar',
+  'portalAufgabeZurueckgeben body.begruendung',
+  'risikoNeuBewerten body.begruendung',
+  'risikoBewertungBestaetigen body.begruendung',
+  'uebersteuerungBeantragen body.begruendung',
+  'uebersteuerungEntscheiden body.begruendung',
+  'risikoZurueckweisen body.begruendung',
+  'risikoakzeptanzAnfordern body.begruendung',
+  'kontrolleDesignBeurteilen body.begruendung',
+  'frequenzAbweichungBeantragen body.begruendung',
+  'frequenzAbweichungEntscheiden body.begruendung',
+  'frequenzAbweichungAufheben body.begruendung',
+  'feststellungErfassen body.sachverhalt',
+  'p153Entscheiden body.begruendung',
+  'wuerdigungAktualisieren body.ursache',
+  'massnahmeAnlegen body.beschreibung',
+  'feststellungVerwerfenBeantragen body.begruendung',
+  'massnahmeErledigen body.nachweis',
+  'ereignisErfassen body.beschreibung',
+  'folgeHinzufuegen body.text',
+  'folgeVerwerfen body.begruendung',
+  'ereignisVerwerfenBeantragen body.begruendung',
+  'portalMeldungErfassen body.beschreibung',
+  'einrichtungEntwurfSpeichern body|0.daten.teilbereich.abgrenzung',
+  'einrichtungEntwurfSpeichern body|2.daten.ziele[].text',
+  'einrichtungEntwurfSpeichern body|3.daten.risiken{}.begruendung',
+  'beschreibungsabschnittSpeichern body.bloecke[]|0.text',
+  'beschreibungsreviewZurueckweisen body.begruendung',
+]);
+
+describe('Eingaben: einzeilig, außer den ausdrücklich mehrzeiligen Freitexten (tcms-s10)', () => {
+  const blaetter = eingabeBlaetter();
+  const frei = blaetter.filter((b) => harmlos(b) !== null);
+
+  it('jedes freie Textfeld außerhalb der Liste ist einzeilig (ganzes Register)', () => {
+    expect(frei.filter((b) => !MEHRZEILIG.has(b.pfad)).flatMap(einzeiligVerletzt)).toEqual([]);
+  });
+
+  it('die Liste nennt nur mehrzeilige Felder, die es gibt', () => {
+    const mehrzeilig = new Set(
+      frei
+        .filter((b) => b.schema.safeParse(gestoert(harmlos(b)!, '\n')).success)
+        .map((b) => b.pfad),
+    );
+    expect([...MEHRZEILIG].filter((p) => !mehrzeilig.has(p))).toEqual([]);
+  });
+
+  it('Steuerart, Land und Zeitraum einer Erklärung sowie die Quellangabe sind einzeilig', () => {
+    const pfade = [
+      'erklaerungHinzufuegen body.steuerart',
+      'erklaerungHinzufuegen body.land',
+      'erklaerungHinzufuegen body.zeitraum',
+      'feststellungErfassen body.quelleText',
+    ];
+    const felder = frei.filter((b) => pfade.includes(b.pfad));
+    expect(felder.map((b) => b.pfad).sort()).toEqual([...pfade].sort());
+    expect(felder.flatMap(einzeiligVerletzt)).toEqual([]);
+  });
+
+  it('gespeicherte Erklärungen und Quellangaben bleiben lesbar (Antwort ohne Zeichenregel)', () => {
+    const altbestand = ENDPUNKT_LISTE.flatMap((e) =>
+      zeichenkettenBlaetter(e.antwortSchema as z.ZodType, `${e.name} antwort`),
+    ).filter(
+      (b) =>
+        (b.pfad.includes('.erklaerungen[].') &&
+          ['steuerart', 'land', 'zeitraum'].includes(b.schluessel)) ||
+        b.schluessel === 'quelleText',
+    );
+    expect(altbestand.length).toBeGreaterThanOrEqual(5);
+    for (const b of altbestand) {
+      expect(b.schema.safeParse('USt\n2024 \u202e alt').success, b.pfad).toBe(true);
+    }
+  });
+});
+
 describe('Eingaben: jede Zeichenkette ohne NUL und einzelne Surrogate (RT4-T-08)', () => {
   const blaetter = eingabeBlaetter();
 

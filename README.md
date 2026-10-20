@@ -363,7 +363,9 @@ Mandanten gehört, prüft die kanzleikonsole; eine Dokument-ID eines anderen Man
 unbekannte (kein Existenz-Orakel, Hinweis H3 aus RT4).
 Einzeilige Texte (`einzeilig`: Mandantenname, Rechtsform, Kontaktfunktion, alle Titel und Namen
 einschließlich der Vorlagendaten von Nachrichten und der Namen eingefrorener Beschreibungen,
-Teilbereich und Bezeichnungen des Geschäftsprofils – RT4-T-03) und Dateinamen
+Teilbereich und Bezeichnungen des Geschäftsprofils – RT4-T-03; Steuerart, Land und Zeitraum
+betroffener Erklärungen und die Quellangabe einer Feststellung – tcms-s10; jedes freie Textfeld außer
+den mehrzeiligen Freitexten, `MEHRZEILIG` in `eingabetexte.test.ts`) und Dateinamen
 (Nachweis, Ereignis-Anlage) folgen einer Zeichenregel (`UNZULAESSIGE_ZEICHEN`,
 `DATEINAME_UNZULAESSIG` in `packages/contract/src/bereiche/lesepfade.ts`), gebildet aus
 Unicode-Eigenschaften (`UNZULAESSIG_KLASSE`: `\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\p{Cs}`,

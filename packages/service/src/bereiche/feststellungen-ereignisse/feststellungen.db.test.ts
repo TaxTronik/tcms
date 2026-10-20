@@ -702,6 +702,11 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
       { steuerart: 'USt\u0000' },
       { zeitraum: 'Q3\ud800' },
       { land: 'x'.repeat(41) },
+      // Einzeilig (tcms-s10): Zeilenumbruch, TAB, Richtungs- und unsichtbare Zeichen.
+      { steuerart: 'USt\nOSS' },
+      { land: 'D\tE' },
+      { zeitraum: 'Q3\u202e2026' },
+      { zeitraum: 'Q3\u200b2026' },
     ]) {
       const x = await fehlerVon(
         im(A.hb, (ctx) =>
@@ -717,6 +722,10 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
       );
       expect(x.code, JSON.stringify(boese)).toBe('UNGUELTIG');
     }
+    // Nichts außer der gültigen Erklärung gespeichert.
+    expect(
+      await inTenant(w, (tx) => tx.betroffeneErklaerung.count({ where: { feststellungId: f.id } })),
+    ).toBe(1);
   });
 
   it('Maßnahme: kanzleiweite Wiedervorlage, Mandantenkontakt nur mit aktiver Rolle, Frist nicht in der Vergangenheit', async () => {

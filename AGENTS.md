@@ -333,9 +333,12 @@ vorhandenen Tokens aufsetzen.
   (`packages/contract/src/bereiche/lesepfade.ts`); keine eigenen Zeichenklassen
   in Vertrag, Dienst oder Demo. Jeder Titel und jeder Name einer Eingabe (auch
   Vorlagendaten der Nachrichten, Namen eingefrorener Beschreibungen,
-  Teilbereich und Bezeichnungen des Geschäftsprofils) nutzt `einzeilig(min, max)`
-  (RT4-T-03); `__tests__/eingabetexte.test.ts` prüft das für jedes Feld des
-  Endpunktregisters. Gespeicherte Texte in Antworten prüfen nur die Länge
+  Teilbereich und Bezeichnungen des Geschäftsprofils, Steuerart, Land und Zeitraum
+  betroffener Erklärungen, Quellangabe einer Feststellung) nutzt `einzeilig(min, max)`
+  (RT4-T-03, tcms-s10); `__tests__/eingabetexte.test.ts` prüft das für jedes Feld des
+  Endpunktregisters: Jedes freie Textfeld ist einzeilig, außer den ausdrücklich
+  mehrzeiligen Freitexten der Liste `MEHRZEILIG` (Begründungen, Kommentare, Sachverhalte,
+  Beschreibungen); ein neues mehrzeiliges Feld wird dort bewusst eingetragen. Gespeicherte Texte in Antworten prüfen nur die Länge
   (Altbestände, z. B. `ProfilAntwortenGespeichertSchema`, `SetupEntwurfSchema`,
   `BeschreibungAbschnittSchema`); der Dienst liest gespeicherte Entwürfe und Abschnitte mit
   denselben Schemas, damit Altbestand weder unlesbar wird noch beim Speichern verloren geht
