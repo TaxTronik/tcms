@@ -180,8 +180,9 @@ jobs:
           if [ "$(hauptversion || true)" != "$PG_CLIENT_MAJOR" ]; then
             SUDO=""
             if command -v sudo >/dev/null 2>&1; then SUDO=sudo; fi
-            $SUDO apt-get update
-            $SUDO apt-get install -y --no-install-recommends ca-certificates curl gnupg
+            # Nur Ubuntu-Archiv und PGDG, update mit Wiederholung (scripts/ci-apt.sh).
+            bash scripts/ci-apt.sh update
+            bash scripts/ci-apt.sh install -y --no-install-recommends ca-certificates curl gnupg
             d="$(mktemp -d)"
             curl -fsSL -o "$d/pgdg.asc" https://www.postgresql.org/media/keys/ACCC4CF8.asc
             # Genau ein Hauptschlüssel mit dem gepinnten Fingerabdruck
@@ -196,8 +197,8 @@ jobs:
             . /etc/os-release
             echo "deb [signed-by=/usr/share/keyrings/tcms-pgdg.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" |
               $SUDO tee /etc/apt/sources.list.d/tcms-pgdg.list
-            $SUDO apt-get update
-            $SUDO apt-get install -y --no-install-recommends "postgresql-client-${PG_CLIENT_MAJOR}"
+            bash scripts/ci-apt.sh update
+            bash scripts/ci-apt.sh install -y --no-install-recommends "postgresql-client-${PG_CLIENT_MAJOR}"
           fi
           psql --version
           [ "$(hauptversion)" = "$PG_CLIENT_MAJOR" ] || { echo "psql ist nicht Version ${PG_CLIENT_MAJOR}" >&2; exit 1; }
