@@ -328,34 +328,57 @@ export async function ladeOffeneNachrichten(
   const protokoll: Protokoll[] = [];
   const geprueft = new Set<string>();
   const ausgeschlossen = new Set<string>();
-  /** Verwirft eine offene Nachricht (bedingt, mit Audit; leert Code und Text). */
-  async function verwirf(v: {
-    id: string;
-    empfaengerId: string;
-    zweck: NachrichtZweck;
-    grund: VerwerfGrund;
-  }): Promise<void> {
-    ausgeschlossen.add(v.id);
-    // Bedingt: Eine gleichzeitige Zustellung oder ein anderer Abruf verwirft nicht doppelt.
-    const r = await ctx.tx.nachricht.updateMany({
-      where: { id: v.id, ...offen },
-      data: { verworfenAm: jetzt, code: null, text: '' },
-    });
-    if (r.count !== 1) return;
-    protokoll.push({
-      aktion: 'tcms.nachricht.verworfen',
-      objektTyp: 'Nachricht',
-      objektId: v.id,
-      programmId: null,
-      detail: { zweck: v.zweck, empfaengerId: v.empfaengerId, grund: v.grund },
-    });
+  /**
+   * Verwirft offene Nachrichten (bedingt, mit Audit je Nachricht; leert Code
+   * und Text) in einer Anweisung: Ein Rückstau von bis zu
+   * `MAX_CODE_PRUEFUNG_JE_ABRUF` veralteten Codes kostet so keine tausend
+   * Einzel-Updates im Abruf.
+   */
+  async function verwirfAlle(
+    liste: readonly {
+      id: string;
+      empfaengerId: string;
+      zweck: NachrichtZweck;
+      grund: VerwerfGrund;
+    }[],
+  ): Promise<void> {
+    if (liste.length === 0) return;
+    for (const v of liste) ausgeschlossen.add(v.id);
+    // Bedingt: Eine gleichzeitige Zustellung oder ein anderer Abruf verwirft nicht doppelt;
+    // protokolliert wird nur, was diese Anweisung tatsächlich verworfen hat. Die
+    // Zeilensperren nimmt die Anweisung in Planreihenfolge; zwei gleichzeitige Abrufe
+    // mit sehr unterschiedlichen Listen könnten sich theoretisch verklemmen. Dann bricht
+    // PostgreSQL einen davon ab (40P01, Rollback ohne Wirkung), und die kanzleikonsole
+    // ruft im nächsten Lauf erneut ab.
+    const verworfen = new Set(
+      (
+        await ctx.tx.nachricht.updateManyAndReturn({
+          where: { id: { in: liste.map((v) => v.id) }, ...offen },
+          data: { verworfenAm: jetzt, code: null, text: '' },
+          select: { id: true },
+        })
+      ).map((z) => z.id),
+    );
+    for (const v of liste) {
+      if (!verworfen.has(v.id)) continue;
+      protokoll.push({
+        aktion: 'tcms.nachricht.verworfen',
+        objektTyp: 'Nachricht',
+        objektId: v.id,
+        programmId: null,
+        detail: { zweck: v.zweck, empfaengerId: v.empfaengerId, grund: v.grund },
+      });
+    }
   }
   /** Prüft Code-Nachrichten und verwirft die veralteten. */
   async function pruefeUndVerwirf(zeilen: readonly CodeZeile[]): Promise<void> {
     for (const z of zeilen) geprueft.add(z.id);
-    for (const v of await veralteteCodes(ctx.tx, zeilen, jetzt, schluessel)) {
-      await verwirf({ ...v, zweck: 'FREIGABE_CODE' });
-    }
+    await verwirfAlle(
+      (await veralteteCodes(ctx.tx, zeilen, jetzt, schluessel)).map((v) => ({
+        ...v,
+        zweck: 'FREIGABE_CODE' as const,
+      })),
+    );
   }
   // 1. Die ältesten offenen Code-Nachrichten prüfen und verfallene leeren (Sparsamkeit).
   await pruefeUndVerwirf(
@@ -380,12 +403,25 @@ export async function ladeOffeneNachrichten(
   // 4. Nur vertragsgemäße Vorlagendaten ausliefern; ältere Zeilen, die den Vertrag
   //    verletzen (RT4-T-03), werden verworfen statt den ganzen Abruf zu blockieren.
   const nachrichten: OffeneNachricht[] = [];
+  const ungueltig: {
+    id: string;
+    empfaengerId: string;
+    zweck: NachrichtZweck;
+    grund: VerwerfGrund;
+  }[] = [];
   for (const k of kandidaten) {
     if (ausgeschlossen.has(k.id)) continue;
     const n = alsOffeneNachricht(k);
     if (n) nachrichten.push(n);
-    else await verwirf({ ...k, grund: 'DATEN_UNGUELTIG' });
+    else
+      ungueltig.push({
+        id: k.id,
+        empfaengerId: k.empfaengerId,
+        zweck: k.zweck,
+        grund: 'DATEN_UNGUELTIG',
+      });
   }
+  await verwirfAlle(ungueltig);
   // 5. Erste Auslieferung festhalten (H2): Nur eine ausgelieferte Nachricht kann die
   //    kanzleikonsole nach einem späteren Verwerfen noch als zugestellt melden.
   if (nachrichten.length > 0) {

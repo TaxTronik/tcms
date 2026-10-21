@@ -10,6 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { pruefeAuditKette } from '@tcms/db';
 import { dbAbgewiesen, regel } from '@tcms/db/testhilfe';
 import { MAX_FEHLVERSUCHE } from './code';
 import { adressiereFreigabeNeu, erteileFreigabe, fordereFreigabeCodeAn } from './freigaben';
@@ -25,11 +26,13 @@ import {
   baueWelt,
   btA,
   fehlerVon,
+  gleichzeitig,
   im,
   imSystem,
   inWelt,
   kontakt,
   system,
+  warteAufSperrwartende,
   type Welt,
 } from './testwelt';
 
@@ -248,6 +251,135 @@ describe.skipIf(!AKTIV)('Lebensdauer der Code-Nachrichten (Service, PostgreSQL)'
     expect(await inWelt(w2, (tx) => tx.nachricht.count({ where: { code: { not: null } } }))).toBe(
       0,
     );
+    // Je verworfener Nachricht genau ein Audit-Eintrag, in Prüfreihenfolge (älteste
+    // zuerst) und in einer gültigen Kette, obwohl der Abruf sie gesammelt schreibt.
+    const [verworfen, alle, kette] = await inWelt(
+      w2,
+      async (tx) =>
+        [
+          await tx.auditEvent.findMany({
+            where: { aktion: 'tcms.nachricht.verworfen' },
+            orderBy: { pos: 'asc' },
+            select: { objektId: true, detail: true },
+          }),
+          await tx.nachricht.findMany({
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+            select: { id: true },
+          }),
+          await pruefeAuditKette(tx),
+        ] as const,
+    );
+    expect(verworfen.map((e) => e.objektId)).toEqual(alle.map((n) => n.id));
+    expect(new Set(verworfen.map((e) => (e.detail as { grund?: string }).grund))).toEqual(
+      new Set(['FREIGABE_NICHT_OFFEN']),
+    );
+    expect(kette.gueltig).toBe(true);
+    // Ein zweiter Abruf findet nichts mehr zu verwerfen und schreibt keinen Eintrag.
+    expect(await abrufW2()).toEqual({ nachrichten: [] });
+    expect(
+      await inWelt(w2, (tx) =>
+        tx.auditEvent.count({ where: { aktion: 'tcms.nachricht.verworfen' } }),
+      ),
+    ).toBe(n);
+  }, 30_000);
+
+  /** n veraltete Code-Nachrichten (unbekannte Freigabe), älteste zuerst. */
+  async function veralteteCodes(w: Welt, n: number) {
+    const basis = Date.now() - 3_600_000;
+    await inWelt(w, (tx) =>
+      tx.nachricht.createMany({
+        data: Array.from({ length: n }, (_, i) => ({
+          mandantId: w.mandantA,
+          empfaengerId: w.gv,
+          empfaengerArt: 'KONTAKT' as const,
+          zweck: 'FREIGABE_CODE' as const,
+          betreff: 'B',
+          text: 'Ihr Bestätigungscode: 135790',
+          daten: { freigabeId: 'ckunbekanntefreigabe0000' },
+          code: '135790',
+          createdAt: new Date(basis + i * 1000),
+        })),
+      }),
+    );
+    return inWelt(w, (tx) =>
+      tx.nachricht.findMany({
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true },
+      }),
+    );
+  }
+
+  const verwerfenEintraege = (w: Welt) =>
+    inWelt(
+      w,
+      async (tx) =>
+        [
+          await tx.auditEvent.findMany({
+            where: { aktion: 'tcms.nachricht.verworfen' },
+            orderBy: { pos: 'asc' },
+            select: { objektId: true },
+          }),
+          await pruefeAuditKette(tx),
+        ] as const,
+    );
+
+  it('parallele Abrufe verwerfen jede veraltete Nachricht genau einmal (ein Audit-Eintrag je Nachricht)', async () => {
+    const w = await baueWelt();
+    const n = 60;
+    await veralteteCodes(w, n);
+    const abruf = () => imSystem(system(w), (ctx) => ladeOffeneNachrichten(ctx, { limit: 5 }));
+    // Erzwungen gleichzeitig: Der erste Abruf hält die Zeilensperren und wartet
+    // auf die Audit-Sperre, der zweite hat dieselben offenen Zeilen gelesen und
+    // wartet an seinem UPDATE. Danach trifft das bedingte Verwerfen nichts mehr.
+    const ergebnisse = await gleichzeitig(w, [abruf, abruf]);
+    for (const e of ergebnisse)
+      expect(e).toEqual({ status: 'fulfilled', value: { nachrichten: [] } });
+    const [eintraege, kette] = await verwerfenEintraege(w);
+    expect(eintraege).toHaveLength(n);
+    expect(new Set(eintraege.map((e) => e.objektId)).size).toBe(n);
+    expect(kette.gueltig).toBe(true);
+  });
+
+  it('eine gleichzeitig zugestellte Nachricht wird nicht verworfen und nicht als verworfen protokolliert', async () => {
+    const w = await baueWelt();
+    const [m, ...rest] = await veralteteCodes(w, 5);
+    // Eine Zustellung hält die Zeilensperre von m, während der Abruf startet.
+    let freigeben!: () => void;
+    const ende = new Promise<void>((r) => (freigeben = r));
+    let gesperrt!: () => void;
+    const bereit = new Promise<void>((r) => (gesperrt = r));
+    const zustellung = inWelt(w, async (tx) => {
+      const jetzt = new Date();
+      await tx.nachricht.update({
+        where: { id: m!.id },
+        // Wie bestaetigeNachrichtZustellung: zugestellt, Klartext geleert.
+        data: { abgerufenAm: jetzt, zugestelltAm: jetzt, text: '', code: null },
+      });
+      gesperrt();
+      await ende;
+    });
+    await bereit;
+    try {
+      const abruf = imSystem(system(w), (ctx) => ladeOffeneNachrichten(ctx, { limit: 5 }));
+      expect(await warteAufSperrwartende(w, 1)).toBe(true);
+      freigeben();
+      await zustellung;
+      expect(await abruf).toEqual({ nachrichten: [] });
+    } finally {
+      freigeben();
+      await zustellung.catch(() => undefined);
+    }
+    expect(
+      await inWelt(w, (tx) =>
+        tx.nachricht.findUniqueOrThrow({
+          where: { id: m!.id },
+          select: { zugestelltAm: true, verworfenAm: true },
+        }),
+      ),
+    ).toMatchObject({ zugestelltAm: expect.any(Date), verworfenAm: null });
+    const [eintraege, kette] = await verwerfenEintraege(w);
+    expect(eintraege.map((e) => e.objektId)).toEqual(rest.map((r) => r.id));
+    expect(kette.gueltig).toBe(true);
   });
 
   it('verworfene Codes belegen keinen Platz im Limit', async () => {

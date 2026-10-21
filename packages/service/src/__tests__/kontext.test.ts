@@ -1,18 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DienstFehler, type Akteur } from '@tcms/contract';
 
-// schreibeAudit/mitTenant brauchen eine Datenbank; hier wird nur geprüft, was
-// der Service-Kern an sie übergibt (Ende-zu-Ende: dienst.db.test.ts).
-const aufrufe: { schreibeAudit: unknown[][]; mitTenant: unknown[][] } = {
+// schreibeAuditFolge/mitTenant brauchen eine Datenbank; hier wird nur geprüft,
+// was der Service-Kern an sie übergibt (Ende-zu-Ende: dienst.db.test.ts).
+// `schreibeAudit` hält je Eintrag [tx, eingabe] fest, `folgen` je Aufruf die Anzahl.
+const aufrufe: { schreibeAudit: unknown[][]; folgen: number[]; mitTenant: unknown[][] } = {
   schreibeAudit: [],
+  folgen: [],
   mitTenant: [],
 };
 vi.mock('@tcms/db', async (original) => {
   const echt = await original<typeof import('@tcms/db')>();
   return {
     ...echt,
-    schreibeAudit: vi.fn(async (...a: unknown[]) => {
-      aufrufe.schreibeAudit.push(a);
+    schreibeAudit: vi.fn(async () => {
+      throw new Error('mitAudit schreibt über schreibeAuditFolge');
+    }),
+    schreibeAuditFolge: vi.fn(async (tx: unknown, eingaben: readonly unknown[]) => {
+      aufrufe.folgen.push(eingaben.length);
+      for (const e of eingaben) aufrufe.schreibeAudit.push([tx, e]);
     }),
     mitTenant: vi.fn(async (tenantId: string, fn: (tx: unknown) => Promise<unknown>) => {
       aufrufe.mitTenant.push([tenantId]);
@@ -54,6 +60,7 @@ const PORTS = {
 
 beforeEach(() => {
   aufrufe.schreibeAudit = [];
+  aufrufe.folgen = [];
   aufrufe.mitTenant = [];
 });
 
@@ -221,6 +228,8 @@ describe('mitAudit', () => {
     expect(wert).toBe(42);
     expect(zeit).toEqual(new Date('2026-10-16T10:00:00Z'));
     expect(aufrufe.schreibeAudit).toHaveLength(2);
+    // Ein Aufruf für alle Einträge, in der Reihenfolge der Operation.
+    expect(aufrufe.folgen).toEqual([2]);
     expect(aufrufe.schreibeAudit[0]![1]).toEqual({
       actorId: AKTEUR.id,
       actorName: AKTEUR.name,
@@ -307,6 +316,25 @@ describe('mitAudit', () => {
         },
       })),
     ).rejects.toThrow(/reserviert/);
+    expect(aufrufe.schreibeAudit).toHaveLength(1);
+    // Auch an zweiter Stelle: geprüft wird vor dem Schreiben, nichts wird geschrieben.
+    const folgenVorher = aufrufe.folgen.length;
+    await expect(
+      mitAudit(ctx(), async () => ({
+        wert: null,
+        protokoll: [
+          { aktion: 'tcms.test.ok', objektTyp: 'X', objektId: '9', programmId: null },
+          {
+            aktion: 'tcms.test.r',
+            objektTyp: 'X',
+            objektId: '10',
+            programmId: null,
+            detail: { systemakteur: false },
+          },
+        ],
+      })),
+    ).rejects.toThrow(/reserviert/);
+    expect(aufrufe.folgen).toHaveLength(folgenVorher);
     expect(aufrufe.schreibeAudit).toHaveLength(1);
   });
 

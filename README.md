@@ -127,7 +127,10 @@ auf ein Objekt eines anderen Tenants scheitert also schon in der Datenbank.
   SQL-Texte und `set_config` außerhalb von `tenant.ts`.
 - Audit: Hashkette je Tenant (Kettenversion 2), Advisory-Lock je Tenant, `(tenant_id, prevHash)`
   eindeutig. `schreibeAudit(tx, …)` nimmt den Tenant aus dem Kontext und vergibt unter der Sperre
-  die Position `pos` (je Tenant lückenlos 1, 2, 3, …, `(tenant_id, pos)` eindeutig). Alle Ausgaben
+  die Position `pos` (je Tenant lückenlos 1, 2, 3, …, `(tenant_id, pos)` eindeutig);
+  `schreibeAuditFolge(tx, […])` hängt viele Einträge in Reihenfolge mit einer Sperre und einem INSERT
+  an (sehr lange Folgen teilt Prisma auf; dieselbe Kette, derselbe Schreibweg; `mitAudit` nutzt sie).
+  Der Zeitstempel entsteht unter der Sperre und folgt so der Position. Alle Ausgaben
   (Audit-Liste, Cursor, Kettenkopf, Kettenprüfung, Verläufe) nennen `pos`; der globale Schlüssel
   `seq` verlässt den Dienst nicht, weil Lücken darin fremde Audit-Aktivität verrieten (RT-03). Die
   Kettenprüfung verlangt zusätzlich lückenlose Positionen.

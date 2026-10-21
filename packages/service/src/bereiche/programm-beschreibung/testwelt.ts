@@ -266,6 +266,21 @@ export async function gleichzeitig<T>(
   );
   await bereit;
   const ergebnisse = Promise.allSettled(laeufe.map((l) => l()));
+  await warteAufSperrwartende(w, laeufe.length, zeitlimitMs);
+  freigeben();
+  await halter;
+  return ergebnisse;
+}
+
+/**
+ * Wartet, bis mindestens `anzahl` Sitzungen dieser Datenbank auf eine Sperre
+ * warten (höchstens `zeitlimitMs`); `true`, wenn das erreicht wurde.
+ */
+export async function warteAufSperrwartende(
+  w: Welt,
+  anzahl: number,
+  zeitlimitMs = 5000,
+): Promise<boolean> {
   const bis = Date.now() + zeitlimitMs;
   while (Date.now() < bis) {
     const [z] = await mitTenant(
@@ -275,12 +290,10 @@ export async function gleichzeitig<T>(
         SELECT count(*)::int AS n FROM pg_catalog.pg_stat_activity
         WHERE datname = current_database() AND wait_event_type = 'Lock'`,
     );
-    if ((z?.n ?? 0) >= laeufe.length) break;
+    if ((z?.n ?? 0) >= anzahl) return true;
     await new Promise((r) => setTimeout(r, 20));
   }
-  freigeben();
-  await halter;
-  return ergebnisse;
+  return false;
 }
 
 export function nurEinErfolg<T>(e: PromiseSettledResult<T>[]): { wert: T; fehlerCode: string } {

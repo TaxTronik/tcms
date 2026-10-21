@@ -135,8 +135,9 @@ const AUSNAHMEN: Record<string, { regeln: Partial<Record<Regel, number>>; begrue
     begruendung: 'Signieren und Prüfen der Akteursbestätigung (node:crypto), ohne Datenbank.',
   },
   'packages/service/src/__tests__/kontext.test.ts': {
-    regeln: { 'text-matcher': 2 },
-    begruendung: 'Dienstkontext mit gemocktem mitTenant/schreibeAudit, keine Datenbank.',
+    regeln: { 'text-matcher': 3 },
+    begruendung:
+      'Dienstkontext mit gemocktem mitTenant/schreibeAuditFolge, keine Datenbank; die Meldungen stammen aus mitAudit selbst (reservierter Detail-Schlüssel, fehlendes Protokoll).',
   },
   'packages/service/src/bereiche/programm-beschreibung/code.test.ts': {
     regeln: { 'text-matcher': 4 },

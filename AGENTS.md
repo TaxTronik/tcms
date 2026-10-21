@@ -18,7 +18,7 @@ für KI-Werkzeuge.
   von `01_bootstrap.sql` und vom Produktions-Bootstrap `betrieb/bootstrap.sql`),
   Migrationsläufer des Images `tcms-migrate` (`betrieb/`, psql, ADR 0001 §8),
   `mitTenant` (Prisma 7 mit `@prisma/adapter-pg`),
-  Audit-Hashkette je Tenant (`schreibeAudit`, Position `pos` je Tenant lückenlos;
+  Audit-Hashkette je Tenant (`schreibeAudit`/`schreibeAuditFolge`, Position `pos` je Tenant lückenlos;
   der globale Schlüssel `seq` verlässt den Dienst nie – RT-03), Seed. Jeder Laufzeitzugriff läuft in
   `mitTenant`; einen ungebundenen Client gibt es nicht. Neue Tabellen brauchen
   `tenant_id`, RLS, die Policy `tcms_tenant`, Grants für `tcms_app` und einen

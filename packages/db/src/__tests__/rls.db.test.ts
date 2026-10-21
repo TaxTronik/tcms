@@ -21,7 +21,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { GENESIS_HASH } from '@tcms/domain/audit';
-import { pruefeAuditKette, schreibeAudit } from '../audit';
+import { AUDIT_SPERRE, pruefeAuditKette, schreibeAudit, schreibeAuditFolge } from '../audit';
 import { abgewiesenOhneDb, dbAbgewiesen, regel, type DbErwartung } from './db-fehler';
 import {
   erzeugeClient,
@@ -30,6 +30,7 @@ import {
   pruefeTenantId,
   sperrSchluessel,
   TenantFehler,
+  tenantSperre,
   type Tx,
 } from '../tenant';
 
@@ -1161,6 +1162,87 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
       expect(pruefung).toMatchObject({ gueltig: true, geprueft: anzahl });
       const pruefungB = await mitTenant(B.tenant, (tx) => pruefeAuditKette(tx), { client: app });
       expect(pruefungB.gueltig).toBe(true);
+    });
+
+    // Folge (ein INSERT für viele Einträge, etwa beim Verwerfen eines Rückstaus):
+    // dieselbe lückenlose Kette in Eingabereihenfolge wie Eintrag für Eintrag.
+    it('schreibeAuditFolge verkettet viele Einträge in Reihenfolge, auch parallel zu Einzelschreibern', async () => {
+      const lauf = randomUUID().slice(0, 8);
+      const folge = (name: string, n: number) =>
+        Array.from({ length: n }, (_, i) => eintrag(`folge-${lauf}-${name}-${i}`));
+      const vorher = await mitTenant(A.tenant, (tx) => tx.auditEvent.count(), { client: app });
+      await Promise.all([
+        mitTenant(A.tenant, (tx) => schreibeAuditFolge(tx, folge('x', 40)), { client: app }),
+        mitTenant(A.tenant, (tx) => schreibeAuditFolge(tx, folge('y', 40)), { client: app }),
+        ...Array.from({ length: 6 }, (_, i) =>
+          mitTenant(A.tenant, (tx) => schreibeAudit(tx, eintrag(`folge-${lauf}-einzel-${i}`)), {
+            client: app,
+          }),
+        ),
+        mitTenant(A.tenant, (tx) => schreibeAuditFolge(tx, []), { client: app }),
+      ]);
+      const [alle, pruefung] = await mitTenant(
+        A.tenant,
+        async (tx) =>
+          [
+            await tx.auditEvent.findMany({
+              where: { objektId: { startsWith: `folge-${lauf}-` } },
+              orderBy: { pos: 'asc' },
+              select: { pos: true, objektId: true, at: true },
+            }),
+            await pruefeAuditKette(tx),
+          ] as const,
+        { client: app },
+      );
+      expect(alle).toHaveLength(86);
+      // Der Zeitstempel entsteht unter der Sperre: Er folgt der Position.
+      const zeiten = alle.map((e) => e.at.getTime());
+      expect(zeiten).toEqual([...zeiten].sort((x, y) => x - y));
+      expect(pruefung).toMatchObject({ gueltig: true, geprueft: vorher + 86 });
+      // Jede Folge liegt geschlossen und in Eingabereihenfolge in der Kette.
+      for (const name of ['x', 'y']) {
+        const teil = alle.filter((e) => e.objektId.startsWith(`folge-${lauf}-${name}-`));
+        expect(teil.map((e) => e.objektId)).toEqual(folge(name, 40).map((e) => e.objektId));
+        expect(teil.at(-1)!.pos - teil[0]!.pos).toBe(39);
+      }
+    });
+
+    it('der Zeitstempel einer wartenden Folge entsteht erst unter der Sperre', async () => {
+      let freigeben!: () => void;
+      const ende = new Promise<void>((r) => (freigeben = r));
+      let gesperrt!: () => void;
+      const bereit = new Promise<void>((r) => (gesperrt = r));
+      const halter = mitTenant(
+        A.tenant,
+        async (tx) => {
+          await tenantSperre(tx, AUDIT_SPERRE);
+          gesperrt();
+          await ende;
+        },
+        { client: app },
+      );
+      await bereit;
+      const objektId = `warten-${randomUUID().slice(0, 8)}`;
+      let folge: Promise<void> = Promise.resolve();
+      let freigegebenUm = 0;
+      try {
+        folge = mitTenant(A.tenant, (tx) => schreibeAuditFolge(tx, [eintrag(objektId)]), {
+          client: app,
+        });
+        await new Promise((r) => setTimeout(r, 300));
+        freigegebenUm = Date.now();
+        freigeben();
+        await Promise.all([halter, folge]);
+      } finally {
+        freigeben();
+        await Promise.allSettled([halter, folge]);
+      }
+      const [geschrieben] = await mitTenant(
+        A.tenant,
+        (tx) => tx.auditEvent.findMany({ where: { objektId }, select: { at: true } }),
+        { client: app },
+      );
+      expect(geschrieben!.at.getTime()).toBeGreaterThanOrEqual(freigegebenUm);
     });
 
     it('eine Verzweigung scheitert auch ohne Sperre am eindeutigen Vorgänger', async () => {

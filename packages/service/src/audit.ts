@@ -12,7 +12,7 @@
 // =============================================================================
 
 import type { Akteur } from '@tcms/contract';
-import { schreibeAudit, type Tx } from '@tcms/db';
+import { schreibeAuditFolge, type Tx } from '@tcms/db';
 import type { Uhr } from './kontext';
 
 /** Was `mitAudit` vom Kontext braucht: `DienstKontext` oder `SystemKontext`. */
@@ -57,12 +57,12 @@ export async function mitAudit<T>(
   const actorName = system
     ? `${AUDIT_SYSTEM_PRAEFIX}${ctx.akteur.name}`.slice(0, MAX_ACTOR_NAME)
     : ctx.akteur.name;
-  for (const p of eintraege) {
+  const eingaben = eintraege.map((p) => {
     const detail = p.detail ?? {};
     if (Object.hasOwn(detail, SYSTEM_SCHLUESSEL)) {
       throw new Error(`[service] Detail-Schlüssel ${SYSTEM_SCHLUESSEL} ist reserviert.`);
     }
-    await schreibeAudit(ctx.tx, {
+    return {
       actorId: ctx.akteur.id,
       actorName,
       aktion: p.aktion,
@@ -70,7 +70,9 @@ export async function mitAudit<T>(
       objektId: p.objektId,
       programmId: p.programmId,
       detail: system ? { ...detail, [SYSTEM_SCHLUESSEL]: true } : detail,
-    });
-  }
+    };
+  });
+  // Eine Sperre, ein INSERT: dieselbe Kette wie Eintrag für Eintrag.
+  await schreibeAuditFolge(ctx.tx, eingaben);
   return wert;
 }
