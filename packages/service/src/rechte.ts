@@ -166,9 +166,31 @@ export function auswirkungBeimAnlegen(
 }
 
 /**
+ * Beteiligte Personen einer Feststellung (Fachkonzept §13): erfassend,
+ * §-153-würdigend, Verwerfen beantragend und für eine Maßnahme verantwortlich.
+ * Eine Quelle für Feststellungs-Lader, Operationen und das Audit (tcms-s11).
+ */
+export function beteiligteVon(f: {
+  erfasstVon: string;
+  p153EntschiedenVon: string | null;
+  verwerfenBeantragtVon: string | null;
+  massnahmen: readonly { verantwortlich: string }[];
+}): string[] {
+  return [
+    f.erfasstVon,
+    f.p153EntschiedenVon,
+    f.verwerfenBeantragtVon,
+    ...f.massnahmen.map((m) => m.verantwortlich),
+  ].filter((x): x is string => !!x);
+}
+
+/**
  * Vertrauliche Feststellungen (Fachkonzept §13) nur für Beteiligte: Admin,
  * zuständige:r Berufsträger:in, Hauptbearbeitung und die beteiligten Personen
  * (erfassend, würdigend, verantwortlich) – jeweils mit Bezug zum Mandanten.
+ * Ohne Bezug (`cli`) gibt es kein Recht, auch nicht für Admins im
+ * tenantweiten Audit (tcms-s11): Ob die Person den Mandanten noch betreut,
+ * weiß nur die kanzleikonsole.
  */
 export function kannVertraulichLesen(
   a: Akteur,

@@ -169,6 +169,14 @@ für KI-Werkzeuge.
   Überschreiben einzelner Felder. Kennzahlen dürfen vertrauliche
   Feststellungen nur zählen, wo die Zahl aus Sichtbarem folgt (Status, Zahl
   der Maßnahmen); Steuerwirkung, §-153 und Schwere zählen nur lesbare (RT-01).
+  Das gilt auch für das tenantweite Audit (ADR 0001 §5.1, tcms-s11): Einträge zu
+  einer vertraulichen Feststellung und ihren Maßnahmen sind für Personen ohne
+  `kannVertraulichLesen` (mit dem `cli` der Anfrage – Admins ohne Bezug
+  eingeschlossen) die Variante `maskiert: true` (Position, Zeitpunkt, Aktion,
+  Objekt, Mandant, `akteurArt`, `vertraulich`), und ab der ersten maskierten
+  Position gibt die Liste keine Hashes aus (sie ließen maskierte Inhalte
+  bestätigen). Hashes und Kettenprüfung rechnen über die vollständigen Einträge.
+  Beteiligte bestimmt nur `beteiligteVon` (`rechte.ts`).
 - `TCMS_DEMO_TODAY` wirkt nur über die Demo-Uhr in `apps/web`; Audit-
   Zeitstempel und Sicherheitsfristen (Codes) sind immer echte Zeit.
 - Objekt-IDs aus Pfad oder Body gehören nur dann zur Anfrage, wenn das Objekt

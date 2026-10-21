@@ -30,8 +30,8 @@ import {
 } from '@tcms/domain';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
-import { kannVertraulichLesen } from '../../rechte';
-import { beteiligteVon, p153Abschliessend } from './feststellungen';
+import { beteiligteVon, kannVertraulichLesen } from '../../rechte';
+import { p153Abschliessend } from './feststellungen';
 import {
   isoTag,
   isoTagOderNull,

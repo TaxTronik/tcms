@@ -15,6 +15,8 @@ import { brauchtKanzlei } from '@/server/sitzung';
 export const metadata = { title: 'Audit-Log' };
 
 const PRO_SEITE = 50;
+/** Akteursart maskierter Einträge (ohne Namen). */
+const AKTEUR_ART = { KANZLEI: 'Kanzlei', MANDANT: 'Mandant', SYSTEM: 'System' } as const;
 const TD = { padding: '9px 10px', verticalAlign: 'top' } as const;
 type SP = Record<string, string | string[] | undefined>;
 const eins = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? '';
@@ -140,7 +142,15 @@ export default async function AuditLog({ searchParams }: { searchParams: Promise
               <div className="text-11 text-muted mt-1">
                 {letzter ? (
                   <>
-                    Kettenende #{letzter.pos} · <Hash wert={letzter.hash} />
+                    Kettenende #{letzter.pos}
+                    {letzter.hash ? (
+                      <>
+                        {' '}
+                        · <Hash wert={letzter.hash} />
+                      </>
+                    ) : (
+                      ' · Hash nicht angezeigt (vertrauliche Einträge)'
+                    )}
                   </>
                 ) : (
                   'noch keine Einträge'
@@ -197,7 +207,8 @@ export default async function AuditLog({ searchParams }: { searchParams: Promise
               <tbody>
                 {eintraege.map((e) => {
                   const m = e.mandantId ? mandantName.get(e.mandantId) : undefined;
-                  const detail = JSON.stringify(e.detail ?? {});
+                  // Vertrauliche Feststellung ohne Beteiligung: nur Art, Zeit, Objekt (Service).
+                  const detail = e.maskiert ? '{}' : JSON.stringify(e.detail ?? {});
                   return (
                     <tr key={e.pos} id={`pos-${e.pos}`}>
                       <td style={TD} className="td-num text-xs">
@@ -207,7 +218,14 @@ export default async function AuditLog({ searchParams }: { searchParams: Promise
                         {fmtDatumZeit(new Date(e.at))}
                       </td>
                       <td style={{ ...TD, whiteSpace: 'nowrap' }} className="text-sm">
-                        {e.actorName}
+                        {e.maskiert ? (
+                          <span className="text-muted">
+                            {e.akteurArt ? AKTEUR_ART[e.akteurArt] : '–'}{' '}
+                            <span className="badge-gray">vertraulich</span>
+                          </span>
+                        ) : (
+                          e.actorName
+                        )}
                       </td>
                       <td style={TD}>
                         <span className="mono text-xs font-s">{e.aktion}</span>
@@ -236,9 +254,18 @@ export default async function AuditLog({ searchParams }: { searchParams: Promise
                         {m ?? <span className="text-muted">–</span>}
                       </td>
                       <td style={{ ...TD, whiteSpace: 'nowrap' }}>
-                        <span className="badge-gray" title={`prev ${e.prevHash}`}>
-                          <Icon name="Lock" className="tx-icon-xs" /> <Hash wert={e.hash} />
-                        </span>
+                        {!e.maskiert && e.hash ? (
+                          <span className="badge-gray" title={`prev ${e.prevHash ?? '–'}`}>
+                            <Icon name="Lock" className="tx-icon-xs" /> <Hash wert={e.hash} />
+                          </span>
+                        ) : (
+                          <span
+                            className="text-muted text-xs"
+                            title="Nicht angezeigt: hängt von vertraulichen Einträgen ab. Die Prüfung der Hashkette umfasst ihn."
+                          >
+                            –
+                          </span>
+                        )}
                       </td>
                     </tr>
                   );

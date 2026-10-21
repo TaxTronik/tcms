@@ -20,7 +20,7 @@ import {
   PortfolioAntwortSchema,
   type AkteurClaims,
 } from '@tcms/contract';
-import { mitTenant, type Tx } from '@tcms/db';
+import { mitTenant, schreibeAudit, type Tx } from '@tcms/db';
 import { DEMO_IDS, DEMO_MANDANTEN, DEMO_TENANT_ID } from '@tcms/db/demo';
 import { describe, expect, it } from 'vitest';
 import { aufbau, bestaetigtSenden, claims, json, mandantClaims } from '../__tests__/hilfen';
@@ -386,6 +386,79 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
         const r = await bestaetigtSenden(app(), { ziel: `/v1/audit${q}`, claims: anna() });
         expect(r.status, q).toBe(400);
       }
+    });
+
+    it('GET /v1/audit (tcms-s11): vertrauliche Feststellung für Admin ohne Bezug maskiert, mit Bezug lesbar; Prüfung intakt', async () => {
+      // Eigener Tenant: die Demodaten bleiben unberührt.
+      const t = randomUUID();
+      const m = randomUUID();
+      const geheim = 'Quelle Geheimakte API';
+      const f = await mitTenant(t, async (tx) => {
+        await tx.mandant.create({ data: { id: m, name: 'Vertraulich GmbH', rechtsform: 'KapG' } });
+        const p = await tx.tcmsProgramm.create({
+          data: { mandantId: m, paketId: 'ecommerce', paketVersion: '1.0' },
+        });
+        const f = await tx.feststellung.create({
+          data: {
+            programmId: p.id,
+            nummer: 'F-API-1',
+            titel: 'Vertraulich',
+            sachverhalt: 'Vertraulicher Sachverhalt.',
+            quelle: 'HINWEIS',
+            quelleText: geheim,
+            klasse: 'STEUERLICHER_FEHLER',
+            schwere: 'HOCH',
+            auswirkung: 'JA',
+            vertraulich: true,
+            erfasstVon: DEMO_IDS.anna,
+          },
+        });
+        for (const aktion of ['tcms.feststellung.erfasst', 'tcms.feststellung.vertraulich']) {
+          await schreibeAudit(tx, {
+            actorId: DEMO_IDS.anna,
+            actorName: 'Anna Geheim',
+            aktion,
+            objektTyp: 'Feststellung',
+            objektId: f.id,
+            programmId: p.id,
+            detail: { quelle: geheim },
+          });
+        }
+        return f;
+      });
+      const ohneBezug = await bestaetigtSenden(app(), {
+        ziel: '/v1/audit',
+        claims: anna({ tnt: t, cli: undefined }),
+      });
+      expect(ohneBezug.status).toBe(200);
+      const roh = await json(ohneBezug);
+      const daten = AuditListeAntwortSchema.parse(roh['daten']);
+      expect(daten.eintraege).toHaveLength(2);
+      for (const e of daten.eintraege) {
+        expect(e).toMatchObject({ maskiert: true, objektId: f.id, vertraulich: true });
+      }
+      expect(daten.kopf?.hash).toBeNull();
+      expect(JSON.stringify(roh)).not.toContain('Geheim');
+      const mitBezug = await bestaetigtSenden(app(), {
+        ziel: '/v1/audit',
+        claims: anna({ tnt: t, cli: { id: m, bt: true, hb: false } }),
+      });
+      const offen = AuditListeAntwortSchema.parse((await json(mitBezug))['daten']);
+      expect(offen.eintraege.map((e) => e.maskiert)).toEqual([false, false]);
+      expect(offen.kopf?.hash).toMatch(/^[0-9a-f]{64}$/);
+      const pruefung = await bestaetigtSenden(app(), {
+        methode: 'POST',
+        ziel: '/v1/audit/pruefen',
+        body: '{}',
+        claims: anna({ tnt: t, cli: undefined }),
+      });
+      expect(AuditPruefenAntwortSchema.parse((await json(pruefung))['daten'])).toEqual({
+        status: 'INTAKT',
+        geprueft: 2,
+        bruchBei: null,
+        grund: null,
+        weiterAb: null,
+      });
     });
 
     it('POST /v1/audit/pruefen: Admin 200, Nicht-Admin 403, Body 400', async () => {

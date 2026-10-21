@@ -13,6 +13,20 @@
 // Kettenprüfung liest in Seiten zu `PRUEF_SEITE` Einträgen (Speicher
 // begrenzt) und bricht nach `PRUEF_ZEITBUDGET_MS` mit Fortsetzungspunkt ab,
 // unter dem Transaktionslimit von 30 s.
+//
+// Vertraulichkeit (Fachkonzept §13, RT-01, tcms-s11): Einträge zu einer
+// vertraulichen Feststellung und ihren Maßnahmen zeigt die Liste nur Personen,
+// die die Feststellung lesen dürfen (`kannVertraulichLesen` mit dem
+// Mandantenbezug der Anfrage – dieselbe Regel wie der Lesepfad der
+// Feststellung). Alle anderen, auch Admins/Partner ohne Bezug zu diesem
+// Mandanten, erhalten eine maskierte Variante (Positivliste: Position,
+// Zeitpunkt, Ereignisart, Objekt, Mandant, Akteursart, „vertraulich“) und ab
+// der ersten für sie maskierten Position keine Hashes mehr: Jeder spätere
+// Hash hängt vom maskierten Inhalt ab, und Inhalte mit wenigen möglichen
+// Werten (§-153-Entscheidung, Auswirkung, Schwere) ließen sich damit offline
+// bestätigen. Hashes entstehen unverändert über die vollständigen Einträge;
+// die Kettenprüfung liest sie vollständig und gibt keine Inhalte aus (Status,
+// Zahlen, Positionen, feste Gründe).
 // =============================================================================
 
 import {
@@ -22,6 +36,7 @@ import {
   AuditPruefenEingabeSchema,
   DienstFehler,
   nichtBerechtigt,
+  type AkteurArt,
   type AuditListeAntwort,
   type AuditListeEingabe,
   type AuditPruefenAntwort,
@@ -30,7 +45,7 @@ import {
 import { aktuellerTenant, type Prisma } from '@tcms/db';
 import { KETTEN_ANFANG, pruefeKette, type KettenStand } from '@tcms/domain/audit';
 import type { DienstKontext } from '../../kontext';
-import { kannVerwalten } from '../../rechte';
+import { beteiligteVon, kannVerwalten, kannVertraulichLesen } from '../../rechte';
 import { alsJson, antwortNach, pruefeEingabe } from './hilfen';
 
 /** Einträge je Seite der Kettenprüfung. */
@@ -44,7 +59,107 @@ function nurAdmin(ctx: DienstKontext): void {
   }
 }
 
-/** Eine Seite des Audits; aufsteigend (`nach`) oder absteigend (`vor`). */
+/** Objekte, deren Audit-Einträge der Akteur nur maskiert sieht (tcms-s11). */
+interface Verborgen {
+  feststellungen: ReadonlySet<string>;
+  massnahmen: ReadonlySet<string>;
+  /** Erste Position eines maskierten Eintrags im Tenant; ab hier keine Hashes (`null`: keine). */
+  ersteMaskiert: number | null;
+}
+
+/**
+ * Vertrauliche Feststellungen des Tenants, die der Akteur nicht lesen darf
+ * (`kannVertraulichLesen` mit seinem Mandantenbezug, Beteiligte aus
+ * `beteiligteVon`), samt ihrer Maßnahmen. Maßgeblich ist die Vertraulichkeit
+ * heute: Wird eine Feststellung vertraulich, sind auch ihre früheren Einträge
+ * maskiert (wie im Lesepfad der Feststellung).
+ */
+async function verborgeneObjekte(ctx: DienstKontext): Promise<Verborgen> {
+  const vertraulich = await ctx.tx.feststellung.findMany({
+    where: { vertraulich: true },
+    select: {
+      id: true,
+      erfasstVon: true,
+      p153EntschiedenVon: true,
+      verwerfenBeantragtVon: true,
+      programm: { select: { mandantId: true } },
+      massnahmen: {
+        select: { id: true, verantwortlich: true },
+        orderBy: [{ wiedervorlageNr: 'asc' }, { id: 'asc' }],
+      },
+    },
+    orderBy: { id: 'asc' },
+  });
+  const feststellungen = new Set<string>();
+  const massnahmen = new Set<string>();
+  for (const f of vertraulich) {
+    if (kannVertraulichLesen(ctx.akteur, f.programm.mandantId, beteiligteVon(f))) continue;
+    feststellungen.add(f.id);
+    for (const m of f.massnahmen) massnahmen.add(m.id);
+  }
+  if (feststellungen.size === 0) return { feststellungen, massnahmen, ersteMaskiert: null };
+  const erste = await ctx.tx.auditEvent.findFirst({
+    where: {
+      OR: [
+        { objektTyp: 'Feststellung', objektId: { in: [...feststellungen] } },
+        { objektTyp: 'Massnahme', objektId: { in: [...massnahmen] } },
+      ],
+    },
+    orderBy: { pos: 'asc' },
+    select: { pos: true },
+  });
+  return { feststellungen, massnahmen, ersteMaskiert: erste?.pos ?? null };
+}
+
+function istVerborgen(v: Verborgen, z: { objektTyp: string; objektId: string }): boolean {
+  return (
+    (z.objektTyp === 'Feststellung' && v.feststellungen.has(z.objektId)) ||
+    (z.objektTyp === 'Massnahme' && v.massnahmen.has(z.objektId))
+  );
+}
+
+/**
+ * Akteursart eines maskierten Eintrags ohne Namen und ID: `SYSTEM` nach der
+ * Kennzeichnung durch `mitAudit` (`detail.systemakteur`, im Hash), `MANDANT`
+ * bei einer Kontakt-ID mit Rolle im Tenant (Rollen werden nie gelöscht),
+ * sonst `KANZLEI`; ohne Akteur-ID `null`.
+ */
+function akteurArt(
+  z: { actorId: string | null; detail: unknown },
+  kontakte: ReadonlySet<string>,
+): AkteurArt | null {
+  const d = z.detail;
+  if (typeof d === 'object' && d !== null && !Array.isArray(d)) {
+    if ((d as Record<string, unknown>)['systemakteur'] === true) return 'SYSTEM';
+  }
+  if (!z.actorId) return null;
+  return kontakte.has(z.actorId.toLowerCase()) ? 'MANDANT' : 'KANZLEI';
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Kontakt-IDs (klein) unter den Akteuren, nur für maskierte Einträge abgefragt.
+ * `kontaktId` ist eine UUID-Spalte: Eine Akteur-ID in anderer Form (Altbestand,
+ * Seed) kann kein Kontakt sein und darf die Abfrage nicht scheitern lassen
+ * (22P02 hätte die ganze Seite verhindert).
+ */
+async function kontaktIds(ctx: DienstKontext, ids: readonly string[]): Promise<Set<string>> {
+  const gesucht = [...new Set(ids.map((id) => id.toLowerCase()).filter((id) => UUID.test(id)))];
+  if (gesucht.length === 0) return new Set();
+  const rollen = await ctx.tx.mandantKontaktRolle.findMany({
+    where: { kontaktId: { in: gesucht } },
+    select: { id: true, kontaktId: true },
+    orderBy: { id: 'asc' },
+  });
+  return new Set(rollen.map((r) => r.kontaktId.toLowerCase()));
+}
+
+/**
+ * Eine Seite des Audits; aufsteigend (`nach`) oder absteigend (`vor`).
+ * Einträge zu vertraulichen Feststellungen, die der Akteur nicht lesen darf,
+ * maskiert; Hashes erst ab der ersten maskierten Position verborgen (Kopf).
+ */
 export async function ladeAudit(
   ctx: DienstKontext,
   eingabe: AuditListeEingabe,
@@ -101,16 +216,53 @@ export async function ladeAudit(
     orderBy: { pos: 'desc' },
     select: { pos: true, hash: true, at: true },
   });
+  const verborgen = await verborgeneObjekte(ctx);
+  const kontakte = await kontaktIds(
+    ctx,
+    seite.filter((z) => istVerborgen(verborgen, z) && z.actorId).map((z) => z.actorId!),
+  );
+  // Hashes nur vor der ersten für den Akteur maskierten Position (siehe Kopf).
+  const hashSichtbar = (pos: number) =>
+    verborgen.ersteMaskiert === null || pos < verborgen.ersteMaskiert;
   return antwortNach(
     AuditListeAntwortSchema,
     'ladeAudit',
     alsJson({
-      eintraege: seite.map((z) => ({
-        ...z,
-        mandantId: z.programmId ? (mandantJe.get(z.programmId) ?? null) : null,
-      })),
+      eintraege: seite.map((z) => {
+        // Felder, die jede Variante trägt (keine Inhalte, keine Personen).
+        const rahmen = {
+          pos: z.pos,
+          at: z.at,
+          aktion: z.aktion,
+          objektTyp: z.objektTyp,
+          objektId: z.objektId,
+          programmId: z.programmId,
+          mandantId: z.programmId ? (mandantJe.get(z.programmId) ?? null) : null,
+        };
+        if (istVerborgen(verborgen, z)) {
+          // Positivliste (AGENTS.md: eigene Variante, nie durch Überschreiben).
+          return {
+            maskiert: true,
+            ...rahmen,
+            akteurArt: akteurArt(z, kontakte),
+            vertraulich: true,
+          };
+        }
+        const sichtbar = hashSichtbar(z.pos);
+        return {
+          maskiert: false,
+          ...rahmen,
+          actorId: z.actorId,
+          actorName: z.actorName,
+          detail: z.detail,
+          prevHash: sichtbar ? z.prevHash : null,
+          hash: sichtbar ? z.hash : null,
+        };
+      }),
       weiter: zeilen.length > limit ? seite[seite.length - 1]!.pos : null,
-      kopf,
+      kopf: kopf
+        ? { pos: kopf.pos, hash: hashSichtbar(kopf.pos) ? kopf.hash : null, at: kopf.at }
+        : null,
     }),
   );
 }
@@ -120,7 +272,9 @@ export async function ladeAudit(
  * `@tcms/domain/audit` (einzige Implementierung der Kettenregeln), jede Seite
  * ab dem Stand der vorherigen. Nach Ablauf des Zeitbudgets `ABGEBROCHEN` mit
  * `weiterAb`; die Fortsetzung verkettet mit dem gespeicherten Hash an dieser
- * Position.
+ * Position. Geprüft wird über die vollständigen Einträge, auch vertrauliche
+ * (tcms-s11); die Antwort nennt nur Status, Zahlen, Positionen und einen
+ * festen Grund aus `pruefeKette` – keine Inhalte, Namen oder Hashes.
  */
 export async function pruefeAudit(
   ctx: DienstKontext,

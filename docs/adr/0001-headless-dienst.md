@@ -185,6 +185,51 @@ beginnt mit dieser Stufe neu (eine neue Init-Migration ersetzt die bisherige).
   - `kannWuerdigen` (§ 153): `rol.bt` und (`rol.adm` oder `cli.bt`).
   - Vier-Augen-Regeln unverändert (Personen-IDs verglichen).
 
+### 5.1 Vertrauliche Feststellungen im Audit (tcms-s11)
+
+Das tenantweite Audit (`GET /v1/audit`, `POST /v1/audit/pruefen`) lesen nur
+Admins/Partner (`kannVerwalten`), meist ohne `cli`. Bis tcms-s11 sahen sie dort
+alle Details, auch zu vertraulichen Feststellungen (Quelle, Klasse, Schwere,
+Auswirkung, §-153-Entscheidung, Begründungen, Maßnahmentexte, Namen und IDs der
+handelnden Personen). Entscheidung:
+
+- **Wer Inhalte sieht:** dieselbe Regel wie der Lesepfad der Feststellung,
+  `kannVertraulichLesen(akteur, mandant, beteiligteVon(f))` mit dem
+  Mandantenbezug der Anfrage (`cli`). Ohne Bezug zu genau diesem Mandanten sieht
+  niemand Inhalte – auch keine Admins und keine persönlich Beteiligten (ob sie den
+  Mandanten noch betreuen, weiß nur die kanzleikonsole; fail closed). Mit Bezug
+  gehören Admin, zuständige:r BT und Hauptbearbeitung nach Fachkonzept §13 zum
+  Kreis; das Audit zeigt nie mehr als `GET …/feststellungen/{id}` derselben
+  Person.
+- **Was maskiert wird:** jeder Eintrag zu einer heute vertraulichen Feststellung
+  (`objektTyp` `Feststellung`) und zu ihren Maßnahmen (`Massnahme`), auch aus der
+  Zeit vor der Markierung. Andere Einträge, die nur die Nummer nennen
+  (Gegenzeichnung, Folge eines Ereignisses, Nachkontrolle), bleiben (die Nummer
+  ist auch in der maskierten Feststellung sichtbar).
+- **Maskierte Variante (Positivliste):** `maskiert: true`, `pos`, `at`,
+  `aktion` (Ereignisart), `objektTyp`, `objektId`, `programmId`, `mandantId`,
+  `akteurArt` (`SYSTEM` nach `detail.systemakteur`, `MANDANT` bei einer
+  Kontakt-ID mit Rolle im Tenant, sonst `KANZLEI`; ohne Akteur-ID `null`) und
+  `vertraulich: true` – kein `actorId`, `actorName`, `detail`, `prevHash`,
+  `hash`. Lesbare Einträge tragen `maskiert: false`.
+- **Hashes:** Die Kette bildet ihre Hashes unverändert über die vollständigen
+  Einträge. Die Liste gibt Hashes aber nur für Positionen **vor** der ersten für
+  den Lesenden maskierten Position aus (`prevHash`/`hash` der Einträge und
+  `kopf.hash` sonst `null`): Jeder spätere Hash hängt vom maskierten Inhalt ab,
+  und Inhalte mit wenigen möglichen Werten (§-153-Entscheidung, Auswirkung,
+  Schwere, Klasse, Personen des Tenants) ließen sich mit dem Hash des Eintrags
+  oder eines Nachfolgers und den übrigen sichtbaren Feldern offline durchprobieren
+  und bestätigen. Nur die Hashes des maskierten Eintrags wegzulassen genügte
+  nicht (der Nachfolger verkettet sie).
+- **Kettenprüfung:** unverändert vollständig über die gespeicherten Einträge;
+  ihre Antwort nennt nur Status, Zahl, Positionen und einen festen Grund – auch
+  ein Bruch an einem vertraulichen Eintrag ist mit `bruchBei` erkennbar.
+
+Getestet in `packages/service/src/bereiche/lesepfade/audit-vertraulich.db.test.ts`
+(Admin ohne Bezug, Admin mit fremdem Bezug, persönlich Beteiligte ohne Bezug,
+Beteiligte mit Bezug, Nicht-Admins, Kettenprüfung, Fälschung) und
+`apps/api/src/routen/lesepfade.db.test.ts`.
+
 ## 6. Nachweise
 
 Die kanzleikonsole nimmt Dateien an (Virenscan, Journal, WORM) und meldet dem
@@ -544,6 +589,16 @@ Kontexts innerhalb derselben Transaktion.
   Durchführung mit Befund, die für eine Nachkontrolle gewählte Kontrolle.
   Eine eingefrorene CMS-Beschreibung (Snapshot, unveränderlich) behält eine
   Feststellung, die erst nach dem Einfrieren vertraulich wurde; neue Versionen
-  nehmen vertrauliche Feststellungen nie auf. Admins/Partner gehören nach
-  Fachkonzept §13 zum Kreis der Beteiligten und sehen im tenantweiten Audit alle
-  Details.
+  nehmen vertrauliche Feststellungen nie auf. Im tenantweiten Audit sehen
+  Admins/Partner Inhalte vertraulicher Feststellungen nur mit Bezug zu diesem
+  Mandanten (§5.1, tcms-s11); mit Bezug gehören sie nach Fachkonzept §13 zum
+  Kreis der Beteiligten.
+- **Hash im Ereignisdetail (tcms-s11).** `GET …/ereignisse/{id}` nennt den Hash
+  des Meldungs-Audits (`meldung.hash`) jeder Kanzleiperson mit Leserecht. Liegt
+  ein maskierter Eintrag unmittelbar zwischen zwei Einträgen mit bekanntem Hash
+  und bekanntem Inhalt (etwa zwei Ereignis-Meldungen), ließe sich sein Inhalt
+  theoretisch durchprobieren; dafür müssten Zeitpunkt auf die Millisekunde,
+  Aktion, Objekt-ID und Person mitgeraten werden, und die Nachbarschaft in der
+  Kette ist nicht steuerbar. Nicht behoben (Vertragsänderung außerhalb des
+  Audits); bei Bedarf `meldung.hash` nur ausgeben, wenn davor kein für den
+  Lesenden maskierter Eintrag liegt.

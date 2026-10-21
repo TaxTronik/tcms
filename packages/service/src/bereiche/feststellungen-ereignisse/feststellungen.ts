@@ -50,6 +50,7 @@ import { naechsteWiedervorlageNr } from '../../kern/nummern';
 import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import {
+  beteiligteVon,
   gleicheId,
   kannBearbeiten,
   kannVertraulichLesen,
@@ -100,21 +101,6 @@ async function ladeGesperrt(ctx: DienstKontext, mandantId: string, feststellungI
   });
 }
 type Gesperrt = Awaited<ReturnType<typeof ladeGesperrt>>;
-
-/** Beteiligte einer Feststellung (Fachkonzept §13), wie im Lader. */
-export function beteiligteVon(f: {
-  erfasstVon: string;
-  p153EntschiedenVon: string | null;
-  verwerfenBeantragtVon: string | null;
-  massnahmen: readonly { verantwortlich: string }[];
-}): string[] {
-  return [
-    f.erfasstVon,
-    f.p153EntschiedenVon,
-    f.verwerfenBeantragtVon,
-    ...f.massnahmen.map((m) => m.verantwortlich),
-  ].filter((x): x is string => !!x);
-}
 
 function pruefeVertraulich(ctx: DienstKontext, mandantId: string, f: Gesperrt): void {
   if (f.vertraulich && !kannVertraulichLesen(ctx.akteur, mandantId, beteiligteVon(f))) {

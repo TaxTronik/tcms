@@ -312,17 +312,26 @@ Im Audit steht er als `System: <nam>` mit `detail.systemakteur: true`.
 **Endpunkte Lesepfade und Verwaltung** (Rechte prüft `packages/service`; Personen nur als IDs, Namen
 und Zuständigkeit ergänzt die kanzleikonsole):
 
-| Methode | Pfad                                                         | Recht                                                                  |
-| ------- | ------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| GET     | `/v1/mandanten/:mandantId/kontext?stand=`                    | Kanzleiperson mit `cli`; vertrauliche Feststellungen maskiert (RT-01)  |
-| POST    | `/v1/portfolio`                                              | Kanzleiperson; Body `{ mandantIds, bt?, hb? }` (≤ 5 000, ADR §3.3)     |
-| POST    | `/v1/arbeitskorb`                                            | wie Portfolio; Zuständigkeit nur aus `bt`/`hb` der Liste               |
-| GET     | `/v1/mandanten/:mandantId/portal/uebersicht`                 | Mandantenkontakt mit aktiver Rolle (`portal: true`)                    |
-| PUT     | `/v1/mandanten/:mandantId`                                   | `kannBearbeiten`; Anker anlegen/aktualisieren, auditiert               |
-| GET     | `/v1/mandanten/:mandantId/kontakte`                          | Kanzleiperson mit `cli`; `rechte.bearbeiten` wie PUT                   |
-| PUT     | `/v1/mandanten/:mandantId/kontakte`                          | `kannBearbeiten`; Rollen eines Kontakts setzen/deaktivieren, auditiert |
-| GET     | `/v1/audit?programmId=&mandantId=&aktion=&nach=&vor=&limit=` | Admin/Partner; höchstens 500 je Seite; Cursor = Position `pos`         |
-| POST    | `/v1/audit/pruefen`                                          | Admin/Partner; Kette seitenweise, Zeitbudget 20 s, Fortsetzung `ab`    |
+| Methode | Pfad                                                         | Recht                                                                                                |
+| ------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| GET     | `/v1/mandanten/:mandantId/kontext?stand=`                    | Kanzleiperson mit `cli`; vertrauliche Feststellungen maskiert (RT-01)                                |
+| POST    | `/v1/portfolio`                                              | Kanzleiperson; Body `{ mandantIds, bt?, hb? }` (≤ 5 000, ADR §3.3)                                   |
+| POST    | `/v1/arbeitskorb`                                            | wie Portfolio; Zuständigkeit nur aus `bt`/`hb` der Liste                                             |
+| GET     | `/v1/mandanten/:mandantId/portal/uebersicht`                 | Mandantenkontakt mit aktiver Rolle (`portal: true`)                                                  |
+| PUT     | `/v1/mandanten/:mandantId`                                   | `kannBearbeiten`; Anker anlegen/aktualisieren, auditiert                                             |
+| GET     | `/v1/mandanten/:mandantId/kontakte`                          | Kanzleiperson mit `cli`; `rechte.bearbeiten` wie PUT                                                 |
+| PUT     | `/v1/mandanten/:mandantId/kontakte`                          | `kannBearbeiten`; Rollen eines Kontakts setzen/deaktivieren, auditiert                               |
+| GET     | `/v1/audit?programmId=&mandantId=&aktion=&nach=&vor=&limit=` | Admin/Partner; höchstens 500 je Seite; Cursor = Position `pos`; vertrauliche Feststellungen maskiert |
+| POST    | `/v1/audit/pruefen`                                          | Admin/Partner; Kette seitenweise, Zeitbudget 20 s, Fortsetzung `ab`                                  |
+
+Das Audit zeigt Einträge zu vertraulichen Feststellungen und ihren Maßnahmen nur Personen, die die
+Feststellung lesen dürfen (`kannVertraulichLesen` mit dem `cli` der Anfrage, tcms-s11, ADR 0001 §5.1). Für
+alle anderen – auch Admins/Partner ohne Bezug zu diesem Mandanten – ist ein solcher Eintrag
+`{ maskiert: true, pos, at, aktion, objektTyp, objektId, programmId, mandantId, akteurArt, vertraulich: true }`
+ohne Namen, Personen-IDs, Detail und Hashes; lesbare Einträge tragen `maskiert: false`. Ab der ersten für
+den Lesenden maskierten Position sind `prevHash`, `hash` und `kopf.hash` `null`, weil jeder spätere Hash vom
+maskierten Inhalt abhängt und geratene Inhalte bestätigen ließe. Die Hashkette selbst und
+`POST /v1/audit/pruefen` rechnen über die vollständigen Einträge; die Prüfung gibt keine Inhalte aus.
 
 Der Kontext rechnet die Zahlen der Prüfungsvorbereitung (`zeitraum`, nur mit Wirksamkeitszeitraum):
 Durchführungen zählen, wenn ihre Fälligkeit im Zeitraum liegt (mit 60 Tagen Nachlauf); dazu
