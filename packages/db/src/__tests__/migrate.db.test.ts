@@ -344,7 +344,8 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
 
   it('psql sieht nur die Werte seiner Rolle: keine Superuser-URL, keine fremden Passwörter (RT2-T-01)', async () => {
     // Ein psql-Stellvertreter vor dem echten psql protokolliert je Aufruf die
-    // Rolle und die NAMEN der geerbten Umgebungsvariablen (keine Werte).
+    // Rolle, das erste Argument und die NAMEN der geerbten Umgebungsvariablen
+    // (keine Werte).
     const z = await neueDb();
     const ordner = mkdtempSync(join(tmpdir(), 'tcms-psql-env-'));
     const protokoll = join(ordner, 'umgebung.log');
@@ -352,7 +353,7 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
     expect(echt).not.toBe('');
     writeFileSync(
       join(ordner, 'psql'),
-      `#!/bin/sh\n{ printf 'ROLLE=%s\\n' "$PGUSER"; env | cut -d= -f1 | sort | tr '\\n' ' '; printf '\\n'; } >> '${protokoll}'\nexec '${echt}' "$@"\n`,
+      `#!/bin/sh\n{ printf 'ROLLE=%s\\nARG=%s\\n' "$PGUSER" "$1"; env | cut -d= -f1 | sort | tr '\\n' ' '; printf '\\n'; } >> '${protokoll}'\nexec '${echt}' "$@"\n`,
     );
     chmodSync(join(ordner, 'psql'), 0o755);
     try {
@@ -362,18 +363,27 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
       });
       expect(r.code, ausgabe(r)).toBe(0);
       const zeilen = readFileSync(protokoll, 'utf8').trim().split('\n');
-      const aufrufe: { rolle: string; namen: string[] }[] = [];
-      for (let i = 0; i < zeilen.length; i += 2) {
+      const aufrufe: { rolle: string; arg: string; namen: string[] }[] = [];
+      for (let i = 0; i < zeilen.length; i += 3) {
         aufrufe.push({
           rolle: zeilen[i]!.slice('ROLLE='.length),
-          namen: zeilen[i + 1]!.trim().split(' '),
+          arg: zeilen[i + 1]!.slice('ARG='.length),
+          namen: zeilen[i + 2]!.trim().split(' '),
         });
       }
-      const su = aufrufe.filter((a) => a.rolle !== 'tcms_owner');
-      const ow = aufrufe.filter((a) => a.rolle === 'tcms_owner');
+      // Versionsabfrage (psql >= 15): ohne Rolle und ohne jedes Geheimnis.
+      const version = aufrufe.filter((a) => a.arg === '--version');
+      const verbindungen = aufrufe.filter((a) => a.arg !== '--version');
+      expect(version.length).toBe(1);
+      expect(version[0]!.rolle).toBe('');
+      for (const name of ['PGPASSWORD', 'TCMS_DB_OWNER_PASSWORD', 'TCMS_DB_APP_PASSWORD']) {
+        expect(version[0]!.namen).not.toContain(name);
+      }
+      const su = verbindungen.filter((a) => a.rolle !== 'tcms_owner');
+      const ow = verbindungen.filter((a) => a.rolle === 'tcms_owner');
       expect(su.length).toBe(1);
       expect(ow.length).toBeGreaterThanOrEqual(2);
-      for (const a of [...su, ...ow]) {
+      for (const a of aufrufe) {
         expect(a.namen).not.toContain('TCMS_DB_SUPERUSER_URL');
         expect(a.namen).not.toContain('TCMS_DB_OWNER_URL');
         expect(a.namen).not.toContain('TCMS_TEST_FREMD');
@@ -525,6 +535,48 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
     });
     expect(kein.code).toBe(2);
     expect(kein.stderr).toContain('keinen Superuser');
+  });
+
+  it('verlangt psql >= 15 (\\getenv) und prüft das vor jeder Verbindung', async () => {
+    // CI-Lauf 3884: Ubuntu 22.04 lieferte psql 14, der Bootstrap brach erst an
+    // \getenv ab. Ein psql-Stellvertreter meldet die Version und protokolliert
+    // jeden Aufruf; ab 15 reicht er an das echte psql weiter.
+    const z = await neueDb();
+    const echt = (await starte('sh', ['-c', 'command -v psql'], {})).stdout.trim();
+    expect(echt).not.toBe('');
+    const ordner = mkdtempSync(join(tmpdir(), 'tcms-psql-version-'));
+    const protokoll = join(ordner, 'aufrufe.log');
+    const stellvertreter = (version: string) =>
+      writeFileSync(
+        join(ordner, 'psql'),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> '${protokoll}'\n` +
+          `if [ "$1" = --version ]; then printf '%s\\n' '${version}'; exit 0; fi\n` +
+          `exec '${echt}' "$@"\n`,
+        { mode: 0o755 },
+      );
+    const pfad = `${ordner}:${process.env.PATH ?? ''}`;
+    try {
+      for (const [version, meldung] of [
+        ['psql (PostgreSQL) 14.24 (Ubuntu 14.24-0ubuntu0.22.04.1)', /psql 14 ist zu alt/],
+        ['psql (PostgreSQL) 9.6.24', /psql 9 ist zu alt/],
+        ['psql (Fremd) 18.0', /psql-Version nicht erkennbar/],
+      ] as const) {
+        stellvertreter(version);
+        rmSync(protokoll, { force: true });
+        const r = await migriere(z, undefined, SKRIPT, { PATH: pfad });
+        expect(r.code, ausgabe(r)).toBe(69);
+        expect(r.stderr).toMatch(meldung);
+        // Nur die Versionsabfrage, keine Verbindung.
+        expect(readFileSync(protokoll, 'utf8')).toBe('--version\n');
+      }
+      expect(await ledger(z).catch(() => null)).toBeNull();
+      // Grenze: psql 15 genügt.
+      stellvertreter('psql (PostgreSQL) 15.0');
+      const r = await migriere(z, undefined, SKRIPT, { PATH: pfad });
+      expect(r.code, ausgabe(r)).toBe(0);
+    } finally {
+      rmSync(ordner, { recursive: true, force: true });
+    }
   });
 
   it('gleichzeitige Läufe wenden jede Migration genau einmal an', async () => {

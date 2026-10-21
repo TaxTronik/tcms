@@ -579,8 +579,9 @@ docker build --target migrate -t <praefix>/tcms-migrate:1.2.3 .
 (Rolle `tcms_owner`, Passwort darf fehlen), `TCMS_DB_OWNER_PASSWORD` und `TCMS_DB_APP_PASSWORD`. Er ist
 idempotent und bricht ab, wenn eine angewandte Migration eine andere Prüfsumme hat, eine Migration
 unvollständig ist, die Datenbank Migrationen kennt, die das Image nicht kennt, oder die Prüfung scheitert
-(Exit 64 Konfiguration, 2 Bootstrap, 3 Migration, 4 Prüfung). Passwörter gehen nur über die Umgebung an
-psql, nie in eine Kommandozeile oder die Ausgabe. Lokal genügt dafür psql ≥ 15:
+(Exit 64 Konfiguration, 69 psql fehlt oder ist älter als 15, 2 Bootstrap, 3 Migration, 4 Prüfung).
+Passwörter gehen nur über die Umgebung an psql, nie in eine Kommandozeile oder die Ausgabe. Lokal braucht
+er psql ≥ 15 (`\getenv`; ein älteres psql weist er vor jeder Verbindung ab):
 
 ```bash
 TCMS_DB_SUPERUSER_URL=postgresql://postgres@localhost:5433/tcms \

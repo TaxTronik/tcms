@@ -156,6 +156,21 @@ psql_als() {
   )
 }
 
+# Hauptversion von psql; dieselbe geleerte Umgebung wie psql_als, ohne PG*-Werte
+# (auch die Versionsabfrage sieht keine URL und kein Passwort).
+psql_hauptversion() {
+  (
+    local name
+    for name in $(compgen -e); do
+      case $name in
+        PATH | LANG | LC_ALL) ;;
+        *) unset "$name" ;;
+      esac
+    done
+    psql --version 2>/dev/null || true
+  ) | sed -n 's/^psql (PostgreSQL) \([0-9][0-9]*\).*/\1/p'
+}
+
 pruefe_passwort() {
   local name=$1 wert=${!1}
   [[ ${#wert} -ge 1 && ${#wert} -le 1024 ]] || abbruch "$name: Länge 1 bis 1024 Zeichen" 64
@@ -194,6 +209,12 @@ pruefe_passwort TCMS_DB_APP_PASSWORD
   abbruch 'TCMS_DB_OWNER_PASSWORD und TCMS_DB_APP_PASSWORD müssen verschieden sein' 64
 [[ $BASIS != *"'"* ]] || abbruch 'Installationspfad enthält ein Hochkomma' 64
 command -v psql >/dev/null || abbruch 'psql fehlt' 69
+# bootstrap.sql liest die Rollenpasswörter mit \getenv (psql >= 15). Ein
+# älteres psql bräche erst im Bootstrap mit „invalid command“ ab; hier vor
+# jeder Verbindung und mit klarer Ursache.
+PSQL_MAJOR=$(psql_hauptversion)
+[[ $PSQL_MAJOR =~ ^[0-9]+$ ]] || abbruch 'psql-Version nicht erkennbar (psql >= 15 nötig)' 69
+((10#$PSQL_MAJOR >= 15)) || abbruch "psql $PSQL_MAJOR ist zu alt: \\getenv braucht psql >= 15" 69
 
 declare -A SU OW
 zerlege_url "$TCMS_DB_SUPERUSER_URL" SU TCMS_DB_SUPERUSER_URL
