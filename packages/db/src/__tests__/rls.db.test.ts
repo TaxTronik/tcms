@@ -854,7 +854,6 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
         `SET ROLE tcms_owner`,
         recht('permission denied to set role "tcms_owner"'),
       ],
-      ['SET ROLE postgres', `SET ROLE postgres`, recht('permission denied to set role "postgres"')],
       [
         'SET SESSION AUTHORIZATION',
         `SET SESSION AUTHORIZATION tcms_owner`,
@@ -879,6 +878,21 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
       ['Audit löschen', `DELETE FROM "AuditEvent"`, regel.keinRecht('AuditEvent')],
     ])('%s scheitert', async (name, sql, erwartet) => {
       await dbAbgewiesen(roh.query(sql), erwartet, name);
+    });
+
+    // Der Superuser heißt je nach Cluster anders (lokal „postgres“, im
+    // CI-Service „tcms“ = POSTGRES_USER); maßgeblich ist der Bootstrap-
+    // Superuser (OID 10), den es in jedem Cluster gibt.
+    it('SET ROLE auf den Superuser des Clusters scheitert', async () => {
+      const { rows } = await roh.query<{ name: string; befehl: string; superuser: boolean }>(
+        `SELECT rolname AS name, rolsuper AS superuser, format('SET ROLE %I', rolname) AS befehl
+           FROM pg_roles WHERE oid = 10`,
+      );
+      const su = rows[0]!;
+      expect(su.superuser).toBe(true);
+      await dbAbgewiesen(roh.query(su.befehl), recht(`permission denied to set role "${su.name}"`));
+      const { rows: jetzt } = await roh.query<{ rolle: string }>('SELECT current_user AS rolle');
+      expect(jetzt[0]!.rolle).toBe('tcms_app');
     });
 
     it('SET row_security = off führt zu Fehlern statt zu Daten', async () => {
