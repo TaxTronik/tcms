@@ -172,6 +172,7 @@ pruefe_migration() {
   local name=$1 datei=$2
   [[ $name =~ ^[0-9]{14}_[a-z0-9_]+$ ]] || abbruch "Migration mit unzulässigem Namen: $name" 65
   [[ -f $datei && ! -L $datei ]] || abbruch "Migration $name: migration.sql fehlt" 65
+  # shellcheck disable=SC1003 # gesucht ist ein wörtlicher Backslash, kein Escape
   if grep -qF '\' "$datei"; then
     abbruch "Migration $name enthält einen Backslash (psql-Metabefehle sind ausgeschlossen)" 65
   fi

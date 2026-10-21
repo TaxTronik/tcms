@@ -161,6 +161,7 @@ sim_db_entfernen() {
   SIM_DB=''
   SIM_OWNER_PW=''
   SIM_APP_PW=''
+  # shellcheck disable=SC2034 # liest das aufrufende Skript (simuliere-image.sh)
   SIM_DB_URL=''
   return "$status"
 }
