@@ -4,7 +4,11 @@
 // =============================================================================
 
 import { randomBytes, randomUUID } from 'node:crypto';
-import { EreignisDetailSchema, PortalMeldungenSchema } from '@tcms/contract';
+import {
+  EreignisAnlagenJeDokumentSchema,
+  EreignisDetailSchema,
+  PortalMeldungenSchema,
+} from '@tcms/contract';
 import { schreibeAudit } from '@tcms/db';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -15,6 +19,7 @@ import {
   db,
   ereignis,
   F,
+  FALSCH,
   feststellung,
   FRIST,
   GV,
@@ -72,6 +77,15 @@ const faelle: Fall[] = [
       expect(r.status).toBe(201);
       return { pfad: `${B}/ereignisse/${(r.json.daten as { id: string }).id}/anlagen/${sha}` };
     },
+  },
+  {
+    name: 'Ereignis-Anlagen je Dokument',
+    methode: 'GET',
+    erfolg: 200,
+    vorbereiten: async () => ({
+      pfad: `${B}/ereignis-anlagen`,
+      query: `dokumentId=${randomUUID()}`,
+    }),
   },
   {
     name: 'Ereignis erfassen',
@@ -313,6 +327,85 @@ describe.skipIf(!AKTIV)('API Ereignisse und Portal gegen PostgreSQL', () => {
     const a = await rufe(ZBT, 'GET', `${B}/ereignisse/${e.id}/anlagen/${alt[0]!.sha256}`);
     expect(a.status).toBe(200);
     expect(a.json['daten']).toEqual(alt[0]);
+  });
+
+  it('GET ereignis-anlagen?dokumentId= (Abgleich, tcms-s11): Treffer je Ereignis; nur Kanzlei mit Bezug; fremd und unbekannt leer', async () => {
+    const dok = randomUUID();
+    const sha256 = randomBytes(32).toString('hex');
+    const verweis = (dokumentId: string, sha = sha256) => ({
+      dokumentId,
+      dateiname: 'Lagervertrag.pdf',
+      mime: 'application/pdf',
+      groesse: 10,
+      sha256: sha,
+    });
+    const m = await rufe(GV(), 'POST', `${B}/portal/ereignisse`, portalMeldung([verweis(dok)]));
+    expect(m.status).toBe(201);
+    const gemeldet = m.json['daten'] as { id: string; nummer: string };
+    // Meldung beim anderen Mandanten (F) mit eigener Dokument-ID: zählt unter M nicht.
+    const dokF = randomUUID();
+    const ef = await ereignis(w.programmF);
+    await db((tx) =>
+      schreibeAudit(tx, {
+        actorId: P.gv,
+        actorName: 'Testkontakt',
+        aktion: 'tcms.ereignis.gemeldet',
+        objektTyp: 'Ereignis',
+        objektId: ef.id,
+        programmId: w.programmF,
+        detail: { anlagen: [verweis(dokF, randomBytes(32).toString('hex'))] },
+      }),
+    );
+
+    const A = `${B}/ereignis-anlagen`;
+    const ok = await rufe(HB, 'GET', `${A}?dokumentId=${dok.toUpperCase()}`);
+    expect(ok.status).toBe(200);
+    expect(EreignisAnlagenJeDokumentSchema.parse(ok.json['daten'])).toEqual({
+      dokumentId: dok,
+      anlagen: [
+        {
+          ereignisId: gemeldet.id,
+          nummer: gemeldet.nummer,
+          status: 'NEU',
+          sha256,
+          entfernt: false,
+        },
+      ],
+    });
+    // Gegenprobe: beim Mandanten F (Bestätigung mit Bezug F) ist der Verweis da.
+    const beiF = await rufe(
+      FALSCH,
+      'GET',
+      `/v1/mandanten/${F}/ereignis-anlagen?dokumentId=${dokF}`,
+    );
+    expect(beiF.status).toBe(200);
+    expect((beiF.json['daten'] as { anlagen: unknown[] }).anlagen).toHaveLength(1);
+    for (const unbekannt of [randomUUID(), dokF]) {
+      const leer = await rufe(ZBT, 'GET', `${A}?dokumentId=${unbekannt}`);
+      expect(leer.status).toBe(200);
+      expect(leer.json['daten']).toEqual({ dokumentId: unbekannt, anlagen: [] });
+    }
+    // Mandantenkontakt (Register: nur KANZLEI) und falscher Mandant: 404 ohne Detail.
+    for (const [ziel, wer] of [
+      [`${A}?dokumentId=${dok}`, GV()],
+      [`/v1/mandanten/${F}/ereignis-anlagen?dokumentId=${dok}`, ZBT],
+    ] as const) {
+      const r = await rufe(wer, 'GET', ziel);
+      expect(r.status, ziel).toBe(404);
+      expect(r.json).toEqual({ ok: false, fehler: { code: 'NICHT_GEFUNDEN' } });
+    }
+    // Ohne, ungültige (keine UUID), doppelte Dokument-ID oder fremde Parameter: 400.
+    for (const q of [
+      '',
+      '?dokumentId=ab',
+      `?dokumentId=kk:${dok}`,
+      `?dokumentId=${dok}&dokumentId=${dok}`,
+      `?dokumentId=${dok}&stand=2026-10-01`,
+    ]) {
+      const r = await rufe(HB, 'GET', `${A}${q}`);
+      expect(r.status, q).toBe(400);
+      expect(r.json).toMatchObject({ ok: false, fehler: { code: 'UNGUELTIG' } });
+    }
   });
 
   it('Portal-Meldungen: Melderecht (GV ja, Mitarbeitende nein) und Programm vorhanden', async () => {

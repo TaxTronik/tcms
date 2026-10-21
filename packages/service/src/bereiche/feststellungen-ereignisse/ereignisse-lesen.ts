@@ -7,17 +7,23 @@
 // `{ dokumentId, dateiname, mime, groesse, sha256 }` aus dem Audit-Eintrag der
 // Meldung. Detail und Liste geben die `dokumentId` nicht heraus; nur
 // `ladeEreignisAnlage` löst sie nach Rechteprüfung für den Download auf, und
-// der Aufrufer prüft den SHA-256 des Inhalts gegen den Verweis.
+// der Aufrufer prüft den SHA-256 des Inhalts gegen den Verweis. Umgekehrt
+// beantwortet `ladeEreignisAnlagenJeDokument` für eine Dokument-ID der
+// kanzleikonsole, welche Ereignisse dieses Mandanten sie referenzieren
+// (Abgleich „ungeklärter Anlagen“, tcms-s11).
 // =============================================================================
 
 import {
   DienstFehler,
   EreignisAnlageLesenSchema,
+  EreignisAnlagenJeDokumentEingabeSchema,
   EreignisLesenSchema,
   EreignisseLesenSchema,
   type Anlage,
   type AnlageVerweis,
   type EreignisAnlageLesen,
+  type EreignisAnlagenJeDokument,
+  type EreignisAnlagenJeDokumentEingabe,
   type EreignisDetail,
   type EreignisLesen,
   type EreignisListe,
@@ -43,7 +49,10 @@ import {
   text,
 } from './gemeinsam';
 
-const MELDUNG_AKTIONEN = ['tcms.ereignis.gemeldet', 'tcms.ereignis.erfasst'];
+const AKTION_GEMELDET = 'tcms.ereignis.gemeldet';
+const AKTION_ERFASST = 'tcms.ereignis.erfasst';
+/** Audit-Aktionen, deren Detail die Anlagen einer Meldung trägt (einzige Quelle der Anlagen). */
+const MELDUNG_AKTIONEN = [AKTION_GEMELDET, AKTION_ERFASST];
 
 function stichtag(ctx: DienstKontext, stand: string | undefined) {
   const heute = heuteDatum(ctx.uhr);
@@ -444,4 +453,88 @@ export async function ladeEreignisAnlage(
     : undefined;
   if (!anlage) throw new DienstFehler('NICHT_GEFUNDEN');
   return anlage;
+}
+
+// ---------------------------------------------------------------------------
+// Ereignis-Anlagen je Dokument (Abgleich der kanzleikonsole, tcms-s11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ereignisse dieses Mandanten, deren Meldung die Dokument-ID als Anlage nennt
+ * (Gegenstück zu `ladeNachweiseJeDokument`, ADR 0001 §6). Die kanzleikonsole
+ * gibt eine „ungeklärte Anlage“ (Portal-Meldung mit unklarem Ausgang) nur
+ * frei, wenn die Liste leer ist.
+ *
+ * - Nur Kanzleipersonen mit Leserecht (`pruefeKanzleiZugriff`); Kontakte,
+ *   fremde und unbekannte Mandanten → NICHT_GEFUNDEN.
+ * - Die Zugehörigkeit prüft die Abfrage selbst (Meldungs-Audit → Ereignis
+ *   desselben Programms → Programm des Mandanten; RLS trennt nur Tenants):
+ *   Eine Dokument-ID eines anderen Mandanten ergibt dieselbe leere Liste wie
+ *   eine unbekannte (kein Orakel).
+ * - Vergleich ohne Groß-/Kleinschreibung: Die Meldung speichert die ID so, wie
+ *   die kanzleikonsole sie schickte; eine anders geschriebene UUID ist dasselbe
+ *   Dokument. Ein falsches „nicht referenziert“ gäbe ein gebundenes Dokument
+ *   frei, ein zu weiter Treffer hält es nur fest (fail closed).
+ * - Was eine Anlage ist, entscheidet dieselbe Regel wie Detail und Download
+ *   (`anlagenAus`); die SQL-Bedingung grenzt nur vor (Obermenge).
+ * - Ausgabe (RT-01): ID, Nummer und Status des Ereignisses, SHA-256 der Anlage,
+ *   `entfernt`. Ereignisse sind nicht vertraulich (ADR 0001 §10.2); dieselben
+ *   Angaben sieht jede Kanzleiperson mit Leserecht in Liste und Detail, die
+ *   Dokument-ID jeder Anlage über `ladeEreignisAnlage`. Feststellungen aus dem
+ *   Ereignis gehen nicht ein – auch keine Nummer.
+ */
+export async function ladeEreignisAnlagenJeDokument(
+  ctx: DienstKontext,
+  eingabe: EreignisAnlagenJeDokumentEingabe,
+): Promise<EreignisAnlagenJeDokument> {
+  const x = pruefe(EreignisAnlagenJeDokumentEingabeSchema, eingabe);
+  const mandantId = x.mandantId.toLowerCase();
+  // Kanonisch klein (Vertrag); der Vergleich unten verlangt das.
+  const dokumentId = x.dokumentId.toLowerCase();
+  pruefeKanzleiZugriff(ctx, mandantId);
+  await pruefeMandant(ctx.tx, mandantId);
+  const zeilen = await ctx.tx.$queryRaw<
+    {
+      ereignisId: string;
+      nummer: string;
+      status: EreignisListenEintrag['status'];
+      detail: unknown;
+    }[]
+  >`
+    SELECT e.id AS "ereignisId", e.nummer, e.status::text AS status, a.detail
+    FROM "AuditEvent" a
+    JOIN "Ereignis" e
+      ON e.tenant_id = a.tenant_id AND e.id = a."objektId" AND e."programmId" = a."programmId"
+    JOIN "TcmsProgramm" p ON p.tenant_id = e.tenant_id AND p.id = e."programmId"
+    WHERE p."mandantId" = ${mandantId}::uuid
+      AND a."objektTyp" = 'Ereignis'
+      AND a.aktion IN (${AKTION_GEMELDET}, ${AKTION_ERFASST})
+      AND EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(
+          CASE WHEN jsonb_typeof(a.detail -> 'anlagen') = 'array'
+            THEN a.detail -> 'anlagen' ELSE '[]'::jsonb END
+        ) AS el(anlage)
+        WHERE lower(el.anlage ->> 'dokumentId') = ${dokumentId}
+      )
+    ORDER BY e.nummer, e.id, a.pos`;
+  const gesehen = new Set<string>();
+  const anlagen: EreignisAnlagenJeDokument['anlagen'] = [];
+  for (const z of zeilen) {
+    const detail = (z.detail ?? {}) as Record<string, unknown>;
+    for (const a of anlagenAus(detail)) {
+      if (a.dokumentId.toLowerCase() !== dokumentId) continue;
+      const schluessel = `${z.ereignisId}|${a.sha256}`;
+      if (gesehen.has(schluessel)) continue;
+      gesehen.add(schluessel);
+      anlagen.push({
+        ereignisId: z.ereignisId,
+        nummer: z.nummer,
+        status: z.status,
+        sha256: a.sha256,
+        entfernt: false,
+      });
+    }
+  }
+  return { dokumentId, anlagen };
 }

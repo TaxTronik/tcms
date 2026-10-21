@@ -198,6 +198,23 @@ Leserecht): alle Nachweise dieses Mandanten zur Dokument-ID mit ID,
 Durchführung und `entfernt`; eine Dokument-ID eines anderen Mandanten ergibt
 dieselbe leere Liste wie eine unbekannte.
 
+Anlagen einer Ereignis-Meldung stehen als Verweis im Meldungs-Audit
+(unveränderlich, nicht entfernbar). Für sie fragt die kanzleikonsole
+`GET /v1/mandanten/{mandantId}/ereignis-anlagen?dokumentId=` (tcms-s11, nur
+Kanzleipersonen mit Leserecht, `akteure: NUR_KANZLEI`): je Anlage einer Meldung
+dieses Mandanten mit der Dokument-ID Ereignis-ID, Nummer, Status des Ereignisses
+(auch `VERWORFEN`), SHA-256 und `entfernt` (derzeit immer `false`). Eine
+„ungeklärte Anlage“ (Portal-Meldung mit unklarem Ausgang) gibt sie nur bei
+leerer Liste frei. Abfragbar sind nur UUIDs (sonst `400`); der Vergleich mit
+dem gespeicherten Verweis ignoriert Groß-/Kleinschreibung, weil ein verpasster
+Treffer ein gebundenes Dokument freigäbe (fail closed). Fremde und unbekannte
+Dokument-IDs ergeben dieselbe leere Liste. Ereignisse kennen keine
+Vertraulichkeit (§10.2); die Antwort nennt nur, was Ereignisliste und -detail
+derselben Person ohnehin zeigen, und nichts aus Feststellungen, die aus dem
+Ereignis entstanden. Der Pfad ist ein eigenes Segment, weil
+`ereignisse/anlagen` mehrdeutig zu `ereignisse/:ereignisId` wäre (Register und
+Routentabelle weisen mehrdeutige Muster ab).
+
 ## 7. HTTP-Vertrag
 
 - Basis `/v1`. JSON, UTF-8. Body höchstens 256 KiB (`413`). Antworten

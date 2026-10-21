@@ -186,7 +186,14 @@ für KI-Werkzeuge.
   steht zusätzlich im Audit. Einzige Ausnahme ist der Abgleichspfad
   „Nachweise je Dokument" (`GET …/nachweise?dokumentId=`, nur Kanzlei mit
   Leserecht): Er nennt auch entfernte Verweise, aber nur mit ID, Durchführung
-  und `entfernt: true`, und nur die des Mandanten der Anfrage.
+  und `entfernt: true`, und nur die des Mandanten der Anfrage. Gegenstück für
+  Anlagen von Ereignis-Meldungen (Verweise im Meldungs-Audit) ist
+  „Ereignis-Anlagen je Dokument" (`GET …/ereignis-anlagen?dokumentId=`, nur
+  Kanzlei mit Leserecht, nur UUIDs, tcms-s11): Ereignis-ID, Nummer, Status und
+  SHA-256 je Anlage, nur Meldungen des Mandanten der Anfrage; der Vergleich der
+  Dokument-ID ignoriert Groß-/Kleinschreibung (ein verpasster Treffer gäbe ein
+  gebundenes Dokument frei). Die kanzleikonsole gibt eine ungeklärte Anlage nur
+  bei leerer Liste frei.
 - Mandanten-IDs der kanzleikonsole sind nur je Tenant eindeutig (Schlüssel
   `(tenant_id, id)`): Anlegen und Lesen verraten nie, ob es eine ID in einem
   anderen Tenant gibt. Mandanten nur mit `findFirst`/Tenant-Schlüssel lesen.

@@ -29,6 +29,7 @@ import {
   fuegeLandHinzu,
   ladeEreignis,
   ladeEreignisAnlage,
+  ladeEreignisAnlagenJeDokument,
   ladeEreignisse,
   ladeFeststellung,
   ladeFeststellungen,
@@ -132,6 +133,10 @@ export function registriereFeststellungenEreignisse(r: Routen<Tx>): void {
   );
   r.endpunkt(ENDPUNKTE.ereignisAnlageLesen, (c) =>
     ladeEreignisAnlage(dienstKontext(c), { ...erg(c), sha256: p(c, 'sha256') }),
+  );
+  // Abgleich der kanzleikonsole (tcms-s11): Pfadparameter nach der Query.
+  r.endpunkt(ENDPUNKTE.ereignisAnlagenJeDokumentLesen, (c) =>
+    ladeEreignisAnlagenJeDokument(dienstKontext(c), { ...c.query, ...mandant(c) }),
   );
 
   // ------------------------------------------------------------ S11 Schreiben

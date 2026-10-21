@@ -441,6 +441,7 @@ lesbare (RT-01).
 | POST    | `…/{id}/verwerfen/beantragen` · `bestaetigen` · `ablehnen`                                   | `kannBearbeiten`, Bestätigung zweite Person; bei Auswirkung ≠ „NEIN" zusätzlich `kannWuerdigen` |
 | POST    | `massnahmen/{id}/erledigen`                                                                  | `kannBearbeiten` oder verantwortlich                                                            |
 | GET     | `ereignisse`, `ereignisse/{id}`, `ereignisse/{id}/anlagen/{sha256}`                          | Kanzlei mit Bezug                                                                               |
+| GET     | `ereignis-anlagen?dokumentId=` (Abgleich der kanzleikonsole, tcms-s11)                       | Kanzlei mit Bezug (Leserecht); fremde/unbekannte Dokument-ID: leer                              |
 | POST    | `ereignisse` (201), `…/{id}/in-pruefung`, `…/{id}/folgen` (201)                              | `kannBearbeiten`                                                                                |
 | POST    | `…/{id}/folgen/anlegen`, `…/folgen/{folgeId}/verwerfen`, `…/abschliessen`                    | `kannBearbeiten`                                                                                |
 | POST    | `…/folgen/{folgeId}/erledigen`                                                               | `kannBearbeiten` oder zuständig                                                                 |
@@ -456,6 +457,15 @@ genau ein Ereignis – eine Wiederholung (auch gleichzeitig) liefert `201` mit d
 neues Ereignis, Nachricht oder Audit; ein anderer Inhalt ergibt `409` mit `konflikt:
 IDEMPOTENZ_ABWEICHUNG`. So lässt sich eine Meldung mit unklarem Ausgang gefahrlos wiederholen und die
 Anlagen-Bindung abschließen. Nach 24 h gilt der Schlüssel als verbraucht.
+
+`GET ereignis-anlagen?dokumentId=` (tcms-s11) ist das Gegenstück zu `nachweise?dokumentId=` für Anlagen
+von Ereignis-Meldungen: je Anlage einer Meldung dieses Mandanten mit der Dokument-ID `ereignisId`, `nummer`,
+`status` des Ereignisses (auch `VERWORFEN`), `sha256` und `entfernt` (Anlagen stehen im unveränderlichen
+Meldungs-Audit, derzeit immer `false`). Die kanzleikonsole gibt eine „ungeklärte Anlage“ nur bei leerer
+Liste frei. Nur UUIDs (sonst `400`), Vergleich ohne Groß-/Kleinschreibung; Dokument-IDs anderer Mandanten
+und unbekannte ergeben dieselbe leere Liste. Ereignisse sind nicht vertraulich (RT-01 gilt für
+Feststellungen); die Antwort enthält nichts aus Feststellungen. Eigener Pfad, weil `ereignisse/anlagen`
+mehrdeutig zu `ereignisse/{id}` wäre.
 
 `POST …/{id}/weiter` antwortet `409` nur, wenn der Status inzwischen ein anderer als `von` ist
 (gleichzeitige Änderung); ist der Schritt auf dem gesehenen Stand fachlich gesperrt (abgeschlossen, kein

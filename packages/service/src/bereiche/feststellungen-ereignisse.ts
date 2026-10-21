@@ -41,6 +41,7 @@ export {
 export {
   ladeEreignis,
   ladeEreignisAnlage,
+  ladeEreignisAnlagenJeDokument,
   ladeEreignisse,
 } from './feststellungen-ereignisse/ereignisse-lesen';
 export {
