@@ -381,10 +381,14 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
       }
     });
 
-    it('GET /v1/audit (tcms-s11): vertrauliche Feststellung für Admin ohne Bezug maskiert, mit Bezug lesbar; Prüfung intakt', async () => {
+    // tcms-s12, angepasst: Bis tcms-s11 sah ein Admin ohne Bezug die Einträge maskiert und
+    // ohne Kopf-Hash. Produktentscheidung vom 21.10.2026: Die Kanzleileitung liest alles,
+    // unabhängig von Bezug und Beteiligung (hier ist sie an der Feststellung nicht beteiligt).
+    it('GET /v1/audit (tcms-s12): Kanzleileitung liest vertrauliche Einträge ohne, mit fremdem und mit Bezug vollständig; Prüfung intakt', async () => {
       // Eigener Tenant: die Demodaten bleiben unberührt.
       const t = randomUUID();
       const m = randomUUID();
+      const person = randomUUID();
       const geheim = 'Quelle Geheimakte API';
       const f = await mitTenant(t, async (tx) => {
         await tx.mandant.create({ data: { id: m, name: 'Vertraulich GmbH', rechtsform: 'KapG' } });
@@ -403,13 +407,13 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
             schwere: 'HOCH',
             auswirkung: 'JA',
             vertraulich: true,
-            erfasstVon: DEMO_IDS.anna,
+            erfasstVon: person,
           },
         });
         for (const aktion of ['tcms.feststellung.erfasst', 'tcms.feststellung.vertraulich']) {
           await schreibeAudit(tx, {
-            actorId: DEMO_IDS.anna,
-            actorName: 'Anna Geheim',
+            actorId: person,
+            actorName: 'Kanzlei Geheimname',
             aktion,
             objektTyp: 'Feststellung',
             objektId: f.id,
@@ -419,26 +423,48 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
         }
         return f;
       });
-      const ohneBezug = await bestaetigtSenden(app(), {
-        ziel: '/v1/audit',
-        claims: anna({ tnt: t, cli: undefined }),
-      });
-      expect(ohneBezug.status).toBe(200);
-      const roh = await json(ohneBezug);
-      const daten = AuditListeAntwortSchema.parse(roh['daten']);
-      expect(daten.eintraege).toHaveLength(2);
-      for (const e of daten.eintraege) {
-        expect(e).toMatchObject({ maskiert: true, objektId: f.id, vertraulich: true });
+      for (const [name, c] of [
+        ['ohne Bezug', anna({ tnt: t, cli: undefined })],
+        ['fremder Bezug', anna({ tnt: t, cli: { id: randomUUID(), bt: true, hb: false } })],
+        ['Bezug ohne Zuständigkeit', anna({ tnt: t, cli: { id: m, bt: false, hb: false } })],
+        [
+          'Admin ohne BT-Rolle, ohne Bezug',
+          anna({ tnt: t, sub: randomUUID(), rol: { adm: true, bt: false }, cli: undefined }),
+        ],
+      ] as const) {
+        const r = await bestaetigtSenden(app(), { ziel: '/v1/audit', claims: c });
+        expect(r.status, name).toBe(200);
+        const roh = await json(r);
+        const daten = AuditListeAntwortSchema.parse(roh['daten']);
+        expect(daten.eintraege, name).toHaveLength(2);
+        for (const e of daten.eintraege) {
+          expect(e, name).toMatchObject({
+            maskiert: false,
+            objektId: f.id,
+            actorId: person,
+            actorName: 'Kanzlei Geheimname',
+            detail: { quelle: geheim },
+            hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+            prevHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+          });
+        }
+        expect(daten.kopf?.hash, name).toMatch(/^[0-9a-f]{64}$/);
       }
-      expect(daten.kopf?.hash).toBeNull();
-      expect(JSON.stringify(roh)).not.toContain('Geheim');
-      const mitBezug = await bestaetigtSenden(app(), {
+      // Ohne Verwaltungsrecht weiterhin kein Audit (403), auch als Beteiligte mit Bezug.
+      const beteiligt = await bestaetigtSenden(app(), {
         ziel: '/v1/audit',
-        claims: anna({ tnt: t, cli: { id: m, bt: true, hb: false } }),
+        claims: anna({
+          tnt: t,
+          sub: person,
+          rol: { adm: false, bt: true },
+          cli: { id: m, bt: true, hb: false },
+        }),
       });
-      const offen = AuditListeAntwortSchema.parse((await json(mitBezug))['daten']);
-      expect(offen.eintraege.map((e) => e.maskiert)).toEqual([false, false]);
-      expect(offen.kopf?.hash).toMatch(/^[0-9a-f]{64}$/);
+      expect(beteiligt.status).toBe(403);
+      expect(await json(beteiligt)).toMatchObject({
+        ok: false,
+        fehler: { code: 'NICHT_BERECHTIGT', grund: 'VERWALTUNG' },
+      });
       const pruefung = await bestaetigtSenden(app(), {
         methode: 'POST',
         ziel: '/v1/audit/pruefen',

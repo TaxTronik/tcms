@@ -10,8 +10,8 @@
 // Ergebnisse sind JSON (ISO-Strings, Listen); Personen nur als IDs, Namen
 // über `ctx.personen` (im Dienst leer). Vertrauliche Feststellungen sind für
 // Nicht-Beteiligte maskiert (`kannVertraulichLesen` mit `beteiligteVon`, eine
-// Regel für alle Lesepfade): nur ID, Nummer und Status wie im dedizierten
-// Lesepfad, ohne Titel und Schwere (RT-01).
+// Regel für alle Lesepfade; die Kanzleileitung liest alle, tcms-s12): nur ID,
+// Nummer und Status wie im dedizierten Lesepfad, ohne Titel und Schwere (RT-01).
 // =============================================================================
 
 import {

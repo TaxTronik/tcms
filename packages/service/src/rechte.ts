@@ -7,6 +7,9 @@
 //   - Kanzleipersonen handeln nur für den Mandanten, den die kanzleikonsole in
 //     der Akteursbestätigung bestätigt (`cli`); ohne `cli` oder bei einem
 //     anderen Mandanten gibt es kein Recht, auch nicht für Admins (TS-03).
+//     Einzige Ausnahme: Die Kanzleileitung liest vertrauliche Inhalte auch ohne
+//     Bezug (`liestAlleVertraulichen`, tcms-s12); einen Mandantenpfad öffnet
+//     das nicht (`kannLesen`), Schreibrechte gibt es daraus keine.
 //   - Mandantenkontakte brauchen eine aktive Rolle beim eigenen Mandanten
 //     (MandantKontaktRolle); ohne aktive Rolle kein Zugriff.
 //   - IDs werden ohne Rücksicht auf Groß-/Kleinschreibung verglichen, damit
@@ -186,22 +189,41 @@ export function beteiligteVon(f: {
 }
 
 /**
- * Vertrauliche Feststellungen (Fachkonzept §13) nur für Beteiligte: Admin,
+ * Kanzleileitung (Produktentscheidung Rey Koxha, 21.10.2026, tcms-s12):
+ * Kanzleiperson mit Verwaltungsrecht (`kannVerwalten`, `rol.adm` – in der
+ * kanzleikonsole ADMIN und PARTNER) liest alle vertraulichen Inhalte auf allen
+ * Lesepfaden (Feststellungen samt Maßnahmen, Begründungen und
+ * §-153-Entscheidungen; Kontext, Länder-Monitor, Kennzahlen, Durchführung,
+ * Arbeitskorb, Audit mit Namen, Details und Hashes), unabhängig von
+ * Beteiligung und Mandantenbezug (`cli`). Einzige Quelle dieser Regel; sie gibt
+ * nur Leserecht auf Inhalte: Ob ein Mandantenpfad überhaupt erreichbar ist,
+ * entscheidet weiter `kannLesen` (mit `cli`), und Schreibrechte
+ * (`kannBearbeiten`, `kannWuerdigen`, …) entstehen daraus nie.
+ */
+export function liestAlleVertraulichen(a: Akteur): boolean {
+  return kannVerwalten(a);
+}
+
+/**
+ * Vertrauliche Feststellungen (Fachkonzept §13): die Kanzleileitung immer
+ * (`liestAlleVertraulichen`, tcms-s12); alle anderen nur als Beteiligte –
  * zuständige:r Berufsträger:in, Hauptbearbeitung und die beteiligten Personen
- * (erfassend, würdigend, verantwortlich) – jeweils mit Bezug zum Mandanten.
- * Ohne Bezug (`cli`) gibt es kein Recht, auch nicht für Admins im
- * tenantweiten Audit (tcms-s11): Ob die Person den Mandanten noch betreut,
- * weiß nur die kanzleikonsole.
+ * (`beteiligteVon`: erfassend, würdigend, Verwerfen beantragend,
+ * verantwortlich), jeweils mit Bezug zum Mandanten. Ohne Bezug (`cli`) sieht
+ * außer der Kanzleileitung niemand Inhalte, auch keine persönlich Beteiligten:
+ * Ob die Person den Mandanten noch betreut, weiß nur die kanzleikonsole (fail
+ * closed). Einzige Regel für alle Lesepfade und die Prüfung der
+ * Schreiboperationen (`VERTRAULICH`).
  */
 export function kannVertraulichLesen(
   a: Akteur,
   mandantId: string,
   beteiligte: readonly string[],
 ): boolean {
+  if (liestAlleVertraulichen(a)) return true;
   const bezug = mandantBezug(a, mandantId);
   if (!bezug || a.art !== 'KANZLEI') return false;
   return (
-    a.istAdmin ||
     bezug.zustaendigBerufstraeger ||
     bezug.hauptbearbeitung ||
     beteiligte.some((id) => gleicheId(id, a.id))

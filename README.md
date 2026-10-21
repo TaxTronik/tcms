@@ -321,12 +321,15 @@ und Zuständigkeit ergänzt die kanzleikonsole):
 | PUT     | `/v1/mandanten/:mandantId`                                   | `kannBearbeiten`; Anker anlegen/aktualisieren, auditiert                                             |
 | GET     | `/v1/mandanten/:mandantId/kontakte`                          | Kanzleiperson mit `cli`; `rechte.bearbeiten` wie PUT                                                 |
 | PUT     | `/v1/mandanten/:mandantId/kontakte`                          | `kannBearbeiten`; Rollen eines Kontakts setzen/deaktivieren, auditiert                               |
-| GET     | `/v1/audit?programmId=&mandantId=&aktion=&nach=&vor=&limit=` | Admin/Partner; höchstens 500 je Seite; Cursor = Position `pos`; vertrauliche Feststellungen maskiert |
+| GET     | `/v1/audit?programmId=&mandantId=&aktion=&nach=&vor=&limit=` | Admin/Partner; höchstens 500 je Seite; Cursor = Position `pos`; Vertrauliches lesbar (§ 5, tcms-s12) |
 | POST    | `/v1/audit/pruefen`                                          | Admin/Partner; Kette seitenweise, Zeitbudget 20 s, Fortsetzung `ab`                                  |
 
 Das Audit zeigt Einträge zu vertraulichen Feststellungen und ihren Maßnahmen nur Personen, die die
-Feststellung lesen dürfen (`kannVertraulichLesen` mit dem `cli` der Anfrage, tcms-s11, ADR 0001 §5.1). Für
-alle anderen – auch Admins/Partner ohne Bezug zu diesem Mandanten – ist ein solcher Eintrag
+Feststellung lesen dürfen (`kannVertraulichLesen` mit dem `cli` der Anfrage, tcms-s11, ADR 0001 §5.1). Die
+Kanzleileitung (Admins/Partner) liest alles, auch ohne `cli`: alle Einträge mit Namen, Personen-IDs, Detail
+und allen Hashes (Produktentscheidung vom 21.10.2026, tcms-s12, ADR 0001 §5). Weil heute nur sie das Audit
+liest, enthält die Liste derzeit keine maskierten Einträge. Für einen künftigen Lesepfad anderer Personen
+bleibt die Maskierung erhalten: Ein solcher Eintrag ist dann
 `{ maskiert: true, pos, at, aktion, objektTyp, objektId, programmId, mandantId, akteurArt, vertraulich: true }`
 ohne Namen, Personen-IDs, Detail und Hashes; lesbare Einträge tragen `maskiert: false`. Ab der ersten für
 den Lesenden maskierten Position sind `prevHash`, `hash` und `kopf.hash` `null`, weil jeder spätere Hash vom
@@ -439,7 +442,10 @@ liefert der Dienst für Nicht-Beteiligte nur maskiert (`maskiert: true`, Nummer 
 Antwort gleich (Feststellungen, Kontext, Kontrollen, Durchführung, Ereignis): keine Steuerwirkung,
 keine §-153-Angaben, keine Schwere. Kennzahlen (Portfolio, Lücken) zählen vertrauliche Feststellungen
 nur, wo die Zahl aus Sichtbarem folgt (Status, Zahl der Maßnahmen); §-153 und Schwere zählen nur
-lesbare (RT-01).
+lesbare (RT-01). Lesen dürfen sie zuständige BT, Hauptbearbeitung und Beteiligte mit `cli` – und die
+Kanzleileitung (Admins/Partner) immer, auf jedem Lesepfad, ohne Beteiligung und ohne Bezug
+(`kannVertraulichLesen`, `liestAlleVertraulichen`; Produktentscheidung vom 21.10.2026, tcms-s12).
+Mandantenpfade bleiben an `cli` gebunden; Schreibrechte ändern sich dadurch nicht.
 
 | Methode | Pfad                                                                                         | Recht                                                                                           |
 | ------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
@@ -491,7 +497,8 @@ Zustand entgegensteht (`409`); im historischen Stand nie erlaubt. `GET portal/er
 aus seinen Merkmalen): aktive Risiken mit Länderbezug (Code und Grund: Fernverkäufe, Steuersätze, OSS,
 Lager, ZM), Codes der aktiven Kontrollen an diesen Risiken und IDs der Ereignisse bis zum Stichtag, die
 das Land (Code oder Name) in Titel oder Beschreibung nennen. Feststellungen gehen in die Bezüge nicht
-ein; `feststellungen` enthält nur nicht vertrauliche (RT-01).
+ein; `feststellungen` enthält vertrauliche nur für die Kanzleileitung, für alle anderen nie (RT-01,
+tcms-s12).
 
 **Endpunkte Programm, Beschreibung, Freigaben, Postausgang** (`…` = `/v1/mandanten/:mandantId`;
 Rechte prüft `packages/service`, Eingaben und Antworten in

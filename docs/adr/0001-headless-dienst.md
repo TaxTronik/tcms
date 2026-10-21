@@ -183,24 +183,56 @@ beginnt mit dieser Stufe neu (eine neue Init-Migration ersetzt die bisherige).
     Zuweisung).
   - `kannBearbeiten`: `KANZLEI` und (`rol.adm` oder `cli.bt` oder `cli.hb`).
   - `kannWuerdigen` (§ 153): `rol.bt` und (`rol.adm` oder `cli.bt`).
+  - `kannVertraulichLesen` (vertrauliche Feststellungen, Fachkonzept §13):
+    Kanzleileitung (`rol.adm`) immer, sonst `KANZLEI` mit `cli.id == mandantId`
+    und (`cli.bt` oder `cli.hb` oder beteiligt nach `beteiligteVon`).
   - Vier-Augen-Regeln unverändert (Personen-IDs verglichen).
+- **Kanzleileitung liest alles** (Produktentscheidung Rey Koxha, 21.10.2026,
+  tcms-s12): Eine Kanzleiperson mit Verwaltungsrecht (`rol.adm`, in der
+  kanzleikonsole ADMIN und PARTNER; `liestAlleVertraulichen` in `rechte.ts`,
+  gleichbedeutend mit `kannVerwalten`) liest vertrauliche Feststellungen samt
+  Maßnahmen, Begründungen und §-153-Entscheidungen auf allen Lesepfaden –
+  Feststellungen (Liste, Detail), Kontext mit Kennzahlen und Zeitraumzahlen,
+  Kontrollen, Durchführung, Portfolio, Arbeitskorb, Länder-Monitor und
+  tenantweites Audit mit Namen, Details und allen Hashes (§5.1) –, unabhängig
+  von Beteiligung und Mandantenbezug. Die Regel gibt es genau einmal:
+  `kannVertraulichLesen` fragt sie zuerst ab, die Beteiligten bestimmt nur
+  `beteiligteVon`; jeder Lesepfad nutzt diese beiden Funktionen. Sie gibt nur
+  Leserecht auf Inhalte: Mandantenpfade bleiben an `cli` gebunden (§3.3,
+  `kannLesen`), Schreibrechte (`kannBearbeiten`, `kannWuerdigen`, Vier-Augen,
+  `VERTRAULICH`) ändern sich nicht. Für alle anderen gilt RT-01 unverändert
+  (nur Beteiligte, Maskierung wie bisher). Pfade ohne maskierte Variante – die
+  Feststellungen des Länder-Monitors und Titel und Begründung vertraulicher
+  Verwerfen-Anträge im Arbeitskorb – zeigen vertrauliche Inhalte nur der
+  Kanzleileitung und allen anderen weiterhin nie, auch Beteiligten nicht; die
+  CMS-Beschreibung (Bausteine, Snapshots für den Mandanten) nimmt vertrauliche
+  Feststellungen für niemanden auf. Die Entscheidung ist eine
+  Produktentscheidung; eine fachliche Prüfung gegen Fachkonzept §13 ist damit
+  nicht verbunden.
 
-### 5.1 Vertrauliche Feststellungen im Audit (tcms-s11)
+### 5.1 Vertrauliche Feststellungen im Audit (tcms-s11, geändert tcms-s12)
 
 Das tenantweite Audit (`GET /v1/audit`, `POST /v1/audit/pruefen`) lesen nur
 Admins/Partner (`kannVerwalten`), meist ohne `cli`. Bis tcms-s11 sahen sie dort
 alle Details, auch zu vertraulichen Feststellungen (Quelle, Klasse, Schwere,
 Auswirkung, §-153-Entscheidung, Begründungen, Maßnahmentexte, Namen und IDs der
-handelnden Personen). Entscheidung:
+handelnden Personen). tcms-s11 maskierte diese Einträge für Admins ohne Bezug;
+seit der Produktentscheidung vom 21.10.2026 (tcms-s12, §5) liest die
+Kanzleileitung wieder alles. Entscheidung:
 
 - **Wer Inhalte sieht:** dieselbe Regel wie der Lesepfad der Feststellung,
   `kannVertraulichLesen(akteur, mandant, beteiligteVon(f))` mit dem
-  Mandantenbezug der Anfrage (`cli`). Ohne Bezug zu genau diesem Mandanten sieht
-  niemand Inhalte – auch keine Admins und keine persönlich Beteiligten (ob sie den
-  Mandanten noch betreuen, weiß nur die kanzleikonsole; fail closed). Mit Bezug
-  gehören Admin, zuständige:r BT und Hauptbearbeitung nach Fachkonzept §13 zum
-  Kreis; das Audit zeigt nie mehr als `GET …/feststellungen/{id}` derselben
-  Person.
+  Mandantenbezug der Anfrage (`cli`). Die Kanzleileitung sieht alles, auch ohne
+  oder mit fremdem Bezug: alle Einträge mit Namen, IDs und Details und alle
+  Hashes (tcms-s12). Da heute nur sie das Audit liest, enthält die Liste derzeit
+  keine maskierten Einträge; die Maskierung unten bleibt für einen künftigen
+  Lesepfad anderer Personen erhalten und getestet (`leseAuditSeite`, die Seite
+  ohne Verwaltungsprüfung, nur intern). Für alle anderen gilt: Ohne Bezug zu
+  genau diesem Mandanten sieht niemand Inhalte – auch keine persönlich
+  Beteiligten (ob sie den Mandanten noch betreuen, weiß nur die kanzleikonsole;
+  fail closed). Mit Bezug gehören zuständige:r BT und Hauptbearbeitung nach
+  Fachkonzept §13 zum Kreis; das Audit zeigt ihnen nie mehr als
+  `GET …/feststellungen/{id}` derselben Person.
 - **Was maskiert wird:** jeder Eintrag zu einer heute vertraulichen Feststellung
   (`objektTyp` `Feststellung`) und zu ihren Maßnahmen (`Massnahme`), auch aus der
   Zeit vor der Markierung. Andere Einträge, die nur die Nummer nennen
@@ -226,9 +258,11 @@ handelnden Personen). Entscheidung:
   ein Bruch an einem vertraulichen Eintrag ist mit `bruchBei` erkennbar.
 
 Getestet in `packages/service/src/bereiche/lesepfade/audit-vertraulich.db.test.ts`
-(Admin ohne Bezug, Admin mit fremdem Bezug, persönlich Beteiligte ohne Bezug,
-Beteiligte mit Bezug, Nicht-Admins, Kettenprüfung, Fälschung) und
-`apps/api/src/routen/lesepfade.db.test.ts`.
+(Kanzleileitung ohne und mit fremdem Bezug: alles; Unbeteiligte und persönlich
+Beteiligte ohne oder mit fremdem Bezug: maskiert; Beteiligte mit Bezug,
+Nicht-Admins, Kettenprüfung, Fälschung), in
+`packages/service/src/bereiche/lesepfade/kanzleileitung.db.test.ts` (alle
+Lesepfade, tcms-s12) und in `apps/api/src/routen/lesepfade.db.test.ts`.
 
 ## 6. Nachweise
 
@@ -589,10 +623,13 @@ Kontexts innerhalb derselben Transaktion.
   Durchführung mit Befund, die für eine Nachkontrolle gewählte Kontrolle.
   Eine eingefrorene CMS-Beschreibung (Snapshot, unveränderlich) behält eine
   Feststellung, die erst nach dem Einfrieren vertraulich wurde; neue Versionen
-  nehmen vertrauliche Feststellungen nie auf. Im tenantweiten Audit sehen
-  Admins/Partner Inhalte vertraulicher Feststellungen nur mit Bezug zu diesem
-  Mandanten (§5.1, tcms-s11); mit Bezug gehören sie nach Fachkonzept §13 zum
-  Kreis der Beteiligten.
+  nehmen vertrauliche Feststellungen nie auf. Die Kanzleileitung
+  (Admins/Partner) liest seit tcms-s12 alle vertraulichen Inhalte auf allen
+  Lesepfaden, im tenantweiten Audit auch ohne Bezug (§5, §5.1). Gegenüber der
+  Kanzleileitung schützt die Vertraulichkeit damit nicht mehr: Wer in der
+  kanzleikonsole ADMIN oder PARTNER ist (`rol.adm` der Akteursbestätigung), liest
+  jede vertrauliche Feststellung des Tenants; die kanzleikonsole vergibt diese
+  Rollen entsprechend eng.
 - **Hash im Ereignisdetail (tcms-s11).** `GET …/ereignisse/{id}` nennt den Hash
   des Meldungs-Audits (`meldung.hash`) jeder Kanzleiperson mit Leserecht. Liegt
   ein maskierter Eintrag unmittelbar zwischen zwei Einträgen mit bekanntem Hash
@@ -601,4 +638,6 @@ Kontexts innerhalb derselben Transaktion.
   Aktion, Objekt-ID und Person mitgeraten werden, und die Nachbarschaft in der
   Kette ist nicht steuerbar. Nicht behoben (Vertragsänderung außerhalb des
   Audits); bei Bedarf `meldung.hash` nur ausgeben, wenn davor kein für den
-  Lesenden maskierter Eintrag liegt.
+  Lesenden maskierter Eintrag liegt. Seit tcms-s12 liest nur die Kanzleileitung
+  das Audit, und sie sieht keine maskierten Einträge; das Restrisiko lebt wieder
+  auf, sobald ein Audit-Lesepfad für andere Personen dazukommt.

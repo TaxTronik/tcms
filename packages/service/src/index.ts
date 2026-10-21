@@ -49,6 +49,7 @@ export {
   kannVerwalten,
   kannVerwerfenBestaetigen,
   kannWuerdigen,
+  liestAlleVertraulichen,
   mandantBezug,
   zweitePerson,
   type Auswirkung,

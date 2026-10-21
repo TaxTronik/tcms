@@ -7,10 +7,10 @@ import { demoAkteur } from './sitzung';
 
 // =============================================================================
 // Länder-Monitor (Fachkonzept S12, §4 P2/P3/P9/P10, §5 EC-UST-01…-06, EC-ERT):
-// Historie der Länderstände, Bezug zu Feststellungen (nur nicht vertrauliche)
-// und die Bezüge zu Risiken, Kontrollen und Ereignissen kommen aus dem
-// Service-Lader (`ladeLaender`, Regeln im Service); die Demo ordnet die Codes
-// und IDs nur den Objekten des Tax-CMS-Kontexts zu.
+// Historie der Länderstände, Bezug zu Feststellungen (vertrauliche nur für die
+// Kanzleileitung, tcms-s12) und die Bezüge zu Risiken, Kontrollen und
+// Ereignissen kommen aus dem Service-Lader (`ladeLaender`, Regeln im Service);
+// die Demo ordnet die Codes und IDs nur den Objekten des Tax-CMS-Kontexts zu.
 // =============================================================================
 
 export { registrierungVon } from '@tcms/service';
@@ -53,9 +53,9 @@ export interface LaenderDetail {
 const tag = (iso: string) => new Date(iso.length === 10 ? `${iso}T00:00:00Z` : iso);
 
 /**
- * Alle Länderstände bis zum Stichtag (neueste zuerst) und nicht vertrauliche
- * Feststellungen mit Länderbezug, über den Service-Lader im Dienstkontext der
- * angemeldeten Person. Ohne Zugriff: leer.
+ * Alle Länderstände bis zum Stichtag (neueste zuerst) und Feststellungen mit
+ * Länderbezug (vertrauliche nur für die Kanzleileitung), über den Service-Lader
+ * im Dienstkontext der angemeldeten Person. Ohne Zugriff: leer.
  */
 export async function ladeLaenderDetail(
   mandantId: string,

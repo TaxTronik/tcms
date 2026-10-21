@@ -34,6 +34,7 @@ import {
   kannBearbeiten,
   kannGegenzeichnen,
   kannWuerdigen,
+  liestAlleVertraulichen,
   zweitePerson,
 } from '../../rechte';
 import { alsJson, antwortNach } from './hilfen';
@@ -170,6 +171,10 @@ export async function ladeArbeitskorb(
     mandantenZustaendig: 0,
   };
 
+  // Titel und Begründung vertraulicher Feststellungen in Verwerfen-Anträgen nur
+  // für die Kanzleileitung (tcms-s12); für alle anderen ohne beides wie bisher
+  // (Fachkonzept §13 – der Eintrag hat keine maskierte Variante).
+  const vertraulichLesbar = liestAlleVertraulichen(ctx.akteur);
   for (const { k: c, nutzer } of kontexte) {
     if (nutzer.art !== 'KANZLEI' || !nutzer.mandant) continue;
     const m = c.mandant;
@@ -272,15 +277,17 @@ export async function ladeArbeitskorb(
       }
       for (const f of verwerfen.filter((x) => x.programmId === c.programm!.id)) {
         if (!zweitePerson(nutzer, f.verwerfenBeantragtVon)) continue;
+        const ohneInhalt = f.vertraulich && !vertraulichLesbar;
         korb.vierAugen.push({
           mandant,
           art: 'VERWERFEN',
           key: f.id,
           objektId: f.id,
-          // Vertrauliche Feststellungen ohne Titel und Begründung (Fachkonzept §13).
-          titel: `${f.nummer} · ${f.vertraulich ? 'vertrauliche Feststellung' : f.titel}`,
+          // Vertrauliche Feststellungen ohne Titel und Begründung (Fachkonzept §13),
+          // außer für die Kanzleileitung (tcms-s12).
+          titel: `${f.nummer} · ${ohneInhalt ? 'vertrauliche Feststellung' : f.titel}`,
           detail: 'Feststellung verwerfen',
-          begruendung: f.vertraulich ? null : f.verwerfenBegruendung,
+          begruendung: ohneInhalt ? null : f.verwerfenBegruendung,
           beantragtVon: f.verwerfenBeantragtVon ? [f.verwerfenBeantragtVon] : [],
           beantragtAm: null,
         });
@@ -314,7 +321,8 @@ export async function ladeArbeitskorb(
     // ---- §-153-Würdigungen ----
     // Nur lesbare Feststellungen (RT-01): Maskierte tragen keine Steuerwirkung.
     // Wer zuständig ist (BT oder Hauptbearbeitung), gehört ohnehin zum Kreis
-    // der Beteiligten (`kannVertraulichLesen`) und sieht alle.
+    // der Beteiligten (`kannVertraulichLesen`) und sieht alle, ebenso die
+    // Kanzleileitung (tcms-s12).
     const p153 = c.feststellungen.filter((f): f is FeststellungView => !f.maskiert && f.p153Offen);
     if (p153.length > 0) {
       if (kannWuerdigen(nutzer, m.id) && zustaendig) {

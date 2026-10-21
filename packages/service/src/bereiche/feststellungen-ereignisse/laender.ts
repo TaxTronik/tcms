@@ -35,7 +35,7 @@ import type { Protokoll } from '../../audit';
 import { ladeKontext, type EreignisView, type TcmsKontext } from '../../kern/tcms-kontext';
 import { heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
-import { kannBearbeiten } from '../../rechte';
+import { kannBearbeiten, liestAlleVertraulichen } from '../../rechte';
 import { legeEreignisAn } from './ereignisse';
 import {
   alsTag,
@@ -135,8 +135,8 @@ export function ereignisseZumLand(
 /**
  * Bezüge je Land aus dem Kontext zum Stichtag: aktive Risiken (Code und
  * Grund), Codes der aktiven Kontrollen an diesen Risiken, IDs der Ereignisse
- * bis zum Stichtag. Feststellungen gehen nicht ein (die nicht vertraulichen
- * stehen in `feststellungen`, vertrauliche nie – RT-01).
+ * bis zum Stichtag. Feststellungen gehen nicht ein (sie stehen in
+ * `feststellungen`, vertrauliche nur für die Kanzleileitung – RT-01, tcms-s12).
  */
 export function laenderBezuege(
   k: Pick<TcmsKontext, 'risiken' | 'kontrollen' | 'ereignisse'>,
@@ -162,9 +162,12 @@ export function laenderBezuege(
 // ---------------------------------------------------------------------------
 
 /**
- * Alle Länderstände bis zum Stichtag (je Land neueste zuerst) und nicht
- * vertrauliche Feststellungen mit Länderbezug (Erklärungen oder Ländercode im
- * Titel). Vertrauliche Feststellungen erscheinen hier nie.
+ * Alle Länderstände bis zum Stichtag (je Land neueste zuerst) und
+ * Feststellungen mit Länderbezug (Erklärungen oder Ländercode im Titel).
+ * Vertrauliche Feststellungen erscheinen hier nur für die Kanzleileitung
+ * (`liestAlleVertraulichen`, tcms-s12); für alle anderen nie – auch nicht für
+ * Beteiligte, denn die Einträge haben keine maskierte Variante und schon der
+ * Länderbezug ist Inhalt (RT-01, unverändert).
  */
 export async function ladeLaender(ctx: DienstKontext, eingabe: LaenderLesen): Promise<Laender> {
   const x = pruefe(LaenderLesenSchema, eingabe);
@@ -188,7 +191,10 @@ export async function ladeLaender(ctx: DienstKontext, eingabe: LaenderLesen): Pr
       orderBy: [{ stand: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
     }),
     ctx.tx.feststellung.findMany({
-      where: { programmId: programm.id, vertraulich: false },
+      where: {
+        programmId: programm.id,
+        ...(liestAlleVertraulichen(ctx.akteur) ? {} : { vertraulich: false }),
+      },
       include: { erklaerungen: { select: { land: true }, orderBy: { id: 'asc' } } },
       orderBy: [{ nummer: 'desc' }, { id: 'desc' }],
     }),

@@ -13,6 +13,7 @@ import {
   kannVerwalten,
   kannVerwerfenBestaetigen,
   kannWuerdigen,
+  liestAlleVertraulichen,
   siehtPortalMeldung,
   zweitePerson,
   type KontaktRolle,
@@ -340,16 +341,45 @@ describe('Steuerliche Auswirkung beim Anlegen (TS-04)', () => {
 // ------------------------------------------------------------ Vertraulich --
 
 describe('Vertrauliche Feststellungen', () => {
-  it('nur Admin, zuständige:r BT, Hauptbearbeitung und Beteiligte – jeweils mit cli', () => {
+  // tcms-s12, angepasst: Bis tcms-s11 galt „Admin nur mit cli“ (ADMIN_OHNE_CLI und
+  // ADMIN_FREMD: false). Produktentscheidung vom 21.10.2026: Die Kanzleileitung liest alles,
+  // unabhängig von Beteiligung und Mandantenbezug.
+  it('Kanzleileitung (rol.adm) liest alle – ohne cli, mit fremdem cli, ohne Zuständigkeit und Beteiligung', () => {
+    for (const a of [ADMIN_BT, ADMIN_OHNE_CLI, ADMIN_FREMD, ADMIN_OHNE_BT]) {
+      expect(liestAlleVertraulichen(a), a.id).toBe(true);
+      for (const m of [M1, M2]) expect(kannVertraulichLesen(a, m, []), `${a.id} ${m}`).toBe(true);
+    }
+  });
+
+  it('alle anderen nur als Beteiligte mit cli: zuständige:r BT, Hauptbearbeitung, beteiligte Personen (RT-01 unverändert)', () => {
     const beteiligte = [KANZLEI_OHNE.id];
-    expect(kannVertraulichLesen(ADMIN_BT, M1, beteiligte)).toBe(true);
     expect(kannVertraulichLesen(BT_ZUST, M1, beteiligte)).toBe(true);
     expect(kannVertraulichLesen(HB, M1, beteiligte)).toBe(true);
     expect(kannVertraulichLesen(KANZLEI_OHNE, M1, beteiligte)).toBe(true);
+    expect(kannVertraulichLesen(KANZLEI_OHNE, M1, [KANZLEI_OHNE.id.toUpperCase()])).toBe(true);
+    expect(kannVertraulichLesen(KANZLEI_OHNE, M1, [])).toBe(false);
     expect(kannVertraulichLesen(BT_OHNE_ZUST, M1, beteiligte)).toBe(false);
-    expect(kannVertraulichLesen(ADMIN_OHNE_CLI, M1, beteiligte)).toBe(false);
-    expect(kannVertraulichLesen(ADMIN_FREMD, M1, beteiligte)).toBe(false);
+    // Persönlich beteiligt oder zuständig, aber ohne bzw. mit fremdem Bezug: nie (fail closed).
+    expect(kannVertraulichLesen(KANZLEI_OHNE_CLI, M1, [KANZLEI_OHNE_CLI.id])).toBe(false);
+    expect(kannVertraulichLesen(BT_ZUST, M2, [BT_ZUST.id])).toBe(false);
+    expect(kannVertraulichLesen(HB, M2, [])).toBe(false);
+    // Mandantenkontakte nie, auch nicht als Beteiligte.
     expect(kannVertraulichLesen(GV, M1, [GV.id])).toBe(false);
+    for (const a of [BT_ZUST, BT_OHNE_ZUST, HB, KANZLEI_OHNE, KANZLEI_OHNE_CLI, GV, TCB, MA]) {
+      expect(liestAlleVertraulichen(a), a.id).toBe(false);
+    }
+  });
+
+  it('Leserecht auf Inhalte gibt weder Zugriff auf Mandantenpfade noch Schreibrechte', () => {
+    for (const a of [ADMIN_OHNE_CLI, ADMIN_FREMD]) {
+      expect(kannLesen(a, M1, ROLLEN), a.id).toBe(false);
+      expect(kannBearbeiten(a, M1), a.id).toBe(false);
+      expect(kannWuerdigen(a, M1), a.id).toBe(false);
+      expect(kannVerwerfenBestaetigen(a, M1, BT_ZUST.id, 'JA').erlaubt, a.id).toBe(false);
+      expect(kannGegenzeichnen(a, K_KANZLEI, M1, HB.id).erlaubt, a.id).toBe(false);
+    }
+    // Mit Bezug, ohne BT-Rolle: würdigen weiterhin nicht (TS-04).
+    expect(kannWuerdigen(ADMIN_OHNE_BT, M1)).toBe(false);
   });
 });
 
@@ -518,6 +548,7 @@ describe('Systemakteur (Stufe 4): keine Personenrechte, auch nicht mit Personen-
       expect(kannWuerdigen(a, M1)).toBe(false);
       expect(kannVerwalten(a)).toBe(false);
       expect(kannVertraulichLesen(a, M1, [a.id])).toBe(false);
+      expect(liestAlleVertraulichen(a)).toBe(false);
       expect(kannDurchfuehren(a, K_KANZLEI, M1, ROLLEN)).toBe(false);
       expect(kannDurchfuehren(a, K_MANDANT, M1, ROLLEN)).toBe(false);
       for (const k of [K_KANZLEI, K_MANDANT, { ...K_KANZLEI, gegenzeichnerId: a.id }]) {

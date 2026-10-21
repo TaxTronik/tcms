@@ -14,19 +14,24 @@
 // begrenzt) und bricht nach `PRUEF_ZEITBUDGET_MS` mit Fortsetzungspunkt ab,
 // unter dem Transaktionslimit von 30 s.
 //
-// Vertraulichkeit (Fachkonzept §13, RT-01, tcms-s11): Einträge zu einer
-// vertraulichen Feststellung und ihren Maßnahmen zeigt die Liste nur Personen,
-// die die Feststellung lesen dürfen (`kannVertraulichLesen` mit dem
+// Vertraulichkeit (Fachkonzept §13, RT-01, tcms-s11, tcms-s12): Einträge zu
+// einer vertraulichen Feststellung und ihren Maßnahmen zeigt die Liste nur
+// Personen, die die Feststellung lesen dürfen (`kannVertraulichLesen` mit dem
 // Mandantenbezug der Anfrage – dieselbe Regel wie der Lesepfad der
-// Feststellung). Alle anderen, auch Admins/Partner ohne Bezug zu diesem
-// Mandanten, erhalten eine maskierte Variante (Positivliste: Position,
-// Zeitpunkt, Ereignisart, Objekt, Mandant, Akteursart, „vertraulich“) und ab
-// der ersten für sie maskierten Position keine Hashes mehr: Jeder spätere
-// Hash hängt vom maskierten Inhalt ab, und Inhalte mit wenigen möglichen
-// Werten (§-153-Entscheidung, Auswirkung, Schwere) ließen sich damit offline
-// bestätigen. Hashes entstehen unverändert über die vollständigen Einträge;
-// die Kettenprüfung liest sie vollständig und gibt keine Inhalte aus (Status,
-// Zahlen, Positionen, feste Gründe).
+// Feststellung). Die Kanzleileitung (Admins/Partner, `liestAlleVertraulichen`)
+// liest alles, auch ohne Bezug: alle Einträge mit Namen und Details, alle
+// Hashes (Produktentscheidung vom 21.10.2026). Da heute nur sie das Audit liest
+// (`kannVerwalten`), ist die Maskierung derzeit ohne Leser; sie bleibt für
+// einen künftigen Lesepfad anderer Personen erhalten und getestet
+// (`leseAuditSeite`): Wer die Feststellung nicht lesen darf, erhält eine
+// maskierte Variante (Positivliste: Position, Zeitpunkt, Ereignisart, Objekt,
+// Mandant, Akteursart, „vertraulich“) und ab der ersten für ihn maskierten
+// Position keine Hashes mehr: Jeder spätere Hash hängt vom maskierten Inhalt
+// ab, und Inhalte mit wenigen möglichen Werten (§-153-Entscheidung,
+// Auswirkung, Schwere) ließen sich damit offline bestätigen. Hashes entstehen
+// unverändert über die vollständigen Einträge; die Kettenprüfung liest sie
+// vollständig und gibt keine Inhalte aus (Status, Zahlen, Positionen, feste
+// Gründe).
 // =============================================================================
 
 import {
@@ -156,15 +161,30 @@ async function kontaktIds(ctx: DienstKontext, ids: readonly string[]): Promise<S
 }
 
 /**
- * Eine Seite des Audits; aufsteigend (`nach`) oder absteigend (`vor`).
- * Einträge zu vertraulichen Feststellungen, die der Akteur nicht lesen darf,
- * maskiert; Hashes erst ab der ersten maskierten Position verborgen (Kopf).
+ * Eine Seite des Audits (`GET /v1/audit`) für Admins/Partner (`kannVerwalten`);
+ * aufsteigend (`nach`) oder absteigend (`vor`). Die Kanzleileitung liest alle
+ * Einträge vollständig (tcms-s12).
  */
 export async function ladeAudit(
   ctx: DienstKontext,
   eingabe: AuditListeEingabe,
 ): Promise<AuditListeAntwort> {
   nurAdmin(ctx);
+  return leseAuditSeite(ctx, eingabe);
+}
+
+/**
+ * Eine Seite des Audits ohne die Verwaltungsprüfung: Einträge zu vertraulichen
+ * Feststellungen, die der Akteur nicht lesen darf, maskiert; Hashes ab der
+ * ersten maskierten Position verborgen (Kopf). Nur für `ladeAudit` und für die
+ * Tests der Maskierung mit Personen ohne Verwaltungsrecht (tcms-s12: die
+ * Kanzleileitung, die als einzige das Audit liest, sieht nie Maskiertes). Nicht
+ * über `@tcms/service` exportiert; ein neuer Lesepfad prüft sein Recht davor.
+ */
+export async function leseAuditSeite(
+  ctx: DienstKontext,
+  eingabe: AuditListeEingabe,
+): Promise<AuditListeAntwort> {
   const e = pruefeEingabe(AuditListeEingabeSchema, eingabe);
   const limit = e.limit ?? 100;
   const absteigend = e.vor !== undefined;

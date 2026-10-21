@@ -8,9 +8,10 @@
 // Akteur des Dienstkontexts. Fremder Mandant, fremder Tenant, unbekannte ID:
 // immer `NICHT_GEFUNDEN` (kein Existenz-Orakel). Vertrauliche Feststellungen
 // sind für Nicht-Beteiligte bereits maskiert (`kannVertraulichLesen` mit
-// `beteiligteVon` aus `rechte.ts`): Sie enthalten nur, was auch der dedizierte
-// Lesepfad zeigt (`maskiert: true`, Nummer, Status, Erfassung – RT-01), und
-// Kennzahlen leiten aus ihnen keine Inhalte (Steuerwirkung, §-153, Schwere) ab.
+// `beteiligteVon` aus `rechte.ts`; die Kanzleileitung liest alle, tcms-s12):
+// Sie enthalten nur, was auch der dedizierte Lesepfad zeigt (`maskiert: true`,
+// Nummer, Status, Erfassung – RT-01), und Kennzahlen leiten aus ihnen keine
+// Inhalte (Steuerwirkung, §-153, Schwere) ab.
 //
 // Personen: Das Ergebnis enthält nur IDs der kanzleikonsole; Anzeigenamen
 // kommen über `ctx.personen` (im Dienst leer). Zuständigkeit (BT,
@@ -220,7 +221,7 @@ export interface FeststellungView {
   vertraulich: boolean;
   /**
    * Beteiligte Personen (`beteiligteVon`); eine vertrauliche Feststellung sehen
-   * außerdem Admin, zuständige BT und Hauptbearbeitung.
+   * außerdem Kanzleileitung, zuständige BT und Hauptbearbeitung.
    */
   beteiligte: string[];
   p153Entscheidung: 'BERICHTIGUNG' | 'KEINE_PFLICHT' | 'WEITERE_KLAERUNG' | 'UEBERGABE' | null;

@@ -1,13 +1,18 @@
 // =============================================================================
-// Audit und vertrauliche Feststellungen (DB_TESTS=1, tcms-s11, Fachkonzept
-// §13, RT-01): Inhalte vertraulicher Feststellungen und ihrer Maßnahmen
-// (Quelle, Begründungen, Maßnahmentexte, Namen und IDs Beteiligter, Detail)
-// sieht im tenantweiten Audit nur, wer die Feststellung lesen darf
-// (`kannVertraulichLesen` mit dem Mandantenbezug der Anfrage). Alle anderen –
-// auch Admins/Partner ohne Bezug, die das Audit lesen dürfen – erhalten eine
-// maskierte Variante (Positivliste) und ab der ersten maskierten Position
-// keine Hashes. Die Kettenprüfung rechnet über die vollständigen Einträge und
-// gibt keine Inhalte aus.
+// Audit und vertrauliche Feststellungen (DB_TESTS=1, tcms-s11, tcms-s12,
+// Fachkonzept §13, RT-01): Inhalte vertraulicher Feststellungen und ihrer
+// Maßnahmen (Quelle, Begründungen, Maßnahmentexte, Namen und IDs Beteiligter,
+// Detail) sieht im tenantweiten Audit nur, wer die Feststellung lesen darf
+// (`kannVertraulichLesen` mit dem Mandantenbezug der Anfrage).
+//
+// tcms-s12 (Produktentscheidung vom 21.10.2026): Die Kanzleileitung
+// (Admins/Partner) liest alles, auch ohne oder mit fremdem Bezug – Inhalte,
+// Namen, IDs und alle Hashes. Weil heute nur sie das Audit liest, prüfen die
+// Tests der Maskierung Personen ohne Verwaltungsrecht über `leseAuditSeite`
+// (die Seite ohne die Verwaltungsprüfung, nicht exportiert): Wer die
+// Feststellung nicht lesen darf, erhält eine maskierte Variante (Positivliste)
+// und ab der ersten maskierten Position keine Hashes. Die Kettenprüfung rechnet
+// über die vollständigen Einträge und gibt keine Inhalte aus.
 // =============================================================================
 
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -34,7 +39,7 @@ import {
   kanzlei,
   type Welt,
 } from '../feststellungen-ereignisse/testwelt';
-import { ladeAudit, pruefeAudit } from './audit';
+import { ladeAudit, leseAuditSeite, pruefeAudit } from './audit';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 
@@ -65,15 +70,25 @@ describe.skipIf(!AKTIV)('Audit: vertrauliche Feststellungen (Service, PostgreSQL
   let G = { id: '', nummer: '' };
   /** Maßnahmen von F: die angelegte und die Wiedervorlage aus der §-153-Würdigung. */
   let massnahmenF = new Set<string>();
-  /** Admin/Partner ohne Mandantenbezug (Verwaltung des tenantweiten Audits). */
+  /** Admin/Partner ohne Mandantenbezug (Kanzleileitung, Verwaltung des tenantweiten Audits). */
   let verwaltung: Akteur;
   /** Admin mit Bezug zu einem anderen Mandanten desselben Tenants. */
   let adminFremd: Akteur;
-  /** Persönlich beteiligt (hat F erfasst), aber ohne Mandantenbezug in dieser Anfrage. */
+  /** Nicht-Admin mit Bezug zum Mandanten, weder zuständig noch beteiligt. */
+  let unbeteiligt: Akteur;
+  /** Nicht-Admin, persönlich beteiligt (Maßnahme von F), ohne Mandantenbezug in dieser Anfrage. */
   let beteiligtOhneBezug: Akteur;
+  /** Nicht-Admin, persönlich beteiligt (§-153 von F), mit Bezug zu einem anderen Mandanten. */
+  let beteiligtFremd: Akteur;
 
   const lade = async (a: Akteur): Promise<AuditListeAntwort> => {
     const s = await im(a, (ctx) => ladeAudit(ctx, { limit: 500 }));
+    expect(AuditListeAntwortSchema.parse(s)).toEqual(s);
+    return s;
+  };
+  /** Seite ohne Verwaltungsprüfung: Maskierung für Personen ohne Verwaltungsrecht. */
+  const ladeOhneVerwaltung = async (a: Akteur): Promise<AuditListeAntwort> => {
+    const s = await im(a, (ctx) => leseAuditSeite(ctx, { limit: 500 }));
     expect(AuditListeAntwortSchema.parse(s)).toEqual(s);
     return s;
   };
@@ -86,7 +101,9 @@ describe.skipIf(!AKTIV)('Audit: vertrauliche Feststellungen (Service, PostgreSQL
     A = akteure(w);
     verwaltung = kanzlei(w.tenant, randomUUID(), null, { admin: true });
     adminFremd = kanzlei(w.tenant, randomUUID(), w.fremd, { admin: true, bt: true });
-    beteiligtOhneBezug = kanzlei(w.tenant, w.p.admin, null, { admin: true, bt: true });
+    unbeteiligt = kanzlei(w.tenant, randomUUID(), w.mandant, { bt: true });
+    beteiligtOhneBezug = kanzlei(w.tenant, w.p.hb, null);
+    beteiligtFremd = kanzlei(w.tenant, w.p.zbt, w.fremd, { bt: true, zustaendig: true });
     const erfasse = (a: Akteur, titel: string, quelleText: string) =>
       im(a, (ctx) =>
         erfasseFeststellung(ctx, {
@@ -149,8 +166,36 @@ describe.skipIf(!AKTIV)('Audit: vertrauliche Feststellungen (Service, PostgreSQL
     );
   });
 
-  it('Admin/Partner ohne Bezug (Verwaltung): Einträge zu F und ihrer Maßnahme nur maskiert, ohne Inhalte und Personen', async () => {
+  // tcms-s12, angepasst: Bis tcms-s11 sah die Verwaltung ohne Bezug hier nur maskierte Einträge.
+  // Produktentscheidung vom 21.10.2026: Die Kanzleileitung liest alles, unabhängig von Bezug
+  // und Beteiligung – mit Namen, IDs, Details und allen Hashes.
+  it('Kanzleileitung ohne Bezug (Verwaltung): alle Einträge zu F und ihren Maßnahmen lesbar, mit Namen, Details und Hashes', async () => {
     const s = await lade(verwaltung);
+    expect(s.eintraege.some((e) => e.maskiert)).toBe(false);
+    const f = s.eintraege.filter(zuF);
+    expect(f).toHaveLength(6);
+    const erfasst = f.find((e) => e.aktion === 'tcms.feststellung.erfasst');
+    expect(erfasst).toMatchObject({
+      maskiert: false,
+      actorId: w.p.admin,
+      actorName: A.admin.name,
+      detail: expect.objectContaining({ quelle: QUELLE }),
+    });
+    const json = JSON.stringify(f);
+    // Die §-153-Begründung steht nie im Audit (nur Entscheidung und Frist).
+    for (const inhalt of [QUELLE, MASSNAHME, 'BERICHTIGUNG', '2026-12-31', w.p.zbt, A.zbt.name]) {
+      expect(json, inhalt).toContain(inhalt);
+    }
+    for (const e of s.eintraege) {
+      if (e.maskiert) throw new Error('maskiert');
+      expect(e.hash, `pos ${e.pos}`).toMatch(/^[0-9a-f]{64}$/);
+      expect(e.prevHash, `pos ${e.pos}`).toMatch(/^[0-9a-f]{64}$/);
+    }
+    expect(s.kopf?.hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('Ohne Leserecht (Nicht-Admin mit Bezug, unbeteiligt): Einträge zu F und ihrer Maßnahme nur maskiert, ohne Inhalte und Personen', async () => {
+    const s = await ladeOhneVerwaltung(unbeteiligt);
     const f = s.eintraege.filter(zuF);
     // erfasst, §-153, Status, zwei Maßnahmen, vertraulich
     expect(f).toHaveLength(6);
@@ -194,7 +239,7 @@ describe.skipIf(!AKTIV)('Audit: vertrauliche Feststellungen (Service, PostgreSQL
   });
 
   it('Hashes nur vor der ersten maskierten Position (danach ließen sie maskierte Inhalte bestätigen)', async () => {
-    const s = await lade(verwaltung);
+    const s = await ladeOhneVerwaltung(unbeteiligt);
     const erste = Math.min(...s.eintraege.filter((e) => e.maskiert).map((e) => e.pos));
     const offen = s.eintraege.filter((e) => !e.maskiert);
     const davor = offen.filter((e) => e.pos < erste);
@@ -210,9 +255,19 @@ describe.skipIf(!AKTIV)('Audit: vertrauliche Feststellungen (Service, PostgreSQL
     expect(s.kopf?.hash).toBeNull();
   });
 
-  it('Admin mit Bezug zu einem anderen Mandanten und persönlich Beteiligte ohne Bezug: ebenfalls maskiert', async () => {
-    for (const a of [adminFremd, beteiligtOhneBezug]) {
-      const s = await lade(a);
+  // tcms-s12, angepasst: Admin mit fremdem Bezug sah bis tcms-s11 maskiert, jetzt alles
+  // (Kanzleileitung). Persönlich Beteiligte ohne Verwaltungsrecht bleiben ohne Bezug maskiert.
+  it('Admin mit Bezug zu einem anderen Mandanten (Kanzleileitung): alles lesbar, alle Hashes', async () => {
+    const s = await lade(adminFremd);
+    expect(s.eintraege.filter(zuF)).toHaveLength(6);
+    expect(s.eintraege.some((e) => e.maskiert)).toBe(false);
+    expect(JSON.stringify(s)).toContain(QUELLE);
+    expect(s.kopf?.hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('Persönlich Beteiligte ohne Verwaltungsrecht ohne Bezug oder mit fremdem Bezug: maskiert (fail closed)', async () => {
+    for (const a of [beteiligtOhneBezug, beteiligtFremd]) {
+      const s = await ladeOhneVerwaltung(a);
       const f = s.eintraege.filter(zuF);
       expect(f, a.id).toHaveLength(6);
       expect(
@@ -224,9 +279,14 @@ describe.skipIf(!AKTIV)('Audit: vertrauliche Feststellungen (Service, PostgreSQL
     }
   });
 
-  it('Beteiligte mit Bezug (Admin nach Fachkonzept §13, auch persönlich beteiligt): alles lesbar, alle Hashes', async () => {
-    for (const a of [A.admin, A.adminOhneBt]) {
-      const s = await lade(a);
+  it('Beteiligte mit Bezug (Admin, zuständige BT, Hauptbearbeitung, auch persönlich beteiligt): alles lesbar, alle Hashes', async () => {
+    for (const [a, laden] of [
+      [A.admin, lade],
+      [A.adminOhneBt, lade],
+      [A.zbt, ladeOhneVerwaltung],
+      [A.hb, ladeOhneVerwaltung],
+    ] as const) {
+      const s = await laden(a);
       expect(s.eintraege.every((e) => !e.maskiert)).toBe(true);
       const erfasst = s.eintraege.find(
         (e) => e.objektId === F.id && e.aktion === 'tcms.feststellung.erfasst',
@@ -285,7 +345,7 @@ describe.skipIf(!AKTIV)('Audit: vertrauliche Feststellungen (Service, PostgreSQL
       // Akteur-ID ohne UUID-Form (Altbestand): kein Kontakt, die Seite scheitert nicht.
       await eintrag('kein-uuid', { notiz: 'Geheim' });
     });
-    const s = await lade(verwaltung);
+    const s = await ladeOhneVerwaltung(unbeteiligt);
     const test = s.eintraege.filter((e) => e.aktion === 'tcms.feststellung.test');
     expect(test.map((e) => (e.maskiert ? e.akteurArt : 'OFFEN'))).toEqual([
       'SYSTEM',
@@ -297,10 +357,11 @@ describe.skipIf(!AKTIV)('Audit: vertrauliche Feststellungen (Service, PostgreSQL
   });
 
   it('Vertraulichkeit aufgehoben: wieder lesbar, Hashes vollständig', async () => {
+    expect((await ladeOhneVerwaltung(unbeteiligt)).eintraege.some((e) => e.maskiert)).toBe(true);
     await im(A.zbt, (ctx) =>
       setzeVertraulich(ctx, { mandantId: w.mandant, feststellungId: F.id, vertraulich: false }),
     );
-    const s = await lade(verwaltung);
+    const s = await ladeOhneVerwaltung(unbeteiligt);
     expect(s.eintraege.some((e) => e.maskiert)).toBe(false);
     expect(
       s.eintraege.find((e) => zuF(e) && e.aktion === 'tcms.feststellung.erfasst'),
@@ -312,9 +373,10 @@ describe.skipIf(!AKTIV)('Audit: vertrauliche Feststellungen (Service, PostgreSQL
 describe.skipIf(!AKTIV)(
   'Audit: Kettenprüfung über maskierte Einträge (Service, PostgreSQL)',
   () => {
-    it('ein gefälschter Eintrag zu einer vertraulichen Feststellung bricht die Kette; die Liste zeigt ihn maskiert', async () => {
+    it('ein gefälschter Eintrag zu einer vertraulichen Feststellung bricht die Kette; die Liste zeigt ihn der Leitung, sonst maskiert', async () => {
       const w = await baueWelt();
       const verwaltung = kanzlei(w.tenant, randomUUID(), null, { admin: true });
+      const unbeteiligt = kanzlei(w.tenant, randomUUID(), w.mandant, { bt: true });
       const f = await inTenant(w, (tx) =>
         tx.feststellung.create({
           data: {
@@ -370,13 +432,22 @@ describe.skipIf(!AKTIV)(
         grund: 'Inhalt wurde verändert',
         weiterAb: null,
       });
+      // tcms-s12: Die Kanzleileitung sieht den gefälschten Eintrag vollständig (bis tcms-s11
+      // maskiert); wer die Feststellung nicht lesen darf, weiterhin nur maskiert.
       const s = await im(verwaltung, (ctx) => ladeAudit(ctx, {}));
       expect(s.eintraege.find((e) => e.pos === gefaelscht)).toMatchObject({
+        maskiert: false,
+        aktion: 'tcms.feststellung.p153_entschieden',
+        actorName: 'Fälscher',
+        detail: { entscheidung: 'KEINE_PFLICHT' },
+      });
+      const m = await im(unbeteiligt, (ctx) => leseAuditSeite(ctx, {}));
+      expect(m.eintraege.find((e) => e.pos === gefaelscht)).toMatchObject({
         maskiert: true,
         aktion: 'tcms.feststellung.p153_entschieden',
       });
-      expect(JSON.stringify(s)).not.toContain('KEINE_PFLICHT');
-      expect(JSON.stringify(s)).not.toContain('Fälscher');
+      expect(JSON.stringify(m)).not.toContain('KEINE_PFLICHT');
+      expect(JSON.stringify(m)).not.toContain('Fälscher');
     });
   },
 );
