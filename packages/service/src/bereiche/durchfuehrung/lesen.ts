@@ -9,8 +9,9 @@
 // unbekannte ID, Objekt eines anderen Mandanten: immer NICHT_GEFUNDEN.
 // Ergebnisse sind JSON (ISO-Strings, Listen); Personen nur als IDs, Namen
 // über `ctx.personen` (im Dienst leer). Vertrauliche Feststellungen sind für
-// Nicht-Beteiligte maskiert (`kannVertraulichLesen`): nur ID, Nummer und
-// Status wie im dedizierten Lesepfad, ohne Titel und Schwere (RT-01).
+// Nicht-Beteiligte maskiert (`kannVertraulichLesen` mit `beteiligteVon`, eine
+// Regel für alle Lesepfade): nur ID, Nummer und Status wie im dedizierten
+// Lesepfad, ohne Titel und Schwere (RT-01).
 // =============================================================================
 
 import {
@@ -32,7 +33,7 @@ import {
 import { addTage, fmtDatum, isoDatum, statusAm, type AnzeigeStatus } from '@tcms/domain';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
-import { gleicheId, kannVertraulichLesen } from '../../rechte';
+import { beteiligteVon, gleicheId, kannVertraulichLesen } from '../../rechte';
 import { ladeLage, pruefeEingabe, pruefeLeserecht, type Lage } from './lage';
 import { darfPortalLesen, durchfuehrungsRechte, rechteFlags } from './rechte';
 import {
@@ -375,13 +376,7 @@ export async function ladeDurchfuehrung(
   const feststellungen = feststellungenRoh
     .filter((f) => f.erfasstAm.getTime() <= g.ende.getTime())
     .map((f): DurchfuehrungDetail['feststellungen'][number] => {
-      const beteiligte = [
-        f.erfasstVon,
-        f.p153EntschiedenVon,
-        f.verwerfenBeantragtVon,
-        ...f.massnahmen.map((m) => m.verantwortlich),
-      ].filter((x): x is string => !!x);
-      if (f.vertraulich && !kannVertraulichLesen(ctx.akteur, lage.mandantId, beteiligte)) {
+      if (f.vertraulich && !kannVertraulichLesen(ctx.akteur, lage.mandantId, beteiligteVon(f))) {
         // Positivliste wie im dedizierten Lesepfad (Fachkonzept §13, RT-01).
         return { maskiert: true, id: f.id, nummer: f.nummer, status: f.status, vertraulich: true };
       }

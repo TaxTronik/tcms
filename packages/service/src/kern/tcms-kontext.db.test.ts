@@ -12,6 +12,7 @@ import { mitTenant } from '@tcms/db';
 import { DEMO_IDS, DEMO_MANDANTEN, DEMO_TENANT_ID } from '@tcms/db/demo';
 import { verweisAblage } from '../ablage';
 import { imDienst, type PersonenVerzeichnis, type Uhr } from '../kontext';
+import { beteiligteVon } from '../rechte';
 import { jeAktuellerKontext, ladeKontext, type TcmsKontext } from './tcms-kontext';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
@@ -82,15 +83,7 @@ describe.skipIf(!AKTIV)('Tax-CMS-Kontext gegen PostgreSQL', () => {
         include: { massnahmen: { select: { verantwortlich: true } } },
         orderBy: { nummer: 'asc' },
       });
-      const f = kandidaten.find(
-        (x) =>
-          ![
-            x.erfasstVon,
-            x.p153EntschiedenVon,
-            x.verwerfenBeantragtVon,
-            ...x.massnahmen.map((m) => m.verantwortlich),
-          ].includes(DEMO_IDS.thomas),
-      );
+      const f = kandidaten.find((x) => !beteiligteVon(x).includes(DEMO_IDS.thomas));
       if (!f) throw new Error('Seed ohne passende Feststellung');
       vertraulichId = f.id;
       vertraulichTitel = f.titel;

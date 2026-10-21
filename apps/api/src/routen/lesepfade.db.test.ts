@@ -22,6 +22,7 @@ import {
 } from '@tcms/contract';
 import { mitTenant, schreibeAudit, type Tx } from '@tcms/db';
 import { DEMO_IDS, DEMO_MANDANTEN, DEMO_TENANT_ID } from '@tcms/db/demo';
+import { beteiligteVon } from '@tcms/service';
 import { describe, expect, it } from 'vitest';
 import { aufbau, bestaetigtSenden, claims, json, mandantClaims } from '../__tests__/hilfen';
 import { registriereLesepfade } from './lesepfade';
@@ -148,15 +149,7 @@ describe.skipIf(!AKTIV)('Endpunkte lesepfade gegen PostgreSQL', () => {
           include: { massnahmen: { select: { verantwortlich: true } } },
           orderBy: { nummer: 'asc' },
         });
-        const x = kandidaten.find(
-          (k) =>
-            ![
-              k.erfasstVon,
-              k.p153EntschiedenVon,
-              k.verwerfenBeantragtVon,
-              ...k.massnahmen.map((m) => m.verantwortlich),
-            ].includes(DEMO_IDS.thomas),
-        )!;
+        const x = kandidaten.find((k) => !beteiligteVon(k).includes(DEMO_IDS.thomas))!;
         await tx.feststellung.update({ where: { id: x.id }, data: { vertraulich: true } });
         return x;
       });

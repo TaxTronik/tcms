@@ -7,10 +7,10 @@
 // Rechte (TS-03, ADR 0001 §3.3/§5): Der Lader prüft selbst `kannLesen` für den
 // Akteur des Dienstkontexts. Fremder Mandant, fremder Tenant, unbekannte ID:
 // immer `NICHT_GEFUNDEN` (kein Existenz-Orakel). Vertrauliche Feststellungen
-// sind für Nicht-Beteiligte bereits maskiert (`kannVertraulichLesen`): Sie
-// enthalten nur, was auch der dedizierte Lesepfad zeigt (`maskiert: true`,
-// Nummer, Status, Erfassung – RT-01), und Kennzahlen leiten aus ihnen keine
-// Inhalte (Steuerwirkung, §-153, Schwere) ab.
+// sind für Nicht-Beteiligte bereits maskiert (`kannVertraulichLesen` mit
+// `beteiligteVon` aus `rechte.ts`): Sie enthalten nur, was auch der dedizierte
+// Lesepfad zeigt (`maskiert: true`, Nummer, Status, Erfassung – RT-01), und
+// Kennzahlen leiten aus ihnen keine Inhalte (Steuerwirkung, §-153, Schwere) ab.
 //
 // Personen: Das Ergebnis enthält nur IDs der kanzleikonsole; Anzeigenamen
 // kommen über `ctx.personen` (im Dienst leer). Zuständigkeit (BT,
@@ -64,7 +64,7 @@ import {
   type Turnus,
 } from '@tcms/domain';
 import type { DienstKontext } from '../kontext';
-import { kannLesen, kannVertraulichLesen, type MandantRolle } from '../rechte';
+import { beteiligteVon, kannLesen, kannVertraulichLesen, type MandantRolle } from '../rechte';
 import { ladeKontaktRollen } from '../rollen';
 import { heuteDatum, leseStand, tagesende } from './zeit';
 
@@ -218,7 +218,10 @@ export interface FeststellungView {
     | 'GESCHLOSSEN'
     | 'VERWORFEN';
   vertraulich: boolean;
-  /** Personen, die eine vertrauliche Feststellung sehen dürfen (zusätzlich zu Admin, BT, Hauptbearbeitung). */
+  /**
+   * Beteiligte Personen (`beteiligteVon`); eine vertrauliche Feststellung sehen
+   * außerdem Admin, zuständige BT und Hauptbearbeitung.
+   */
   beteiligte: string[];
   p153Entscheidung: 'BERICHTIGUNG' | 'KEINE_PFLICHT' | 'WEITERE_KLAERUNG' | 'UEBERGABE' | null;
   p153Offen: boolean;
@@ -1023,12 +1026,7 @@ function berechne(
         auswirkung: f.auswirkung,
         status: geschlossenBisStand,
         vertraulich: f.vertraulich,
-        beteiligte: [
-          f.erfasstVon,
-          f.p153EntschiedenVon,
-          f.verwerfenBeantragtVon,
-          ...f.massnahmen.map((m) => m.verantwortlich),
-        ].filter((x): x is string => !!x),
+        beteiligte: beteiligteVon(f),
         p153Entscheidung: p153Entschieden ? f.p153Entscheidung : null,
         p153Offen:
           (f.auswirkung === 'JA' || f.auswirkung === 'UNKLAR') &&

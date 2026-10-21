@@ -168,7 +168,8 @@ export function auswirkungBeimAnlegen(
 /**
  * Beteiligte Personen einer Feststellung (Fachkonzept §13): erfassend,
  * §-153-würdigend, Verwerfen beantragend und für eine Maßnahme verantwortlich.
- * Eine Quelle für Feststellungs-Lader, Operationen und das Audit (tcms-s11).
+ * Einzige Quelle für alle Lader (Feststellungen, Kontext, Durchführung,
+ * Audit), die Operationen und die Rechte (tcms-s11, tcms-s12).
  */
 export function beteiligteVon(f: {
   erfasstVon: string;

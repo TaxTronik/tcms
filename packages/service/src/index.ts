@@ -36,6 +36,7 @@ export { ladeKontaktRollen } from './rollen';
 export {
   aktiveRollen,
   auswirkungBeimAnlegen,
+  beteiligteVon,
   gleicheId,
   istBerufstraeger,
   istGesetzlicherVertreter,

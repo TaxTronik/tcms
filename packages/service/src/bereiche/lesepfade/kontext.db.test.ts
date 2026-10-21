@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { KontextAntwortSchema, type KontextEingabe } from '@tcms/contract';
 import { mitTenant } from '@tcms/db';
 import { DEMO_IDS, DEMO_TENANT_ID } from '@tcms/db/demo';
+import { beteiligteVon } from '../../rechte';
 import { leseKontext } from './kontext';
 import { fehlerVon, im, kanzlei, kontakt } from './testhilfen';
 
@@ -82,11 +83,7 @@ describe.skipIf(!AKTIV)('leseKontext gegen PostgreSQL', () => {
       return x;
     });
     try {
-      expect([
-        f.p153EntschiedenVon,
-        f.verwerfenBeantragtVon,
-        ...f.massnahmen.map((m) => m.verantwortlich),
-      ]).not.toContain(DEMO_IDS.thomas);
+      expect(beteiligteVon(f)).not.toContain(DEMO_IDS.thomas);
       const a = await im(thomas, (ctx) => leseKontext(ctx, { mandantId: DEMO_IDS.talwind }));
       const m = a.feststellungen.find((x) => x.id === f.id)!;
       expect(m).toEqual({
