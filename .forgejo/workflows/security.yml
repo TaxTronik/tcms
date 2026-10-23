@@ -1,0 +1,103 @@
+# =============================================================================
+# Sicherheitsprüfung des Tax-CMS (Forgejo Actions). Vorbild: security.yml der
+# kanzleikonsole. Die Prüfungen stehen nur hier und laufen
+#
+#   - täglich, damit neue Advisories auch ohne Push auffallen,
+#   - auf Wunsch von Hand (workflow_dispatch),
+#   - als Job `sicherheit` der CI (ci.yml) bei jedem Push, jedem PR und jedem
+#     Release-Tag; dort sind sie Voraussetzung der Images.
+#
+#   abhaengigkeiten  Lieferketten-Regeln, `pnpm audit --prod` ab „high“
+#                    (blockierend), ganzer Graph samt Entwicklungs-
+#                    abhängigkeiten ab „low“ (nicht blockierend, Nachweis)
+#   geheimnisse      gitleaks über die ganze Historie
+#
+# Die Audits lesen nur das Lockfile: Es wird nichts installiert und kein
+# Install-Skript ausgeführt.
+# =============================================================================
+name: Security
+
+on:
+  schedule:
+    # Täglich: Advisories erscheinen jederzeit. Eine halbe Stunde nach der
+    # kanzleikonsole (03:17), damit sich die Läufe auf dem Runner nicht stauen.
+    - cron: '47 3 * * *'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  GITLEAKS_VERSION: 8.29.0
+  GITLEAKS_LINUX_X64_SHA256: 39e07ad810336fd0ae80d0bd61c60d0521f628173e7583583b5df4a38738522c
+
+jobs:
+  abhaengigkeiten:
+    name: Abhängigkeitsprüfung
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Lieferketten-Regeln prüfen
+        run: sh scripts/pruefe-lieferkette.sh
+
+      # Produktionsabhängigkeiten (Laufzeitbaum des Dienstes und der Demo).
+      - name: pnpm audit --prod (blockierend ab high)
+        run: |
+          set -o pipefail
+          pnpm audit --prod --audit-level high 2>&1 | tee security-audit-prod.log
+
+      # Entwicklungsabhängigkeiten führen auf Entwicklerrechnern und im Runner
+      # Code aus – ein kompromittiertes Build-Werkzeug ist der klassische
+      # Lieferkettenweg. Dieser Lauf bricht nichts ab, macht das Bild aber
+      # vollständig und legt es als Nachweis ab.
+      - name: pnpm audit, ganzer Graph (nicht blockierend)
+        if: always()
+        run: pnpm audit --audit-level low 2>&1 | tee security-audit-full.log || true
+
+      - name: Nachweis hochladen
+        if: always()
+        uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
+        with:
+          name: sicherheit-abhaengigkeiten
+          retention-days: 90
+          path: |
+            security-audit-prod.log
+            security-audit-full.log
+          if-no-files-found: ignore
+
+  geheimnisse:
+    name: Secret-Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks (Version und SHA-256 gepinnt)
+        run: |
+          set -euo pipefail
+          d="$(mktemp -d)"
+          curl -fsSL -o "$d/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_LINUX_X64_SHA256}  $d/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$d/gitleaks.tar.gz" -C "$d" gitleaks
+          "$d/gitleaks" git --redact --no-banner --verbose . 2>&1 | tee security-gitleaks.log
+
+      - name: Nachweis hochladen
+        if: always()
+        uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
+        with:
+          name: sicherheit-geheimnisse
+          retention-days: 90
+          path: security-gitleaks.log
+          if-no-files-found: ignore

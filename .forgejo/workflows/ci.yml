@@ -10,7 +10,9 @@
 #   datenbank   tcms-migrate gegen PostgreSQL 18 (Erst- und Zweitlauf), Seed,
 #               alle Tests mit DB_TESTS=1 zweimal auf derselben Datenbank,
 #               Laufzeit-Simulation des Images, Tests des Migrationsläufers
-#   sicherheit  gitleaks über die ganze Historie, pnpm audit --prod
+#   sicherheit  ruft security.yml auf (läuft dort zusätzlich täglich):
+#               gitleaks über die ganze Historie, pnpm audit --prod
+#               (blockierend), ganzer Graph (nicht blockierend)
 #   images      baut tcms-api und tcms-migrate; nur auf Tags v*: Trivy-Gate,
 #               SBOM, Push nach ${REGISTRY}/taxtronik/tcms-{api,migrate}
 #               (write-once) und Ausgabe der Digests für das signierte
@@ -263,50 +265,10 @@ jobs:
           path: testbericht-db.log
           if-no-files-found: ignore
 
+  # Dieselben Prüfungen wie der tägliche Lauf; nur in security.yml gepflegt.
   sicherheit:
-    name: Secret-Scan und Abhängigkeitsprüfung
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      GITLEAKS_VERSION: 8.29.0
-      GITLEAKS_LINUX_X64_SHA256: 39e07ad810336fd0ae80d0bd61c60d0521f628173e7583583b5df4a38738522c
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          fetch-depth: 0
-
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version-file: .nvmrc
-
-      - name: gitleaks (Version und SHA-256 gepinnt)
-        run: |
-          set -euo pipefail
-          d="$(mktemp -d)"
-          curl -fsSL -o "$d/gitleaks.tar.gz" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          echo "${GITLEAKS_LINUX_X64_SHA256}  $d/gitleaks.tar.gz" | sha256sum -c -
-          tar -xzf "$d/gitleaks.tar.gz" -C "$d" gitleaks
-          "$d/gitleaks" git --redact --no-banner --verbose . 2>&1 | tee security-gitleaks.log
-
-      # Produktionsabhängigkeiten (Laufzeitbaum des Dienstes und der Demo).
-      - name: pnpm audit --prod
-        run: |
-          set -o pipefail
-          pnpm audit --prod --audit-level high 2>&1 | tee security-audit-prod.log
-
-      - name: Sicherheitsnachweis hochladen
-        if: always()
-        uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
-        with:
-          name: sicherheit
-          retention-days: 90
-          path: |
-            security-gitleaks.log
-            security-audit-prod.log
-          if-no-files-found: ignore
+    name: Sicherheit
+    uses: ./.forgejo/workflows/security.yml
 
   images:
     name: Images tcms-api und tcms-migrate

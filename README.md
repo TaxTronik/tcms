@@ -619,7 +619,9 @@ TCMS_SIM_PGUSER=… pnpm --filter @tcms/api exec vitest run src/__tests__/simula
 
 CI (`.forgejo/workflows/ci.yml`): Lieferketten-Prüfung (`scripts/pruefe-lieferkette.sh`) vor jeder
 Installation, frozen Lockfile, Format, Typecheck, Tests ohne und mit PostgreSQL 18 (Datenbank aus
-`tcms-migrate`, zweimal), Laufzeit-Simulation, gitleaks, `pnpm audit --prod`, Build beider Images; auf
+`tcms-migrate`, zweimal), Laufzeit-Simulation, Sicherheit (`.forgejo/workflows/security.yml`: gitleaks,
+`pnpm audit --prod` blockierend ab „high“, ganzer Graph nicht blockierend; zusätzlich täglich um 03:47 UTC
+und von Hand), Build beider Images; auf
 Tags `v*` (gleich der Version von `apps/api`) Trivy-Gate, SBOM und Push nach
 `${REGISTRY}/taxtronik/tcms-api` bzw. `…/tcms-migrate` mit Digests in der Zusammenfassung. Forgejo:
 Variable `REGISTRY`, Secrets `REGISTRY_USER` und `REGISTRY_TOKEN`.

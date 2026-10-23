@@ -536,7 +536,9 @@ Migrationen laufen damit in einem getrennten, kurzlebigen Schritt als
 `tcms_app`. CI (`.forgejo/workflows/ci.yml`): Lieferketten-Prüfung vor jeder
 Installation, frozen Lockfile, Typecheck, Tests (mit PostgreSQL 18 zweimal auf
 derselben Datenbank, aufgebaut mit `tcms-migrate`), Laufzeit-Simulation des
-Images, gitleaks, `pnpm audit --prod`, Build beider Ziele; nur auf Tags
+Images, gitleaks und `pnpm audit --prod` (`.forgejo/workflows/security.yml`,
+zusätzlich täglich mit dem ganzen Abhängigkeitsgraphen als Nachweis), Build
+beider Ziele; nur auf Tags
 Trivy-Gate, SBOM, Push nach `${REGISTRY}/taxtronik/tcms-{api,migrate}` und
 Ausgabe der Digests für das signierte Release-Manifest der kanzleikonsole.
 `scripts/vertrag-export.mjs` liefert Commit und SHA-256 je Vertragsdatei im
