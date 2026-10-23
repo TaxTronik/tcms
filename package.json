@@ -6,7 +6,7 @@
   "engines": {
     "node": ">=22.12.0 <25"
   },
-  "packageManager": "pnpm@12.4.1",
+  "packageManager": "pnpm@12.14.0",
   "scripts": {
     "dev": "pnpm --filter @tcms/web dev",
     "build": "pnpm --filter @tcms/web --filter @tcms/api run build",

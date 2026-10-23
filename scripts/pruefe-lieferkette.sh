@@ -23,8 +23,8 @@ zeile() {
   grep -Eq "$muster" "$datei" || fehlt "$meldung"
 }
 
-zeile package.json '"packageManager"[[:space:]]*:[[:space:]]*"pnpm@12\.4\.1"' \
-  'packageManager muss auf pnpm@12.4.1 gepinnt sein.'
+zeile package.json '"packageManager"[[:space:]]*:[[:space:]]*"pnpm@12\.14\.0"' \
+  'packageManager muss auf pnpm@12.14.0 gepinnt sein.'
 W=pnpm-workspace.yaml
 zeile $W '^minimumReleaseAge:[[:space:]]*10080([[:space:]]*#.*)?$' 'minimumReleaseAge muss 10080 (7 Tage) sein.'
 zeile $W '^minimumReleaseAgeStrict:[[:space:]]*true$' 'minimumReleaseAgeStrict muss true sein.'

@@ -15,7 +15,7 @@ Freigabe per E-Mail-Code und ein Mandantenportal.
 ## Voraussetzungen
 
 - Node.js 24 (`.nvmrc`; mindestens 22.12)
-- pnpm 12.4.1 – `corepack enable` oder `npm install -g pnpm@12.4.1`
+- pnpm 12.14.0 – `corepack enable` oder `npm install -g pnpm@12.14.0`
 - Docker Desktop (für PostgreSQL 16)
 
 ## Schnellstart (Windows, PowerShell)
