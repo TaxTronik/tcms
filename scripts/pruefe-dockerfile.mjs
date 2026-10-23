@@ -21,7 +21,7 @@ import { kontextDateien, WURZEL } from './docker-kontext.mjs';
 
 export const BASIS = {
   NODE_IMAGE:
-    'node:24-alpine3.23@sha256:595398b0081eacda8e1c4c5b97b76cd1020e4d58a8ebcb4843b9bca1e79e7436',
+    'node:24-alpine3.23@sha256:0468540aa58203ff9e40c2aab3907c52644ab818af6176b1c70a026137dc92a2',
   POSTGRES_IMAGE:
     'postgres:18-alpine@sha256:96d56f7f57c6aacd1fcb908bc83b345ec5f83231ee486dd66a1baadce274db88',
 };

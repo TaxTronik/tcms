@@ -44,7 +44,7 @@ describe('Dockerfile und Build-Kontext', () => {
   });
 
   const faelle: [string, string, RegExp][] = [
-    ['anderer Digest', ersetze('595398b0', '00000000'), /ARG NODE_IMAGE nicht wie gepinnt/],
+    ['anderer Digest', ersetze('0468540a', '00000000'), /ARG NODE_IMAGE nicht wie gepinnt/],
     [
       'Basis ohne ARG',
       ersetze('FROM ${NODE_IMAGE} AS api', 'FROM node:24 AS api'),
