@@ -5,10 +5,11 @@
 // =============================================================================
 
 import { randomUUID } from 'node:crypto';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PortalUebersichtAntwortSchema, type PortalUebersichtEingabe } from '@tcms/contract';
 import { mitTenant } from '@tcms/db';
 import { DEMO_IDS, DEMO_TENANT_ID } from '@tcms/db/demo';
+import { DEMODATEN_FRIST_MS, sperreDemodaten } from '../../__tests__/demodaten-sperre';
 import { ladePortalUebersicht } from './portal';
 import { fehlerVon, im, kanzlei, kontakt } from './testhilfen';
 
@@ -18,15 +19,21 @@ const lade = (a: Parameters<typeof im>[0], mandantId: string = T) =>
   im(a, (ctx) => ladePortalUebersicht(ctx, { mandantId }));
 
 describe.skipIf(!AKTIV)('Portal-Übersicht gegen PostgreSQL', () => {
+  let entsperren: (() => Promise<void>) | undefined;
+
   // Andere Testläufe auf derselben Wegwerf-DB deaktivieren Sabines Rolle (Web-Actions).
-  beforeAll(() =>
-    mitTenant(DEMO_TENANT_ID, (tx) =>
+  beforeAll(async () => {
+    entsperren = await sperreDemodaten();
+    await mitTenant(DEMO_TENANT_ID, (tx) =>
       tx.mandantKontaktRolle.updateMany({
         where: { mandantId: T, kontaktId: DEMO_IDS.sabine },
         data: { aktiv: true },
       }),
-    ),
-  );
+    );
+  }, DEMODATEN_FRIST_MS);
+  afterAll(async () => {
+    await entsperren?.();
+  });
 
   it('GV: alle Mandantenaufgaben und Meldungen, vertragsgemäß ohne Kanzlei-Interna', async () => {
     const u = await lade(kontakt(DEMO_IDS.jana, T));

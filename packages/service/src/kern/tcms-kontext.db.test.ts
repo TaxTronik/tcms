@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DienstFehler, type Akteur, type KontextEingabe } from '@tcms/contract';
 import { mitTenant } from '@tcms/db';
 import { DEMO_IDS, DEMO_MANDANTEN, DEMO_TENANT_ID } from '@tcms/db/demo';
+import { DEMODATEN_FRIST_MS, sperreDemodaten } from '../__tests__/demodaten-sperre';
 import { verweisAblage } from '../ablage';
 import { imDienst, type PersonenVerzeichnis, type Uhr } from '../kontext';
 import { beteiligteVon } from '../rechte';
@@ -75,7 +76,10 @@ describe.skipIf(!AKTIV)('Tax-CMS-Kontext gegen PostgreSQL', () => {
   let vertraulichId = '';
   let vertraulichTitel = '';
 
+  let entsperren: (() => Promise<void>) | undefined;
+
   beforeAll(async () => {
+    entsperren = await sperreDemodaten();
     // Eine Talwind-Feststellung, an der Thomas nicht beteiligt ist, vertraulich setzen.
     await mitTenant(DEMO_TENANT_ID, async (tx) => {
       const kandidaten = await tx.feststellung.findMany({
@@ -89,13 +93,18 @@ describe.skipIf(!AKTIV)('Tax-CMS-Kontext gegen PostgreSQL', () => {
       vertraulichTitel = f.titel;
       await tx.feststellung.update({ where: { id: f.id }, data: { vertraulich: true } });
     });
-  });
+  }, DEMODATEN_FRIST_MS);
 
   afterAll(async () => {
-    if (vertraulichId) {
-      await mitTenant(DEMO_TENANT_ID, (tx) =>
-        tx.feststellung.update({ where: { id: vertraulichId }, data: { vertraulich: false } }),
-      );
+    try {
+      if (vertraulichId) {
+        await mitTenant(DEMO_TENANT_ID, (tx) =>
+          tx.feststellung.update({ where: { id: vertraulichId }, data: { vertraulich: false } }),
+        );
+      }
+    } finally {
+      // Erst nach dem Zurücksetzen: andere Dateien sehen nie den Zwischenstand.
+      await entsperren?.();
     }
   });
 

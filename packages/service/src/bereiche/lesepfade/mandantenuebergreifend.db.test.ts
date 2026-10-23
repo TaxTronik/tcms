@@ -14,6 +14,7 @@ import {
 } from '@tcms/contract';
 import { mitTenant } from '@tcms/db';
 import { DEMO_IDS, DEMO_MANDANTEN, DEMO_TENANT_ID } from '@tcms/db/demo';
+import { DEMODATEN_FRIST_MS, sperreDemodaten } from '../../__tests__/demodaten-sperre';
 import { ladeArbeitskorb } from './arbeitskorb';
 import { ladePortfolio } from './portfolio';
 import { fehlerVon, im, kanzlei, kontakt } from './testhilfen';
@@ -39,12 +40,17 @@ describe.skipIf(!AKTIV)('Portfolio und Arbeitskorb gegen PostgreSQL', () => {
   const tenantB = randomUUID();
   const mandantB = randomUUID();
 
+  let entsperren: (() => Promise<void>) | undefined;
+
   beforeAll(async () => {
+    entsperren = await sperreDemodaten();
     await mitTenant(tenantB, (tx) =>
       tx.mandant.create({ data: { id: mandantB, name: 'Fremd GmbH', rechtsform: 'KapG' } }),
     );
+  }, DEMODATEN_FRIST_MS);
+  afterAll(async () => {
+    await entsperren?.();
   });
-  afterAll(async () => undefined);
 
   describe('Portfolio', () => {
     it('liefert je bestätigtem Mandanten eine vertragsgemäße Zeile', async () => {

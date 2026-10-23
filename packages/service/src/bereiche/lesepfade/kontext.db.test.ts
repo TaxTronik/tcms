@@ -2,10 +2,11 @@
 // strenger Vertrag, Rechte-Kennzeichen, kein Zugriff für Mandantenkontakte,
 // Maskierung inklusive Beteiligter.
 
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { KontextAntwortSchema, type KontextEingabe } from '@tcms/contract';
 import { mitTenant } from '@tcms/db';
 import { DEMO_IDS, DEMO_TENANT_ID } from '@tcms/db/demo';
+import { DEMODATEN_FRIST_MS, sperreDemodaten } from '../../__tests__/demodaten-sperre';
 import { beteiligteVon } from '../../rechte';
 import { leseKontext } from './kontext';
 import { fehlerVon, im, kanzlei, kontakt } from './testhilfen';
@@ -16,6 +17,14 @@ const thomas = kanzlei(DEMO_IDS.thomas, DEMO_IDS.talwind, { bt: true });
 const leon = kanzlei(DEMO_IDS.leon, DEMO_IDS.talwind, { hb: true });
 
 describe.skipIf(!AKTIV)('leseKontext gegen PostgreSQL', () => {
+  let entsperren: (() => Promise<void>) | undefined;
+  beforeAll(async () => {
+    entsperren = await sperreDemodaten();
+  }, DEMODATEN_FRIST_MS);
+  afterAll(async () => {
+    await entsperren?.();
+  });
+
   it('liefert eine streng vertragsgemäße, JSON-serialisierbare Antwort', async () => {
     const a = await im(anna, (ctx) => leseKontext(ctx, { mandantId: DEMO_IDS.talwind }));
     expect(KontextAntwortSchema.parse(a)).toEqual(a);
