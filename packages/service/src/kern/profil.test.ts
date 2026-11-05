@@ -44,9 +44,11 @@ describe('leseProfil', () => {
     const roh = JSON.parse(
       `{"__proto__":{"verschmutzt":1},${JSON.stringify(profil()).slice(1)}`,
     ) as object;
-    const { profil: gelesen } = leseProfil(roh);
-    expect(gelesen).not.toBeNull();
-    expect(Object.getOwnPropertyNames(gelesen)).not.toContain('__proto__');
+    // Seit Zod 4.6 ist ein eigener __proto__-Schlüssel ein abgewiesenes
+    // Zusatzfeld (fail closed); zuvor wurde er beim Parsen übergangen.
+    const { profil: gelesen, fehler } = leseProfil(roh);
+    expect(gelesen).toBeNull();
+    expect(fehler.length).toBeGreaterThan(0);
     expect(({} as Record<string, unknown>)['verschmutzt']).toBeUndefined();
   });
 });

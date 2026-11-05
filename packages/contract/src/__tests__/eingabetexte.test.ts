@@ -378,9 +378,15 @@ const RICHTUNG: Record<string, string> = {
 };
 
 /** Feld mit festem Format (Muster): Störzeichen scheitern schon am Format. */
-const mitMuster = (b: Blatt) =>
-  ((b.schema as unknown as { _zod: { bag: { patterns?: Set<RegExp> } } })._zod.bag.patterns?.size ??
-    0) > 0;
+const mitMuster = (b: Blatt) => {
+  // Seit Zod 4.6 steht das Muster nicht mehr in `bag.patterns`, sondern in der
+  // Definition des Schemas (Formate wie `z.uuid()`) bzw. seiner Checks (`.regex()`).
+  const d = def(b.schema) as { pattern?: unknown; checks?: { _zod: { def: { pattern?: unknown } } }[] };
+  return (
+    d.pattern instanceof RegExp ||
+    (d.checks ?? []).some((c) => c._zod.def.pattern instanceof RegExp)
+  );
+};
 
 describe('Eingaben: jede Zeichenkette ohne Richtungssteuerzeichen (tcms-s9)', () => {
   const blaetter = eingabeBlaetter();

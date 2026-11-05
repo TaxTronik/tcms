@@ -42,6 +42,10 @@ overrides:
   # GHSA-3f6p-5ww8-9rcr (Auth-Plugin-Downgrade) und DoS über komprimierte
   # Protokolldaten; transitiv über die Prisma-CLI.
   mysql2: '3.23.1'
+  # GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h,
+  # GHSA-333x-w4r6-6crp (Scheme-Spoofing, Host-Verwechslung, Pfadäquivalenz,
+  # Scheme-Injektion); transitiv über ajv unter der Prisma-CLI.
+  fast-uri: '3.1.9'
 
 # Install-Skripte, die laufen dürfen (alle anderen sind gesperrt):
 #   @prisma/engines  lädt die Schema-Engine für `prisma migrate` (Entwicklung);
