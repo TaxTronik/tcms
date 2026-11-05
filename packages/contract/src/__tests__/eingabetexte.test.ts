@@ -381,7 +381,10 @@ const RICHTUNG: Record<string, string> = {
 const mitMuster = (b: Blatt) => {
   // Seit Zod 4.6 steht das Muster nicht mehr in `bag.patterns`, sondern in der
   // Definition des Schemas (Formate wie `z.uuid()`) bzw. seiner Checks (`.regex()`).
-  const d = def(b.schema) as { pattern?: unknown; checks?: { _zod: { def: { pattern?: unknown } } }[] };
+  const d = def(b.schema) as {
+    pattern?: unknown;
+    checks?: { _zod: { def: { pattern?: unknown } } }[];
+  };
   return (
     d.pattern instanceof RegExp ||
     (d.checks ?? []).some((c) => c._zod.def.pattern instanceof RegExp)
