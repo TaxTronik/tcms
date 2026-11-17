@@ -9,7 +9,12 @@
 // gelesen oder ausgegeben – Lücken darin verrieten fremde Audit-Aktivität.
 //
 // Kosten: Lesen höchstens `MAX_AUDIT_JE_SEITE` Einträge je Aufruf (Cursor
-// über `pos`, Index (tenant_id, pos) bzw. (tenant_id, programmId, pos)). Die
+// über `pos`, Index (tenant_id, pos) bzw. (tenant_id, programmId, pos)); für die
+// Kanzleileitung keine Abfrage vertraulicher Feststellungen (nichts zu
+// maskieren), sonst eine je Aufruf über die vertraulichen des Tenants. Der
+// Filter `mandantId` nimmt alle Einträge des Mandanten auf, auch ohne Programm
+// (Anker, Kontaktrollen, Nachrichten; `mandantFilter`), und `mandantId` der
+// Antwort folgt derselben Zuordnung (`mandantDesEintrags`). Die
 // Kettenprüfung liest in Seiten zu `PRUEF_SEITE` Einträgen (Speicher
 // begrenzt) und bricht nach `PRUEF_ZEITBUDGET_MS` mit Fortsetzungspunkt ab,
 // unter dem Transaktionslimit von 30 s.
@@ -50,7 +55,12 @@ import {
 import { aktuellerTenant, type Prisma } from '@tcms/db';
 import { KETTEN_ANFANG, pruefeKette, type KettenStand } from '@tcms/domain/audit';
 import type { DienstKontext } from '../../kontext';
-import { beteiligteVon, kannVerwalten, kannVertraulichLesen } from '../../rechte';
+import {
+  beteiligteVon,
+  kannVerwalten,
+  kannVertraulichLesen,
+  liestAlleVertraulichen,
+} from '../../rechte';
 import { alsJson, antwortNach, pruefeEingabe } from './hilfen';
 
 /** Einträge je Seite der Kettenprüfung. */
@@ -80,6 +90,11 @@ interface Verborgen {
  * maskiert (wie im Lesepfad der Feststellung).
  */
 async function verborgeneObjekte(ctx: DienstKontext): Promise<Verborgen> {
+  // Die Kanzleileitung liest alles (tcms-s12): nichts zu verbergen, keine Abfrage – sonst
+  // wüchsen die Kosten jeder Seite mit dem Bestand vertraulicher Feststellungen.
+  if (liestAlleVertraulichen(ctx.akteur)) {
+    return { feststellungen: new Set(), massnahmen: new Set(), ersteMaskiert: null };
+  }
   const vertraulich = await ctx.tx.feststellung.findMany({
     where: { vertraulich: true },
     select: {
@@ -143,6 +158,72 @@ function akteurArt(
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/** Sammeleintrag des Postausgangs: nennt Nachrichten mehrerer Mandanten, gehört zu keinem. */
+const NACHRICHTEN_ABGERUFEN = 'tcms.nachricht.abgerufen';
+
+/** `detail.mandantId` eines Eintrags (kanonisch klein), sonst null. */
+function detailMandant(detail: unknown): string | null {
+  if (typeof detail !== 'object' || detail === null || Array.isArray(detail)) return null;
+  const m = (detail as Record<string, unknown>)['mandantId'];
+  return typeof m === 'string' && UUID.test(m.toLowerCase()) ? m.toLowerCase() : null;
+}
+
+/**
+ * Einträge eines Mandanten (Filter `mandantId`): mit einem Programm des
+ * Mandanten, zum Mandantenanker selbst (`objektTyp: 'Mandant'`), mit
+ * `detail.mandantId` (z. B. Kontaktrollen, auch vor dem Einrichten eines
+ * Programms) und zu Nachrichten an den Mandanten (Postausgang des
+ * Systemakteurs, ohne Programm). Dieselbe Zuordnung wie `mandantId` der
+ * Antwort (`mandantDesEintrags`).
+ */
+async function mandantFilter(
+  ctx: DienstKontext,
+  mandantId: string,
+): Promise<Prisma.AuditEventWhereInput[]> {
+  const programme = await ctx.tx.tcmsProgramm.findMany({
+    where: { mandantId },
+    select: { id: true },
+    orderBy: { id: 'asc' },
+  });
+  const nachrichten = await ctx.tx.nachricht.findMany({
+    where: { mandantId },
+    select: { id: true },
+    orderBy: { id: 'asc' },
+  });
+  return [
+    { programmId: { in: programme.map((p) => p.id) } },
+    { objektTyp: 'Mandant', objektId: mandantId },
+    { detail: { path: ['mandantId'], equals: mandantId } },
+    {
+      objektTyp: 'Nachricht',
+      objektId: { in: nachrichten.map((n) => n.id) },
+      aktion: { not: NACHRICHTEN_ABGERUFEN },
+    },
+  ];
+}
+
+/** Mandant eines Eintrags (Antwort und Filter: dieselbe Zuordnung), sonst null. */
+function mandantDesEintrags(
+  z: {
+    aktion: string;
+    objektTyp: string;
+    objektId: string;
+    programmId: string | null;
+    detail: unknown;
+  },
+  programmJe: ReadonlyMap<string, string>,
+  nachrichtJe: ReadonlyMap<string, string>,
+): string | null {
+  if (z.programmId) return programmJe.get(z.programmId) ?? null;
+  if (z.objektTyp === 'Mandant' && UUID.test(z.objektId.toLowerCase()))
+    return z.objektId.toLowerCase();
+  const ausDetail = detailMandant(z.detail);
+  if (ausDetail) return ausDetail;
+  if (z.objektTyp === 'Nachricht' && z.aktion !== NACHRICHTEN_ABGERUFEN)
+    return nachrichtJe.get(z.objektId) ?? null;
+  return null;
+}
+
 /**
  * Kontakt-IDs (klein) unter den Akteuren, nur für maskierte Einträge abgefragt.
  * `kontaktId` ist eine UUID-Spalte: Eine Akteur-ID in anderer Form (Altbestand,
@@ -190,14 +271,7 @@ export async function leseAuditSeite(
   const absteigend = e.vor !== undefined;
   const where: Prisma.AuditEventWhereInput = {};
   if (e.programmId) where.programmId = e.programmId;
-  if (e.mandantId) {
-    const programme = await ctx.tx.tcmsProgramm.findMany({
-      where: { mandantId: e.mandantId.toLowerCase() },
-      select: { id: true },
-      orderBy: { id: 'asc' },
-    });
-    where.programmId = { in: programme.map((p) => p.id) };
-  }
+  if (e.mandantId) where.OR = await mandantFilter(ctx, e.mandantId.toLowerCase());
   if (e.aktion) where.aktion = { startsWith: e.aktion };
   if (absteigend) where.pos = { lt: e.vor };
   else if (e.nach !== undefined) where.pos = { gt: e.nach };
@@ -222,7 +296,7 @@ export async function leseAuditSeite(
   });
   const seite = zeilen.slice(0, limit);
   const programmIds = [...new Set(seite.map((z) => z.programmId).filter((x) => x !== null))];
-  const mandantJe = new Map(
+  const programmJe = new Map(
     (programmIds.length
       ? await ctx.tx.tcmsProgramm.findMany({
           where: { id: { in: programmIds } },
@@ -231,6 +305,21 @@ export async function leseAuditSeite(
         })
       : []
     ).map((p) => [p.id, p.mandantId]),
+  );
+  const nachrichtIds = [
+    ...new Set(
+      seite.filter((z) => !z.programmId && z.objektTyp === 'Nachricht').map((z) => z.objektId),
+    ),
+  ];
+  const nachrichtJe = new Map(
+    (nachrichtIds.length
+      ? await ctx.tx.nachricht.findMany({
+          where: { id: { in: nachrichtIds } },
+          select: { id: true, mandantId: true },
+          orderBy: { id: 'asc' },
+        })
+      : []
+    ).map((n) => [n.id, n.mandantId]),
   );
   const kopf = await ctx.tx.auditEvent.findFirst({
     orderBy: { pos: 'desc' },
@@ -257,7 +346,7 @@ export async function leseAuditSeite(
           objektTyp: z.objektTyp,
           objektId: z.objektId,
           programmId: z.programmId,
-          mandantId: z.programmId ? (mandantJe.get(z.programmId) ?? null) : null,
+          mandantId: mandantDesEintrags(z, programmJe, nachrichtJe),
         };
         if (istVerborgen(verborgen, z)) {
           // Positivliste (AGENTS.md: eigene Variante, nie durch Überschreiben).

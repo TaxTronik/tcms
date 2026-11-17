@@ -327,6 +327,11 @@ und Zuständigkeit ergänzt die kanzleikonsole):
 | GET     | `/v1/audit?programmId=&mandantId=&aktion=&nach=&vor=&limit=` | Admin/Partner; höchstens 500 je Seite; Cursor = Position `pos`; Vertrauliches lesbar (§ 5, tcms-s12) |
 | POST    | `/v1/audit/pruefen`                                          | Admin/Partner; Kette seitenweise, Zeitbudget 20 s, Fortsetzung `ab`                                  |
 
+Der Filter `mandantId` des Audits nimmt alle Einträge des Mandanten auf, auch solche ohne Programm: zum
+Mandantenanker, mit `detail.mandantId` (z. B. Kontaktrollen vor dem Einrichten) und zu Nachrichten an den
+Mandanten; der Sammeleintrag `tcms.nachricht.abgerufen` (Nachrichten mehrerer Mandanten) gehört zu keinem.
+`mandantId` je Eintrag folgt derselben Zuordnung.
+
 Das Audit zeigt Einträge zu vertraulichen Feststellungen und ihren Maßnahmen nur Personen, die die
 Feststellung lesen dürfen (`kannVertraulichLesen` mit dem `cli` der Anfrage, tcms-s11, ADR 0001 §5.1). Die
 Kanzleileitung (Admins/Partner) liest alles, auch ohne `cli`: alle Einträge mit Namen, Personen-IDs, Detail

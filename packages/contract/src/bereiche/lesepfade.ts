@@ -1221,7 +1221,11 @@ const auditRahmen = {
   objektTyp: text(200),
   objektId: text(200),
   programmId: text(200).nullable(),
-  /** Mandant des Programms (Zuordnung für die Anzeige), sonst null. */
+  /**
+   * Mandant des Eintrags (Anzeige und Filter `mandantId`): über das Programm, den
+   * Mandantenanker (`objektTyp` Mandant), `detail.mandantId` oder die Nachricht
+   * (außer dem Sammeleintrag `tcms.nachricht.abgerufen`), sonst null.
+   */
   mandantId: z.uuid().nullable(),
 };
 
