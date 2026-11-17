@@ -60,6 +60,7 @@ import {
 import {
   AnlageGespeichertSchema,
   EreignisAktionSchema,
+  EreignisVerwerfenBestaetigenBodySchema,
   EreignisAnlageLesenSchema,
   EreignisAnlagenJeDokumentPfadSchema,
   EreignisAnlagenJeDokumentQuerySchema,
@@ -72,6 +73,7 @@ import {
   ErklaerungBodySchema,
   ErklaerungErgebnisSchema,
   FeststellungAktionSchema,
+  FeststellungVerwerfenBestaetigenBodySchema,
   FeststellungDetailSchema,
   FeststellungErfassenBodySchema,
   FeststellungErfasstSchema,
@@ -958,6 +960,7 @@ export const ENDPUNKTE = register({
     methode: 'POST',
     pfad: `${F}/verwerfen/bestaetigen`,
     params: FeststellungAktionSchema,
+    body: FeststellungVerwerfenBestaetigenBodySchema,
     antwort: FeststellungErgebnisSchema,
   },
   feststellungVerwerfenAblehnen: {
@@ -1075,6 +1078,7 @@ export const ENDPUNKTE = register({
     methode: 'POST',
     pfad: `${E}/verwerfen/bestaetigen`,
     params: EreignisAktionSchema,
+    body: EreignisVerwerfenBestaetigenBodySchema,
     antwort: EreignisErgebnisSchema,
   },
   ereignisVerwerfenAblehnen: {
@@ -1099,7 +1103,7 @@ export const ENDPUNKTE = register({
     antwort: PortalMeldungErgebnisSchema,
     status: 201,
     // Jedes 409 mit Grund (meldeEreignis, packages/service; tcms-s10).
-    konflikte: ['IDEMPOTENZ_ABWEICHUNG', 'ZWISCHENZEITLICH_GEAENDERT'],
+    konflikte: ['IDEMPOTENZ_ABWEICHUNG', 'ZWISCHENZEITLICH_GEAENDERT', 'ZU_VIELE_MELDUNGEN'],
   },
 
   // ---- Länder-Monitor ---------------------------------------------------------

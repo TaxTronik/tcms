@@ -89,6 +89,8 @@ export type VerweigerungGrund = (typeof VERWEIGERUNG_GRUENDE)[number];
  *                              Schreibkonflikt der Datenbank)
  *   IDEMPOTENZ_ABWEICHUNG      Portal-Meldung: derselbe Idempotenzschlüssel
  *                              derselben Person mit anderem Inhalt (24 h)
+ *   ZU_VIELE_MELDUNGEN         Portal-Meldung: Höchstzahl der Meldungen je
+ *                              Person und Mandant in einer Stunde erreicht
  *
  * Wie `grund` nur für sichtbare Objekte: Fremdes und Unbekanntes bleibt
  * `NICHT_GEFUNDEN` ohne Grund (kein Existenz-Orakel).
@@ -103,6 +105,7 @@ export const KONFLIKT_GRUENDE = [
   'INHALT_VERAENDERT',
   'ZWISCHENZEITLICH_GEAENDERT',
   'IDEMPOTENZ_ABWEICHUNG',
+  'ZU_VIELE_MELDUNGEN',
 ] as const;
 
 export type KonfliktGrund = (typeof KONFLIKT_GRUENDE)[number];
