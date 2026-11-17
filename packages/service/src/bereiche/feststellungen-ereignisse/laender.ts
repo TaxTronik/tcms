@@ -29,6 +29,7 @@ import {
   fmtMonatJahr,
   istEuAusland,
   LAND_NAME,
+  summeEur,
   type FeststellungStatus,
 } from '@tcms/domain';
 import type { Protokoll } from '../../audit';
@@ -312,14 +313,12 @@ function juengsteJeLand(staende: StandZeile[]): Map<string, StandZeile> {
 function summen(
   m: Map<string, { land: string; fernverkaeufeLfdEur: unknown; fernverkaeufeVorjahrEur: unknown }>,
 ) {
-  let lfd = 0;
-  let vj = 0;
-  for (const s of m.values()) {
-    if (!istEuAusland(s.land)) continue;
-    lfd += Number(s.fernverkaeufeLfdEur);
-    vj += Number(s.fernverkaeufeVorjahrEur);
-  }
-  return { lfd, vj };
+  // Auf den Cent genau, unabhängig von der Reihenfolge der Länder.
+  const eu = [...m.values()].filter((s) => istEuAusland(s.land));
+  return {
+    lfd: summeEur(eu.map((s) => Number(s.fernverkaeufeLfdEur))),
+    vj: summeEur(eu.map((s) => Number(s.fernverkaeufeVorjahrEur))),
+  };
 }
 
 /**

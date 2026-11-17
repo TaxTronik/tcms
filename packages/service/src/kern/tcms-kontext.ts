@@ -45,6 +45,7 @@ import {
   monatSchluessel,
   pruflast,
   statusAm,
+  summeEur,
   ueber,
   type Abschnitt,
   type AnzeigeStatus,
@@ -1120,8 +1121,9 @@ function berechne(
     }))
     .sort((a, b) => b.fernverkaeufeLfdEur - a.fernverkaeufeLfdEur);
   const euLaender = laender.filter((l) => istEuAusland(l.land));
-  const fernverkaeufeLfd = euLaender.reduce((s, l) => s + l.fernverkaeufeLfdEur, 0);
-  const fernverkaeufeVorjahr = euLaender.reduce((s, l) => s + l.fernverkaeufeVorjahrEur, 0);
+  // Auf den Cent genau summiert: Gleitkommasummen lägen an der Schwelle knapp daneben.
+  const fernverkaeufeLfd = summeEur(euLaender.map((l) => l.fernverkaeufeLfdEur));
+  const fernverkaeufeVorjahr = summeEur(euLaender.map((l) => l.fernverkaeufeVorjahrEur));
   const laenderStand = laender.reduce<Date | null>(
     (m, l) => (!m || l.stand > m ? l.stand : m),
     null,
