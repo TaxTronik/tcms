@@ -314,6 +314,12 @@ function fehlerAntwort(
   if (e instanceof MethodeNichtErlaubt) {
     return fehler(405, { code: e.code }, requestId, { ...zusatz, allow: e.erlaubt.join(', ') });
   }
+  if (e instanceof DienstFehler && e.code === 'NICHT_AUTHENTIFIZIERT') {
+    // Aus dem Dienstkern (`normalisiereAkteur`): dieselbe Antwort wie jeder
+    // andere Authentifizierungsfehler – ohne Meldung, Verbindung schließen.
+    felder.grund = 'DIENSTKERN';
+    return fehler(401, { code: 'NICHT_AUTHENTIFIZIERT' }, requestId, SCHLIESSEN);
+  }
   if (e instanceof DienstFehler) {
     const f: Fehler = { code: e.code };
     if (e.message !== e.code) f.meldung = e.message.slice(0, MAX_MELDUNG);
@@ -352,9 +358,47 @@ function fehlerAntwort(
     );
   }
   felder.fehler = 'INTERN';
-  felder.ausnahme = e instanceof Error ? e.name : typeof e;
-  felder.stack = e instanceof Error && e.stack ? e.stack : null;
+  Object.assign(felder, fehlerKennung(e));
   return fehler(500, { code: 'INTERN' }, requestId, zusatz);
+}
+
+const KENNUNG = /^[A-Za-z0-9_$]{1,60}$/;
+const SQLSTATE = /^[0-9A-Z]{5}$/;
+
+/**
+ * Kennung eines unbekannten Fehlers für das Log: nur Name, Code (z. B. Prisma
+ * `P2039`, Systemfehler `ECONNRESET`) und SQLSTATE der Ursache, gelesen aus
+ * den strukturierten Feldern (`meta`, `driverAdapterError`, `cause`; wie
+ * `eingabeFehlercode`). Nie Meldung oder Stack: Deren erste Zeile ist die
+ * Meldung, und Prisma rendert dort Aufrufargumente bzw. die Servermeldung –
+ * Eingabewerte und Namen (Log-Regel: nur IDs und Codes).
+ */
+function fehlerKennung(e: unknown): Record<string, LogWert> {
+  const felder: Record<string, LogWert> = {
+    ausnahme: e instanceof Error ? (KENNUNG.test(e.name) ? e.name : 'Error') : typeof e,
+  };
+  const code = (e as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && KENNUNG.test(code)) felder.code = code;
+  const gesehen = new Set<object>();
+  const suche = (x: unknown, tiefe: number): string | null => {
+    if (!x || typeof x !== 'object' || tiefe > 5 || gesehen.has(x)) return null;
+    gesehen.add(x);
+    const o = x as Record<string, unknown>;
+    if (tiefe > 0) {
+      for (const k of ['originalCode', 'code']) {
+        const v = o[k];
+        if (typeof v === 'string' && SQLSTATE.test(v)) return v;
+      }
+    }
+    for (const k of ['meta', 'driverAdapterError', 'cause']) {
+      const r = suche(o[k], tiefe + 1);
+      if (r) return r;
+    }
+    return null;
+  };
+  const sqlstate = suche(e, 0);
+  if (sqlstate) felder.sqlstate = sqlstate;
+  return felder;
 }
 
 function felderAusZod(e: ZodError): Record<string, string[]> {
