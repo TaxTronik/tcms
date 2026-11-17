@@ -183,6 +183,44 @@ describe.skipIf(!AKTIV)('Geschäftsprofil: Fachoperationen', () => {
       expect(staende.map((s) => s.version).sort()).toEqual([1, 2]);
     });
 
+    it('Vergleich auf Werten: Cent-Änderung über die Lieferschwelle ist eine Änderung, Umsortieren nicht (Befund 25)', async () => {
+      const d = await legeProgrammAn(tenant);
+      const akteureD = akteureVon(d);
+      const aendern = async (fn: (p: typeof d.profil) => void, ereignisseAnlegen = true) => {
+        const st = await offenerStand(d);
+        const profil = structuredClone(st.antworten as unknown as typeof d.profil);
+        fn(profil);
+        return rufe(akteureD.hb, (ctx) =>
+          profilAendern(ctx, {
+            mandantId: d.mandantId,
+            profilStandId: st.id,
+            profil,
+            gueltigAb: HEUTE,
+            ereignisseAnlegen,
+          }),
+        );
+      };
+      await aendern((p) => {
+        p.p10.euFernverkaeufeVorjahrEur = 0;
+        p.p10.euFernverkaeufeLfdEur = 9_999.6;
+      }, false);
+      // Beide Beträge lauten gerundet „10.000 €"; der Schwellenstatus wechselt trotzdem.
+      const r = await aendern((p) => {
+        p.p10.euFernverkaeufeLfdEur = 10_000.4;
+      });
+      expect(r.version).toBe(3);
+      const t04 = await mitTenant(tenant, (tx) =>
+        tx.ereignis.findMany({ where: { programmId: d.programmId, typ: 'T-04' } }),
+      );
+      expect(t04.map((e) => e.nummer)).toEqual(r.ereignisse);
+      // Reine Umsortierung einer Liste ist keine Änderung.
+      const f = await fehlerVon(aendern((p) => p.p3.laender.reverse()));
+      expect(f).toMatchObject({
+        code: 'UNGUELTIG',
+        message: 'Keine Änderung gegenüber dem letzten Profilstand.',
+      });
+    });
+
     it('Eingaben: Vergangenheit, unverändert, unvollständig, Zusatzfelder, Rechte', async () => {
       const st = await offenerStand(a);
       const basis = {
