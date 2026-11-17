@@ -132,7 +132,11 @@ export interface FrequenzAbleitung {
   quelle: RisikoFuerFrequenz | null;
   /** Effektive Frequenz weicht von der Vorlage ab (Matrix ist strenger). */
   abweichendVonVorlage: boolean;
-  /** Kurzbegründung für Tooltips, z. B. „abgeleitet aus FF · kritisch (EC-UST-05)". */
+  /**
+   * Kurzbegründung für Tooltips und Audit, z. B. „abgeleitet aus FF · kritisch
+   * (EC-UST-05)". Stammt die Prüfung bei Auslösung aus anderen Risiken als der
+   * Turnus, nennt sie auch diese („Prüfung bei Auslösung aus …", `anlassQuellen`).
+   */
   begruendung: string;
 }
 
@@ -145,6 +149,32 @@ export function periodeFuer(vorlage: Frequenz, programmTurnus: Turnus): Turnus {
   return vorlage.turnus === 'MONATLICH' || vorlage.turnus === 'QUARTALSWEISE'
     ? vorlage.turnus
     : programmTurnus;
+}
+
+/**
+ * Risiken, aus denen die Prüfung bei Auslösung der Mindestfrequenz stammt,
+ * wenn die Quelle des Turnus sie nicht selbst verlangt (sonst leer). Reihenfolge
+ * nach GT-Vorrang, bei Gleichstand wie übergeben. Eine Regel für Kurzbegründung
+ * und Detailansicht.
+ */
+export function anlassQuellen<R extends RisikoFuerFrequenz>(
+  quelle: RisikoFuerFrequenz | null,
+  risiken: readonly R[],
+  periode: Turnus,
+): R[] {
+  if (!quelle || matrixFrequenz(quelle.gt, quelle.brutto, periode).anlass) return [];
+  return risiken
+    .filter((r) => matrixFrequenz(r.gt, r.brutto, periode).anlass)
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => GT_VORRANG[b.r.gt] - GT_VORRANG[a.r.gt] || a.i - b.i)
+    .map(({ r }) => r);
+}
+
+/** Höchstzahl der in der Kurzbegründung genannten Auslösungs-Quellen. */
+const MAX_GENANNT = 3;
+
+function risikoKurz(r: RisikoFuerFrequenz): string {
+  return `${r.gt} · ${r.brutto.toLowerCase()} (${r.code})`;
 }
 
 export function leiteFrequenzAb(
@@ -167,8 +197,13 @@ export function leiteFrequenzAb(
   }
   const effektiv = strengere(vorlage, mindest);
   const abweichendVonVorlage = !gleicheFrequenz(effektiv, vorlage);
+  const anlass = anlassQuellen(quelle, risiken, periode);
+  const weitere = anlass.length - MAX_GENANNT;
+  const anlassText = anlass.length
+    ? `; Prüfung bei Auslösung aus ${anlass.slice(0, MAX_GENANNT).map(risikoKurz).join(', ')}${weitere > 0 ? ` und ${weitere} weiteren` : ''}`
+    : '';
   const begruendung = quelle
-    ? `abgeleitet aus ${quelle.gt} · ${quelle.brutto.toLowerCase()} (${quelle.code}); Vorlage: ${frequenzLabel(vorlage)}`
+    ? `abgeleitet aus ${risikoKurz(quelle)}${anlassText}; Vorlage: ${frequenzLabel(vorlage)}`
     : `keine verknüpften Risiken; Vorlage: ${frequenzLabel(vorlage)}`;
   return { mindest, effektiv, gt: quelle?.gt ?? null, quelle, abweichendVonVorlage, begruendung };
 }

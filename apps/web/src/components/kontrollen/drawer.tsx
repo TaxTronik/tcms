@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import {
+  anlassQuellen,
   AUSFUEHRUNG_LABEL,
   fmtDatum,
   fmtDatumZeit,
@@ -170,15 +171,13 @@ export function KontrolleDrawer({
   const luecken: string[] = [...k.pflichtattributeLuecken];
   if (k.design === 'NICHT_BEURTEILT') luecken.push('Designbeurteilung');
 
-  // Der Anlass-Anteil der Mindestfrequenz kann aus einem anderen Risiko stammen als der Turnus.
-  const anlassAus =
-    k.ableitung.mindest.anlass &&
-    quelle &&
-    !matrixFrequenz(quelle.gt, quelle.brutto, periode).anlass
-      ? risiken
-          .filter((r) => matrixFrequenz(r.gt, r.bewertung.brutto.klasse, periode).anlass)
-          .map((r) => `${r.code} (${r.gt})`)
-      : [];
+  // Der Anlass-Anteil der Mindestfrequenz kann aus einem anderen Risiko stammen als der Turnus
+  // (dieselbe Regel wie in der Kurzbegründung, `anlassQuellen`).
+  const anlassAus = anlassQuellen(
+    quelle,
+    risiken.map((r) => ({ code: r.code, gt: r.gt, brutto: r.bewertung.brutto.klasse })),
+    periode,
+  ).map((r) => `${r.code} (${r.gt})`);
   const zellenRisiken = (gt: GovernanceTyp, klassen: Klasse[]) =>
     risiken.filter((r) => r.gt === gt && klassen.includes(r.bewertung.brutto.klasse));
 
