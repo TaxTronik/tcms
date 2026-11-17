@@ -4,7 +4,7 @@
 // zurück; Struktur und Längen prüft das Lesen weiter.
 import { describe, expect, it } from 'vitest';
 import { SetupEntwurfSchema, TeilbereichSchrittSchema, ZieleSchrittSchema } from '@tcms/contract';
-import { leseEntwurf, neuerEntwurf } from './entwurf';
+import { leseEntwurf, mindestEnde, neuerEntwurf, pruefeSchritt1 } from './entwurf';
 
 const HEUTE = new Date('2026-10-19T00:00:00Z');
 
@@ -51,5 +51,44 @@ describe('leseEntwurf: Altbestand', () => {
     expect(e.teilbereich).toEqual(basis.teilbereich);
     expect(e.ziele).toEqual(basis.ziele);
     expect(e.risiken).toEqual(alt.risiken);
+  });
+});
+
+describe('mindestEnde: sechs Monate Wirksamkeit', () => {
+  const t = (s: string) => new Date(`${s}T00:00:00Z`);
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+  it.each([
+    ['2026-01-01', '2026-06-30'],
+    ['2026-03-31', '2026-09-30'],
+    ['2026-08-29', '2027-02-28'],
+    ['2026-10-31', '2027-04-30'],
+    ['2026-12-31', '2027-06-30'],
+  ])('%s → %s (unverändert)', (ab, ende) => {
+    expect(iso(mindestEnde(t(ab)))).toBe(ende);
+  });
+
+  it.each([
+    ['2026-08-30', '2027-02-28'],
+    ['2026-08-31', '2027-02-28'],
+    ['2027-08-30', '2028-02-29'],
+    ['2027-08-31', '2028-02-29'],
+  ])('Beginn %s: Ende spätestens am Monatsende des Februars (%s)', (ab, ende) => {
+    expect(iso(mindestEnde(t(ab)))).toBe(ende);
+  });
+
+  it('Schritt 1 nimmt 31.08.–28.02. als sechs Monate an', () => {
+    const e = neuerEntwurf(HEUTE, null);
+    const mit = {
+      ...e,
+      teilbereich: { ...e.teilbereich, abgrenzung: 'x'.repeat(40) },
+      zeitraum: {
+        ...e.zeitraum,
+        angemessenheitStichtag: '2026-08-30',
+        wirksamAb: '2026-08-31',
+        wirksamBis: '2027-02-28',
+      },
+    };
+    expect(pruefeSchritt1(mit, t('2026-08-01'))).toEqual([]);
   });
 });

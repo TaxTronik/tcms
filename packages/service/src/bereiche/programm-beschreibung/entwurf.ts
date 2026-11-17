@@ -122,12 +122,17 @@ function tag(iso: string): Date | null {
   return Number.isNaN(d.getTime()) || isoDatum(d) !== iso ? null : d;
 }
 
-/** Erster Tag nach sechs vollen Monaten ab `ab` minus ein Tag (z. B. 01.01. → 30.06.). */
+/**
+ * Erster Tag nach sechs vollen Monaten ab `ab` minus ein Tag (z. B. 01.01. → 30.06.,
+ * 31.03. → 30.09.). Hat der Zielmonat den Tag nicht (31.08. → Februar), endet der
+ * Zeitraum spätestens am letzten Tag des Zielmonats statt im März.
+ */
 export function mindestEnde(ab: Date): Date {
-  return addTage(
-    new Date(Date.UTC(ab.getUTCFullYear(), ab.getUTCMonth() + 6, ab.getUTCDate())),
-    -1,
-  );
+  const j = ab.getUTCFullYear();
+  const m = ab.getUTCMonth() + 6;
+  const roh = addTage(new Date(Date.UTC(j, m, ab.getUTCDate())), -1);
+  const monatsende = letzterTagDesMonats(j, m);
+  return roh.getTime() < monatsende.getTime() ? roh : monatsende;
 }
 
 export function pruefeSchritt1(e: SetupEntwurf, heute: Date): string[] {
