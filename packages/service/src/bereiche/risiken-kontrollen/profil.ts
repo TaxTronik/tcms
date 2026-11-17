@@ -387,6 +387,8 @@ async function planeKuenftigNeu(
       d.durchgefuehrtVon == null &&
       d.eingereichtAm == null &&
       d.abgeschlossenAm == null &&
+      d.entfallenBegruendung == null &&
+      d.entfallenVon == null &&
       d.periodeVon.getTime() > a.heute.getTime() &&
       d._count.nachweise === 0 &&
       d._count.feststellungen === 0 &&

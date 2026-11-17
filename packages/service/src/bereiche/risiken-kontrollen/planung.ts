@@ -243,8 +243,10 @@ function gleichePeriode(
 
 /**
  * Bedingung „unberührt": nur geplante, nicht begonnene, nicht eingereichte,
- * nicht abgeschlossene Durchführungen ohne Nachweise und ohne Bezug zu
- * Feststellungen. Gilt bei der Auswahl und noch einmal beim Löschen.
+ * nicht abgeschlossene Durchführungen ohne offenen Entfallen-Antrag (der
+ * Vier-Augen-Vorgang bleibt bis zur Entscheidung), ohne Nachweise und ohne
+ * Bezug zu Feststellungen. Gilt bei der Auswahl (`istKandidat`, `entfernbar`
+ * in profil.ts) und noch einmal beim Löschen.
  */
 export const UNBERUEHRT = {
   status: 'GEPLANT',
@@ -253,6 +255,8 @@ export const UNBERUEHRT = {
   durchgefuehrtVon: null,
   eingereichtAm: null,
   abgeschlossenAm: null,
+  entfallenBegruendung: null,
+  entfallenVon: null,
   nachweise: { none: {} },
   feststellungen: { none: {} },
   nachkontrolleFuer: { none: {} },
@@ -323,6 +327,8 @@ export async function planeDurchfuehrungenNeu(
     !d.durchgefuehrtVon &&
     !d.eingereichtAm &&
     !d.abgeschlossenAm &&
+    !d.entfallenBegruendung &&
+    !d.entfallenVon &&
     d.periodeBis.getTime() > a.heute.getTime() &&
     d._count.nachweise === 0 &&
     d._count.feststellungen === 0 &&
