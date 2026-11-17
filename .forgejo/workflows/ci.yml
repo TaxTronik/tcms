@@ -19,8 +19,8 @@
 #               Release-Manifest der kanzleikonsole
 #
 # Runner: act_runner startet Services im Host-Netz; der PostgreSQL-Service
-# nutzt deshalb einen eigenen Port (15432), Runner-Kapazität 1 je Daemon wie
-# in der kanzleikonsole.
+# nutzt deshalb einen eigenen Port (15432) und lauscht nur auf localhost,
+# Runner-Kapazität 1 je Daemon wie in der kanzleikonsole.
 # =============================================================================
 name: CI
 
@@ -138,12 +138,19 @@ jobs:
         image: postgres:18-alpine@sha256:96d56f7f57c6aacd1fcb908bc83b345ec5f83231ee486dd66a1baadce274db88
         env:
           POSTGRES_USER: tcms
-          # Nur für diesen kurzlebigen CI-Service; kein Geheimnis.
+          # Nur für diesen kurzlebigen CI-Service und nur über localhost
+          # erreichbar (unten); trotzdem ein festes Passwort im Repo.
           POSTGRES_PASSWORD: tcms-ci-superuser
           POSTGRES_DB: tcms
           PGPORT: '15432'
+          # Im Host-Netz des Runners wirkt `ports:` nicht, und das Image lauscht
+          # sonst auf allen Schnittstellen des Runner-Hosts (wie TS-11 für
+          # docker-compose): initdb schreibt listen_addresses in postgresql.conf
+          # (initdb -c, PostgreSQL >= 16). Der Job verbindet sich über localhost.
+          POSTGRES_INITDB_ARGS: '-c listen_addresses=localhost'
         ports:
-          - 15432:15432
+          # Für den Fall eines Bridge-Netzes: nur an 127.0.0.1 veröffentlichen.
+          - 127.0.0.1:15432:15432
         options: >-
           --health-cmd "pg_isready -U tcms -d tcms"
           --health-interval 5s

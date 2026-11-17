@@ -9,6 +9,7 @@ import {
   chmodSync,
   copyFileSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -25,8 +26,8 @@ const SKRIPT = fileURLToPath(new URL('../../../../scripts/lokale-env.mjs', impor
 const BEISPIEL = fileURLToPath(new URL('../../../../.env.example', import.meta.url));
 const verzeichnisse: string[] = [];
 
-/** Leerer git-Arbeitsbaum mit `.env.example` des Repos und `.gitignore` (`.env`). */
-function arbeitsbaum(gitignore = '.env\n'): string {
+/** Leerer git-Arbeitsbaum mit `.env.example` des Repos und `.gitignore` wie im Repo. */
+function arbeitsbaum(gitignore = '.env*\n!.env.example\n'): string {
   const w = mkdtempSync(join(tmpdir(), 'lokale-env-'));
   verzeichnisse.push(w);
   copyFileSync(BEISPIEL, join(w, '.env.example'));
@@ -53,17 +54,31 @@ function werte(w: string): Record<string, string> {
 }
 
 const modus = (p: string) => statSync(p).mode & 0o777;
+// Unter Windows gibt es keinen POSIX-Modus (chmod setzt nur das Schreibschutz-
+// Attribut, stat meldet 0o666); dort prüfen die Tests stattdessen, dass das
+// Skript keinen Modus 0600 behauptet. Unter Linux/macOS gilt der Modus.
+const POSIX = process.platform !== 'win32';
+function erwarteSchutz(p: string, ausgabe: string) {
+  if (POSIX) {
+    expect(modus(p)).toBe(0o600);
+    expect(ausgabe).toMatch(/\.env: Modus 0600, Werte nicht ausgegeben/);
+  } else {
+    expect(ausgabe).not.toMatch(/Modus 0600,|Modus auf 0600/);
+    expect(ausgabe).toMatch(/NTFS-Rechte/);
+  }
+}
 
 afterEach(() => {
   for (const v of verzeichnisse.splice(0)) rmSync(v, { recursive: true, force: true });
 });
 
-describe('pnpm env:lokal', () => {
+// Je Lauf startet node und mehrmals git; unter Last (DB-Tests parallel, Windows) über 5 s.
+describe('pnpm env:lokal', { timeout: 30_000 }, () => {
   it('legt .env mit Modus 0600 an; der Code-Schlüssel besteht die Startprüfung des Dienstes', () => {
     const w = arbeitsbaum();
     const r = lauf(w);
     expect(r.code, r.ausgabe).toBe(0);
-    expect(modus(join(w, '.env'))).toBe(0o600);
+    erwarteSchutz(join(w, '.env'), r.ausgabe);
     const e = werte(w);
     expect(e['SESSION_SECRET']).toMatch(/^[0-9a-f]{64}$/);
     expect(e['TCMS_CODE_SCHLUESSEL']).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -105,15 +120,18 @@ describe('pnpm env:lokal', () => {
       vorher.replace(/^SESSION_SECRET=.*$/m, 'SESSION_SECRET=').replace(/\n$/, ''),
     );
     chmodSync(join(w, '.env'), 0o644);
-    expect(lauf(w).code).toBe(0);
+    const ergaenzt = lauf(w);
+    expect(ergaenzt.code, ergaenzt.ausgabe).toBe(0);
     expect(werte(w)['TCMS_CODE_SCHLUESSEL']).toBe(code);
     expect(werte(w)['SESSION_SECRET']).toMatch(/^[0-9a-f]{64}$/);
-    expect(modus(join(w, '.env'))).toBe(0o600);
-    // Ohne Änderung wird nur der Modus korrigiert.
+    erwarteSchutz(join(w, '.env'), ergaenzt.ausgabe);
+    // Ohne Änderung wird nur der Modus korrigiert (unter Windows gibt es keinen).
     chmodSync(join(w, '.env'), 0o644);
     const m = lauf(w);
-    expect(m.ausgabe).toMatch(/Modus auf 0600 gesetzt/);
-    expect(modus(join(w, '.env'))).toBe(0o600);
+    expect(m.code, m.ausgabe).toBe(0);
+    if (POSIX) expect(m.ausgabe).toMatch(/Modus auf 0600 gesetzt/);
+    else expect(m.ausgabe).not.toMatch(/Modus auf 0600 gesetzt/);
+    erwarteSchutz(join(w, '.env'), m.ausgabe);
   });
 
   it('ersetzt Platzhalter, ergänzt fehlende Zeilen und behält einen eigenen gültigen Schlüssel', () => {
@@ -155,6 +173,13 @@ describe('pnpm env:lokal', () => {
     const offen = arbeitsbaum('');
     expect(lauf(offen).code).toBe(1);
     expect(() => statSync(join(offen, '.env'))).toThrow();
+    // Nur `.env` ignoriert: Die Temporärdatei mit allen Werten bliebe nach einem
+    // Abbruch als nicht ignorierte Datei liegen – Abbruch, bevor etwas entsteht.
+    const nurEnv = arbeitsbaum('.env\n');
+    const t = lauf(nurEnv);
+    expect(t.code, t.ausgabe).toBe(1);
+    expect(t.ausgabe).toMatch(/\.env\.tmp-… wird von git nicht ignoriert/);
+    expect(readdirSync(nurEnv).filter((n) => n.startsWith('.env'))).toEqual(['.env.example']);
     const versioniert = arbeitsbaum();
     writeFileSync(join(versioniert, '.env'), 'ANDERES=1\n');
     execFileSync('git', ['-C', versioniert, 'add', '-f', '.env'], { stdio: 'pipe' });
@@ -162,6 +187,23 @@ describe('pnpm env:lokal', () => {
     expect(r.code).toBe(1);
     expect(r.ausgabe).toMatch(/git-Index/);
     expect(readFileSync(join(versioniert, '.env'), 'utf8')).toBe('ANDERES=1\n');
+  });
+
+  it('die .gitignore des Repos ignoriert jede .env-Variante außer der Vorlage', () => {
+    const repo = fileURLToPath(new URL('../../../..', import.meta.url));
+    const ignoriert = (p: string) =>
+      spawnSync('git', ['-C', repo, 'check-ignore', '-q', '--no-index', '--', p]).status === 0;
+    for (const p of [
+      '.env',
+      '.env.local',
+      '.env.production',
+      '.env.bak',
+      '.env.tmp-123-abcd',
+      'apps/web/.env.production',
+    ]) {
+      expect(ignoriert(p), p).toBe(true);
+    }
+    expect(ignoriert('.env.example')).toBe(false);
   });
 
   it('schreibt nie über einen Symlink und nie mit NODE_ENV=production', () => {

@@ -16,7 +16,8 @@ const werkzeug = (name: string) => new URL(`../../../../scripts/${name}`, import
 const { imKontext, kontextDateien, leseRegeln, musterRegex } = (await import(
   werkzeug('docker-kontext.mjs')
 )) as DockerKontext;
-const { pruefeDockerfile } = (await import(werkzeug('pruefe-dockerfile.mjs'))) as {
+const { BASIS, pruefeDockerfile } = (await import(werkzeug('pruefe-dockerfile.mjs'))) as {
+  BASIS: Record<'NODE_IMAGE' | 'POSTGRES_IMAGE', string>;
   pruefeDockerfile: (text: string, kontext: string[]) => string[];
 };
 
@@ -84,6 +85,132 @@ describe('Dockerfile und Build-Kontext', () => {
       /Geheimnis in ENV/,
     ],
     ['migrate als root', ersetze('USER 70:70\n', ''), /migrate: USER 70:70 fehlt/],
+    // Befund 23: Digest-Pinning an FROM vorbei.
+    [
+      'zweite globale ARG (überschreibt den Digest)',
+      ersetze('\n\n# ----- Build', '\nARG NODE_IMAGE=node:24-alpine\n\n# ----- Build'),
+      /ARG NODE_IMAGE nicht wie gepinnt/,
+    ],
+    [
+      'fremde Basis über zweite ARG',
+      ersetze('\n\n# ----- Build', '\nARG POSTGRES_IMAGE=evil.example/pg:18\n\n# ----- Build'),
+      /ARG POSTGRES_IMAGE nicht wie gepinnt/,
+    ],
+    [
+      'Basis-ARG nur im Stage',
+      ersetze('ARG NODE_IMAGE=', 'ARG NODE_IMAGE_X=').replace(
+        'WORKDIR /repo',
+        `ARG NODE_IMAGE=${BASIS.NODE_IMAGE}\nWORKDIR /repo`,
+      ),
+      /ARG NODE_IMAGE nicht wie gepinnt/,
+    ],
+    [
+      'COPY --from eines Images (api)',
+      ersetze('WORKDIR /app\n', 'WORKDIR /app\nCOPY --from=ghcr.io/fremd/werkzeug /x /x\n'),
+      /Quelle ghcr\.io\/fremd\/werkzeug ist kein vorheriger Stage/,
+    ],
+    [
+      'COPY --from eines Images (migrate)',
+      ersetze(
+        'COPY --from=migrate-dateien /opt/tcms /opt/tcms',
+        'COPY --from=migrate-dateien /opt/tcms /opt/tcms\nCOPY --from=ghcr.io/fremd/w:1 /x /x',
+      ),
+      /Quelle ghcr\.io\/fremd\/w:1 ist kein vorheriger Stage/,
+    ],
+    [
+      'COPY --from eines späteren Stages',
+      ersetze('COPY --from=bau --chown=0:0 /app /app', 'COPY --from=migrate --chown=0:0 /app /app'),
+      /Quelle migrate ist kein vorheriger Stage/,
+    ],
+    [
+      'RUN --mount aus einem Image',
+      ersetze(
+        'WORKDIR /app\n',
+        'WORKDIR /app\nRUN --mount=type=bind,from=ghcr.io/fremd/img,target=/m cp /m/x /usr/local/bin/x\n',
+      ),
+      /Quelle ghcr\.io\/fremd\/img ist kein vorheriger Stage/,
+    ],
+    [
+      'RUN --mount des Kontexts im Laufzeit-Stage',
+      ersetze('WORKDIR /app\n', 'WORKDIR /app\nRUN --mount=type=bind,target=/m cp /m/x /x\n'),
+      /api: RUN mit Optionen/,
+    ],
+    [
+      'escape-Direktive',
+      `# escape=\`\n${DOCKERFILE.replace('WORKDIR /app\n', 'WORKDIR /app\nRUN true `\nCOPY . /x\n')}`,
+      /keine Parser-Direktive \(# escape=/,
+    ],
+    ['check-Direktive', `# check=skip=all\n${DOCKERFILE}`, /keine Parser-Direktive/],
+    [
+      'Fortsetzung mit Leerraum nach dem Backslash',
+      ersetze('WORKDIR /app\n', 'WORKDIR /app\nRUN true \\  \n  && wget -q https://x.invalid/a\n'),
+      /api: Werkzeug oder Download/,
+    ],
+    ['Heredoc', ersetze('WORKDIR /app\n', 'WORKDIR /app\nRUN <<EOF\ntrue\nEOF\n'), /Heredoc/],
+    // Befund 24: Werkzeug-/Download-Regel, USER, CMD, ENTRYPOINT.
+    [
+      'Download hinter dem Präfix RUN set -eu;',
+      ersetze(
+        'WORKDIR /app\n',
+        'WORKDIR /app\nRUN set -eu; apk add --no-cache curl=8.0.0-r0; curl -fsSL https://x.invalid/i -o /usr/local/bin/x\n',
+      ),
+      /api: Werkzeug oder Download im Laufzeit-Stage/,
+    ],
+    [
+      'Download in der Invarianten-RUN',
+      ersetze('test -r node_modules/.prisma/client/default.js', 'test -r x; /usr/bin/wget -q x'),
+      /api: Werkzeug oder Download im Laufzeit-Stage/,
+    ],
+    [
+      'Download im migrate-Stage',
+      ersetze(
+        'WORKDIR /opt/tcms\n',
+        'WORKDIR /opt/tcms\nRUN apk add --no-cache curl && curl -o /x https://x.invalid\n',
+      ),
+      /migrate: Werkzeug oder Download im Stage/,
+    ],
+    [
+      'Download im Stage migrate-dateien',
+      ersetze(
+        'COPY packages/db/betrieb /opt/tcms/betrieb\n',
+        'COPY packages/db/betrieb /opt/tcms/betrieb\nRUN wget -q https://x.invalid/a\n',
+      ),
+      /migrate-dateien: Werkzeug oder Download im Stage/,
+    ],
+    [
+      'Node im migrate-Stage neben der Prüfung auf fehlendes Node',
+      ersetze('psql --version;', 'psql --version; node -e 1;'),
+      /migrate: Node oder Prisma im Stage/,
+    ],
+    [
+      'zweiter USER im api-Stage',
+      ersetze('EXPOSE 3200\n', 'EXPOSE 3200\nUSER 0:0\n'),
+      /api: genau ein USER/,
+    ],
+    ['USER root am Ende von migrate', `${DOCKERFILE}USER 0:0\n`, /migrate: genau ein USER/],
+    [
+      'zweites ENTRYPOINT in migrate',
+      `${DOCKERFILE}ENTRYPOINT ["/bin/sh"]\n`,
+      /migrate: ENTRYPOINT migrate\.sh fehlt/,
+    ],
+    [
+      'zweites CMD im api-Stage',
+      ersetze('STOPSIGNAL SIGTERM\n', 'STOPSIGNAL SIGTERM\nCMD ["sh"]\n'),
+      /api: genau ein CMD/,
+    ],
+    [
+      'ENTRYPOINT im api-Stage',
+      ersetze('STOPSIGNAL SIGTERM\n', 'STOPSIGNAL SIGTERM\nENTRYPOINT ["/bin/sh", "-c"]\n'),
+      /api: kein ENTRYPOINT/,
+    ],
+    [
+      'Kontext im migrate-Stage',
+      ersetze(
+        'COPY --from=migrate-dateien /opt/tcms /opt/tcms',
+        'COPY packages/db/betrieb /opt/tcms/betrieb',
+      ),
+      /migrate: COPY aus dem Kontext/,
+    ],
     [
       'Quelle außerhalb des Kontexts',
       ersetze(

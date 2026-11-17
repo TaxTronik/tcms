@@ -96,7 +96,8 @@ describe('simuliere-image.sh: Wahl der Datenbank', () => {
       expect(existsSync(r.arbeit)).toBe(false);
       expect(r.ausgabe).not.toMatch(/== /);
     }
-  });
+    // Neun bash-Starts; unter Windows (Git Bash) je rund 0,5 s, unter Last mehr.
+  }, 60_000);
 
   it('kodiert das Superuser-Passwort für tcms-migrate vollständig (nur Builtins)', () => {
     const r = harness('sim_kodiere "$X"', { X: 'a:b@c/d%e f?g#h' });

@@ -16,8 +16,14 @@
 #      tt-migrate). Eine angewandte Migration mit anderer Prüfsumme, eine
 #      unvollständige Migration oder eine angewandte Migration, die das Image
 #      nicht kennt, bricht ab. Jede Migration läuft in einer Transaktion
-#      zusammen mit ihrem Ledger-Eintrag.
+#      zusammen mit ihrem Ledger-Eintrag. Jede Datei wird genau einmal gelesen:
+#      geprüft, gehasht und ausgeführt werden dieselben Bytes.
 #   3. Prüfung als tcms_owner (betrieb/pruefung.sql): Rollen, RLS, Rechte.
+#
+# TLS: `?sslmode=…` in beiden URLs; für verify-ca/verify-full nennt
+# TCMS_DB_SSLROOTCERT die CA-Datei (absoluter Pfad) oder `system` (CA-Speicher
+# des Systems, nur mit verify-full). psql erhält sie als PGSSLROOTCERT; ohne
+# sie bricht der Läufer bei verify-* vor jeder Verbindung ab.
 #
 # Geheimnisse: Passwörter gehen nie in eine Kommandozeile (auch nicht als
 # URL an psql) und nie in die Ausgabe. Die URLs werden in der Shell zerlegt;
@@ -107,7 +113,7 @@ zerlege_url() {
         sslmode=disable | sslmode=allow | sslmode=prefer | sslmode=require | sslmode=verify-ca | sslmode=verify-full)
           sslmode=${teil#sslmode=}
           ;;
-        *) abbruch "$name: nur der Parameter sslmode ist erlaubt" 64 ;;
+        *) abbruch "$name: nur der Parameter sslmode ist erlaubt (CA-Datei: TCMS_DB_SSLROOTCERT)" 64 ;;
       esac
     done
   fi
@@ -124,12 +130,16 @@ zerlege_url() {
 }
 
 # psql_als <assoziatives-array> [--env NAME]… <psql-argumente…>; liest bei
-# `-f -` von stdin. psql erbt eine geleerte Umgebung: nur PATH, Locale, die
-# PG*-Werte der Rolle und ausdrücklich genannte Variablen (Bootstrap: die
-# beiden Rollenpasswörter für `\getenv`). Selbst ein Metabefehl, der an der
-# Migrationsprüfung vorbeikäme, sähe so weder die Superuser-URL noch fremde
-# Passwörter (Red Team RT2-T-01, Verteidigung in der Tiefe). Werte gehen nie
-# über argv (kein `env -i NAME=WERT`), nur über die Umgebung der Subshell.
+# `-f -` von stdin. psql erbt eine geleerte Umgebung (auch ohne Einträge,
+# deren Name kein Shell-Bezeichner ist): nur PATH, Locale, die
+# PG*-Werte der Rolle (dazu PGSSLROOTCERT aus TCMS_DB_SSLROOTCERT) und
+# ausdrücklich genannte Variablen (Bootstrap: die beiden Rollenpasswörter für
+# `\getenv`). Selbst ein Metabefehl, der an der Migrationsprüfung vorbeikäme,
+# sähe so weder die Superuser-URL noch fremde Passwörter (Red Team RT2-T-01,
+# Verteidigung in der Tiefe). Werte gehen nie über argv (kein `env -i
+# NAME=WERT`), nur über die Umgebung der Subshell. Der Läufer selbst
+# exportiert nichts (siehe „Umgebung“ unten), die Schleife hier ist die zweite
+# Linie.
 psql_als() {
   local -n v=$1
   shift
@@ -149,9 +159,13 @@ psql_als() {
     export PGHOST="${v[host]}" PGPORT="${v[port]}" PGUSER="${v[user]}" PGDATABASE="${v[db]}"
     export PGPASSWORD="${v[pass]}" PGPASSFILE=/dev/null PGAPPNAME=tcms-migrate PGCONNECT_TIMEOUT=10
     if [[ -n ${v[sslmode]} ]]; then export PGSSLMODE="${v[sslmode]}"; fi
+    if [[ -n $SSLROOTCERT ]]; then export PGSSLROOTCERT="$SSLROOTCERT"; fi
     for name in "${!extra[@]}"; do
       export "$name=${extra[$name]}"
     done
+    if ((${#FREMDE_NAMEN[@]} > 0)); then
+      exec env "${FREMDE_NAMEN[@]}" psql -X -q -v ON_ERROR_STOP=1 "$@"
+    fi
     exec psql -X -q -v ON_ERROR_STOP=1 "$@"
   )
 }
@@ -167,7 +181,11 @@ psql_hauptversion() {
         *) unset "$name" ;;
       esac
     done
-    psql --version 2>/dev/null || true
+    if ((${#FREMDE_NAMEN[@]} > 0)); then
+      env "${FREMDE_NAMEN[@]}" psql --version 2>/dev/null || true
+    else
+      psql --version 2>/dev/null || true
+    fi
   ) | sed -n 's/^psql (PostgreSQL) \([0-9][0-9]*\).*/\1/p'
 }
 
@@ -177,37 +195,177 @@ pruefe_passwort() {
   [[ ! $wert =~ [[:cntrl:]] ]] || abbruch "$name: Steuerzeichen nicht erlaubt" 64
 }
 
+# Transaktionssteuerung auf oberster Ebene einer Migration (liest SQL von
+# stdin). Ein kleiner Lexer wie der von psql: Kommentare (`--`, verschachtelte
+# `/* */`), Literale ('…', "…", $tag$…$tag$) fallen weg; Anweisungen trennt
+# `;` außerhalb von Klammern und außerhalb von BEGIN ATOMIC … END in
+# CREATE [OR REPLACE] FUNCTION/PROCEDURE (dieselbe Heuristik wie psql). Jede
+# Anweisung, die mit BEGIN, START, COMMIT, END, ROLLBACK, ABORT, SAVEPOINT,
+# RELEASE oder PREPARE TRANSACTION beginnt, ist ein Treffer – auch hinter
+# einem `;` in derselben Zeile und mit `;` erst auf der Folgezeile; plpgsql-
+# Rümpfe (BEGIN … END; in $tag$) sind Literale und bleiben unberührt.
+# Ausgabe genau eine Zeile: OK, TX <Anweisung> oder OFFEN <Art> (Literal oder
+# Kommentar am Dateiende offen: der Läufer hängte sonst seinen
+# Transaktionsvergleich und Ledger-Eintrag in das Literal). Liest immer bis
+# zum Ende (kein vorzeitiges exit: der Schreiber der Pipe bekäme SIGPIPE).
+# shellcheck disable=SC2016 # awk-Programm, keine Shell-Expansion gewollt
+TX_AWK='
+function anweisung(s,   t) {
+  if (treffer != "") return
+  t = toupper(s)
+  gsub(/[[:space:]]+/, " ", t)
+  sub(/^ /, "", t)
+  if (match(t, /^PREPARE TRANSACTION( |$)/) || match(t, /^(BEGIN|START|COMMIT|END|ROLLBACK|ABORT|SAVEPOINT|RELEASE)( |$)/)) {
+    treffer = substr(t, 1, RLENGTH)
+    sub(/ $/, "", treffer)
+  }
+}
+function kopf(s,   t) {
+  t = toupper(s)
+  gsub(/[[:space:]]+/, " ", t)
+  sub(/^ /, "", t)
+  return t
+}
+BEGIN { q = sprintf("%c", 39); dq = sprintf("%c", 34); z = "n"; stmt = ""; klammer = 0; atom = 0; treffer = ""; vor = " " }
+{
+  zeile = $0
+  n = length(zeile)
+  i = 1
+  while (i <= n) {
+    c = substr(zeile, i, 1)
+    if (z == "n") {
+      zwei = substr(zeile, i, 2)
+      if (zwei == "--") { i = n + 1; continue }
+      if (zwei == "/*") { z = "b"; tiefe = 1; stmt = stmt " "; vor = " "; i += 2; continue }
+      if (c == q) { z = "q"; stmt = stmt "x"; vor = "x"; i++; continue }
+      if (c == dq) { z = "i"; stmt = stmt "x"; vor = "x"; i++; continue }
+      if (c == "$" && vor !~ /[A-Za-z0-9_$]/ && match(substr(zeile, i), /^[$]([A-Za-z_][A-Za-z0-9_]*)?[$]/)) {
+        tag = substr(zeile, i, RLENGTH); z = "d"; stmt = stmt "x"; vor = "x"; i += RLENGTH; continue
+      }
+      if (c ~ /[A-Za-z_]/ && vor !~ /[A-Za-z0-9_$]/) {
+        match(substr(zeile, i), /^[A-Za-z_][A-Za-z0-9_$]*/)
+        wort = toupper(substr(zeile, i, RLENGTH))
+        if (klammer == 0 && kopf(stmt) ~ /^CREATE (OR REPLACE )?(FUNCTION|PROCEDURE) /) {
+          if (wort == "BEGIN") atom++
+          else if (wort == "CASE" && atom > 0) atom++
+          else if (wort == "END" && atom > 0) atom--
+        }
+        stmt = stmt wort; vor = "a"; i += RLENGTH; continue
+      }
+      if (c == "(") klammer++
+      if (c == ")" && klammer > 0) klammer--
+      if (c == ";" && klammer == 0 && atom == 0) { anweisung(stmt); stmt = ""; vor = " "; i++; continue }
+      stmt = stmt c; vor = c; i++; continue
+    }
+    if (z == "q" || z == "i") {
+      ende = (z == "q") ? q : dq
+      if (c == ende && substr(zeile, i + 1, 1) == ende) { i += 2; continue }
+      if (c == ende) z = "n"
+      i++; continue
+    }
+    if (z == "d") {
+      p = index(substr(zeile, i), tag)
+      if (p == 0) { i = n + 1; continue }
+      i += p - 1 + length(tag); z = "n"; continue
+    }
+    zwei = substr(zeile, i, 2)
+    if (zwei == "/*") { tiefe++; i += 2; continue }
+    if (zwei == "*/") { tiefe--; i += 2; if (tiefe == 0) z = "n"; continue }
+    i++
+  }
+  if (z == "n") { stmt = stmt " "; vor = " " }
+}
+END {
+  anweisung(stmt)
+  if (treffer != "") print "TX " treffer
+  else if (z != "n") print "OFFEN " z
+  else print "OK"
+}'
+
 # Migrationsdateien: nur die erwarteten Namen, kein Backslash (psql führt
 # Metabefehle wie \! oder \getenv nicht nur am Zeilenanfang aus, sondern auch
 # mitten in einer Zeile nach gepuffertem SQL – Red Team RT2-T-01; ein Backslash
-# in einem Literal lässt sich mit chr(92) schreiben) und keine eigene
+# in einem Literal lässt sich mit chr(92) schreiben), kein NUL und keine eigene
 # Transaktionssteuerung (jede Migration läuft in genau einer Transaktion mit
-# ihrem Ledger-Eintrag).
-pruefe_migration() {
-  local name=$1 datei=$2
+# ihrem Ledger-Eintrag). Liest die Datei genau einmal; Prüfung, Prüfsumme und
+# Ausführung nutzen diese Bytes (INHALT, SUMME).
+lies_migration() {
+  local name=$1 datei=$2 groesse tx
   [[ $name =~ ^[0-9]{14}_[a-z0-9_]+$ ]] || abbruch "Migration mit unzulässigem Namen: $name" 65
   [[ -f $datei && ! -L $datei ]] || abbruch "Migration $name: migration.sql fehlt" 65
+  # Anhängsel `x`: Die Befehlsersetzung entfernte sonst abschließende Zeilenumbrüche.
+  INHALT=$(cat -- "$datei" && printf x) || abbruch "Migration $name nicht lesbar" 65
+  INHALT=${INHALT%x}
+  # NUL kann die Shell nicht halten (sie ließe es weg); die Länge in Bytes
+  # (LC_ALL=C) muss der Dateigröße entsprechen.
+  groesse=$(wc -c <"$datei") || abbruch "Migration $name nicht lesbar" 65
+  ((${#INHALT} == 10#${groesse//[[:space:]]/})) ||
+    abbruch "Migration $name enthält NUL oder änderte sich beim Lesen" 65
   # shellcheck disable=SC1003 # gesucht ist ein wörtlicher Backslash, kein Escape
-  if grep -qF '\' "$datei"; then
+  if [[ $INHALT == *'\'* ]]; then
     abbruch "Migration $name enthält einen Backslash (psql-Metabefehle sind ausgeschlossen)" 65
   fi
-  if grep -Eiq '^[[:space:]]*(BEGIN([[:space:]]+(WORK|TRANSACTION))?|START[[:space:]]+TRANSACTION|COMMIT|ROLLBACK|ABORT)[[:space:]]*;' "$datei"; then
-    abbruch "Migration $name steuert Transaktionen selbst" 65
-  fi
-  if grep -Eiq '(^|[^a-z0-9_])concurrently([^a-z0-9_]|$)' "$datei"; then
+  tx=$(printf '%s' "$INHALT" | awk "$TX_AWK") || abbruch "Migration $name: Prüfung gescheitert" 70
+  pruefe_transaktionssteuerung "$name" "$tx"
+  shopt -s nocasematch
+  if [[ $INHALT =~ (^|[^a-z0-9_])concurrently([^a-z0-9_]|$) ]]; then
     abbruch "Migration $name nutzt CONCURRENTLY (nicht in einer Transaktion möglich)" 65
   fi
+  shopt -u nocasematch
+  SUMME=$(printf '%s' "$INHALT" | sha256sum) || abbruch "Prüfsumme von $name nicht berechenbar" 65
+  SUMME=${SUMME%% *}
+  [[ $SUMME =~ ^[0-9a-f]{64}$ ]] || abbruch "Prüfsumme von $name nicht berechenbar" 65
 }
+
+pruefe_transaktionssteuerung() {
+  case $2 in
+    OK) ;;
+    OFFEN*) abbruch "Migration $1 endet in einem offenen Literal oder Kommentar" 65 ;;
+    TX*) abbruch "Migration $1 steuert Transaktionen selbst (${2#TX })" 65 ;;
+    *) abbruch "Migration $1: Prüfung gescheitert" 70 ;;
+  esac
+}
+
+# --- Umgebung -------------------------------------------------------------------
+# Namen, die kein Shell-Bezeichner sind (etwa `A.B`, in Docker/Kubernetes
+# zulässig), kann die Shell weder lesen noch löschen; bash reichte sie
+# unverändert an psql weiter (RT2-T-01). psql startet deshalb über
+# `env -u <name>` für jeden davon (nur Namen in argv, nie Werte). Gelesen aus
+# der Startumgebung des Läufers (/proc, Linux wie im Image).
+FREMDE_NAMEN=()
+if [[ -r /proc/$$/environ ]]; then
+  while IFS= read -r -d '' eintrag; do
+    [[ ${eintrag%%=*} =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || FREMDE_NAMEN+=(-u "${eintrag%%=*}")
+  done </proc/$$/environ
+  unset eintrag
+fi
+# Ab hier exportiert der Läufer nichts außer PATH und Locale: Eigene Variablen
+# (SU, OW, …) erben so kein Export-Attribut einer gleichnamigen
+# Umgebungsvariablen, und die Bereinigung in psql_als löscht nie eigene Werte.
+for name in $(compgen -e); do
+  case $name in
+    PATH | LANG | LC_ALL) ;;
+    *) export -n "$name" ;;
+  esac
+done
+unset name
 
 [[ $# -eq 0 ]] || abbruch 'keine Argumente erwartet' 64
 for v in TCMS_DB_SUPERUSER_URL TCMS_DB_OWNER_URL TCMS_DB_OWNER_PASSWORD TCMS_DB_APP_PASSWORD; do
   [[ -n ${!v:-} ]] || abbruch "$v fehlt" 64
 done
+unset v
 pruefe_passwort TCMS_DB_OWNER_PASSWORD
 pruefe_passwort TCMS_DB_APP_PASSWORD
 [[ $TCMS_DB_OWNER_PASSWORD != "$TCMS_DB_APP_PASSWORD" ]] ||
   abbruch 'TCMS_DB_OWNER_PASSWORD und TCMS_DB_APP_PASSWORD müssen verschieden sein' 64
 [[ $BASIS != *"'"* ]] || abbruch 'Installationspfad enthält ein Hochkomma' 64
+SSLROOTCERT=${TCMS_DB_SSLROOTCERT:-}
+if [[ -n $SSLROOTCERT && $SSLROOTCERT != system ]]; then
+  [[ $SSLROOTCERT == /* && ! $SSLROOTCERT =~ [[:cntrl:]] ]] ||
+    abbruch 'TCMS_DB_SSLROOTCERT: absoluter Pfad der CA-Datei oder system' 64
+  [[ -f $SSLROOTCERT && -r $SSLROOTCERT ]] || abbruch 'TCMS_DB_SSLROOTCERT: keine lesbare Datei' 64
+fi
 command -v psql >/dev/null || abbruch 'psql fehlt' 69
 # bootstrap.sql liest die Rollenpasswörter mit \getenv (psql >= 15). Ein
 # älteres psql bräche erst im Bootstrap mit „invalid command“ ab; hier vor
@@ -216,12 +374,28 @@ PSQL_MAJOR=$(psql_hauptversion)
 [[ $PSQL_MAJOR =~ ^[0-9]+$ ]] || abbruch 'psql-Version nicht erkennbar (psql >= 15 nötig)' 69
 ((10#$PSQL_MAJOR >= 15)) || abbruch "psql $PSQL_MAJOR ist zu alt: \\getenv braucht psql >= 15" 69
 
+unset -v SU OW
 declare -A SU OW
 zerlege_url "$TCMS_DB_SUPERUSER_URL" SU TCMS_DB_SUPERUSER_URL
 zerlege_url "$TCMS_DB_OWNER_URL" OW TCMS_DB_OWNER_URL
 [[ ${OW[user]} == tcms_owner ]] || abbruch 'TCMS_DB_OWNER_URL muss die Rolle tcms_owner verwenden' 64
 if [[ ${SU[host]} != "${OW[host]}" || ${SU[port]} != "${OW[port]}" || ${SU[db]} != "${OW[db]}" ]]; then
   abbruch 'TCMS_DB_SUPERUSER_URL und TCMS_DB_OWNER_URL müssen dieselbe Datenbank nennen' 64
+fi
+# Serverprüfung nur mit Zertifikatsquelle: libpq fände sonst nur den
+# undokumentierten Standardpfad im Heimatverzeichnis (die Umgebung ist
+# geleert) – und der naheliegende Ausweg wäre sslmode=require ohne Prüfung.
+for modus in "${SU[sslmode]}" "${OW[sslmode]}"; do
+  if [[ $modus == verify-* && -z $SSLROOTCERT ]]; then
+    abbruch "sslmode=$modus braucht TCMS_DB_SSLROOTCERT (CA-Datei oder system)" 64
+  fi
+  if [[ $SSLROOTCERT == system && -n $modus && $modus != verify-full ]]; then
+    abbruch 'TCMS_DB_SSLROOTCERT=system nur mit sslmode=verify-full' 64
+  fi
+done
+unset modus
+if [[ $SSLROOTCERT == system ]] && ((10#$PSQL_MAJOR < 16)); then
+  abbruch 'TCMS_DB_SSLROOTCERT=system braucht psql >= 16' 69
 fi
 # Eine Quelle für das Eigentümerpasswort: die Variable. Ein abweichendes
 # Passwort in der URL wäre ein Konfigurationsfehler.
@@ -231,30 +405,36 @@ fi
 OW[pass]=$TCMS_DB_OWNER_PASSWORD
 [[ -d $MIGRATIONEN ]] || abbruch 'Migrationsverzeichnis fehlt' 65
 
+# Migrationen vor jeder Verbindung lesen und prüfen (genau einmal je Datei).
+namen=()
+summen=()
+inhalte=()
+for verzeichnis in "$MIGRATIONEN"/*/; do
+  [[ -d $verzeichnis ]] || continue
+  name=${verzeichnis%/}
+  name=${name##*/}
+  lies_migration "$name" "$MIGRATIONEN/$name/migration.sql"
+  namen+=("$name")
+  summen+=("$SUMME")
+  inhalte+=("$INHALT")
+done
+((${#namen[@]} > 0)) || abbruch 'keine Migrationen gefunden' 65
+liste=$(printf "'%s'," "${namen[@]}")
+liste=${liste%,}
+
 # --- 1. Bootstrap ---------------------------------------------------------------
 melde "Bootstrap der Rollen in Datenbank ${SU[db]}"
 psql_als SU --env TCMS_DB_OWNER_PASSWORD --env TCMS_DB_APP_PASSWORD -f "$BOOTSTRAP" ||
   abbruch "Bootstrap fehlgeschlagen (psql $?)" 2
 
 # --- 2. Migrationen -------------------------------------------------------------
-namen=()
-summen=()
-for verzeichnis in "$MIGRATIONEN"/*/; do
-  [[ -d $verzeichnis ]] || continue
-  name=${verzeichnis%/}
-  name=${name##*/}
-  datei="$MIGRATIONEN/$name/migration.sql"
-  pruefe_migration "$name" "$datei"
-  summe=$(sha256sum "$datei")
-  summe=${summe%% *}
-  [[ $summe =~ ^[0-9a-f]{64}$ ]] || abbruch "Prüfsumme von $name nicht berechenbar" 65
-  namen+=("$name")
-  summen+=("$summe")
-done
-((${#namen[@]} > 0)) || abbruch 'keine Migrationen gefunden' 65
-liste=$(printf "'%s'," "${namen[@]}")
-liste=${liste%,}
-
+# Außerhalb der Migrationstransaktionen ist die Sitzung schreibgeschützt
+# (default_transaction_read_only): Verließe eine Migration ihre Transaktion
+# doch (an der Prüfung oben vorbei), scheiterte jede weitere Änderung im
+# Autocommit, und der txid-Vergleich bricht vor dem Ledger-Eintrag ab.
+# Ausgegeben werden nur Builtins und die bereits gelesenen Inhalte: Ein
+# Lesefehler kann hier nicht mehr eintreten (errexit wirkt in einer Funktion
+# links von `||` nicht).
 skript() {
   cat <<SQL
 \\set ON_ERROR_STOP on
@@ -276,6 +456,7 @@ CREATE TABLE IF NOT EXISTS "_prisma_migrations" (
   "started_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
   "applied_steps_count" INTEGER NOT NULL DEFAULT 0
 );
+SET default_transaction_read_only = on;
 SELECT count(*) = 0 AS tcms_kein_haengen FROM "_prisma_migrations"
 WHERE finished_at IS NULL AND rolled_back_at IS NULL \\gset
 \\if :tcms_kein_haengen
@@ -306,10 +487,10 @@ WHERE migration_name = :'tcms_name' AND finished_at IS NOT NULL AND rolled_back_
 \\elif :tcms_angewandt
   \\echo 'tcms-migrate: bereits angewandt:' :tcms_name
 \\else
-BEGIN;
+BEGIN READ WRITE;
 SELECT pg_catalog.txid_current() AS tcms_txid \\gset
 SQL
-    cat "$MIGRATIONEN/${namen[$i]}/migration.sql"
+    printf '%s' "${inhalte[$i]}"
     cat <<SQL
 
 ;

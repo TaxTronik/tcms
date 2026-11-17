@@ -20,7 +20,8 @@
 // =============================================================================
 
 import { cpSync, existsSync, lstatSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { basename, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** Pakete, die nie im Laufzeitbaum liegen dürfen (Werkzeuge, RT-04). */
 export const VERBOTEN = [
@@ -100,15 +101,18 @@ export function pruefeLaufzeitbaum(nodeModules, externe) {
   }
   // Seeds und Demo kämen nur mit @tcms/db bzw. apps/web (oben verboten).
   for (const pfad of alleEintraege(nodeModules)) {
-    const rel = relative(nodeModules, pfad);
-    const name = rel.split('/').at(-1) ?? '';
+    const rel = relative(nodeModules, pfad).split(sep).join('/');
+    const name = basename(pfad);
     if (name === '.env' || name.startsWith('.env.')) befunde.push(`Umgebungsdatei: ${rel}`);
   }
   return befunde;
 }
 
-// Nur als Programm ausführen, nicht beim Import (Tests).
-if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) {
+// Nur als Programm ausführen, nicht beim Import (Tests). fileURLToPath statt
+// `.pathname`: Der ist prozentkodiert (Leer- und Sonderzeichen im Pfad) und
+// unter Windows `/D:/…` – der Vergleich schlüge fehl und das Skript endete
+// stumm mit Exit 0, ohne den Baum zu prüfen.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = argumente(process.argv.slice(2));
   const nodeModules = join(args.ziel, 'node_modules');
   if (!existsSync(nodeModules)) fehler('node_modules fehlt im Deploy-Verzeichnis');

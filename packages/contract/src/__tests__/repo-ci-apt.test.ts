@@ -91,6 +91,12 @@ n=$(cat '${AUFRUFE}' 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >'${AUFRUFE
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
+// Unter Windows ruft ci-apt.sh als Nicht-root `sudo` auf (Windows 11 hat ein
+// eigenes, meist deaktiviertes sudo) und die Attrappe braucht POSIX-Pfade; das
+// Skript läuft nur auf Ubuntu-Runnern. Dort (und unter Linux/macOS) laufen
+// alle Fälle; übersprungen wird ausdrücklich nur unter win32.
+const ruftAptAuf = it.skipIf(process.platform === 'win32');
+
 function lauf(args: string[], env: Record<string, string> = {}, etc = ETC) {
   rmSync(PROTOKOLL, { force: true });
   rmSync(AUFRUFE, { force: true });
@@ -114,7 +120,7 @@ function lauf(args: string[], env: Record<string, string> = {}, etc = ETC) {
 }
 
 describe('scripts/ci-apt.sh', () => {
-  it('lässt nur Ubuntu-Archiv und PGDG zu und meldet jede übergangene Quelle', () => {
+  ruftAptAuf('lässt nur Ubuntu-Archiv und PGDG zu und meldet jede übergangene Quelle', () => {
     const r = lauf(['update']);
     expect(r.code, r.ausgabe).toBe(0);
     for (const erlaubt of [
@@ -151,7 +157,7 @@ describe('scripts/ci-apt.sh', () => {
     expect(r.protokoll).toMatch(/^AUFRUF .*APT::Get::List-Cleanup=0 update$/m);
   });
 
-  it('versucht update dreimal und scheitert danach laut', () => {
+  ruftAptAuf('versucht update dreimal und scheitert danach laut', () => {
     const erholt = lauf(['update'], { FEHLER_BIS: '2' });
     expect(erholt.code, erholt.ausgabe).toBe(0);
     expect(erholt.aufrufe).toBe(3);
@@ -161,7 +167,7 @@ describe('scripts/ci-apt.sh', () => {
     expect(gescheitert.ausgabe).toContain('dreimal fehlgeschlagen');
   });
 
-  it('reicht install-Argumente unverändert und gegen dieselben Quellen weiter', () => {
+  ruftAptAuf('reicht install-Argumente unverändert und gegen dieselben Quellen weiter', () => {
     const r = lauf(['install', '-y', '--no-install-recommends', 'postgresql-client-18']);
     expect(r.code, r.ausgabe).toBe(0);
     expect(r.protokoll).toMatch(
@@ -188,7 +194,7 @@ describe('scripts/ci-apt.sh', () => {
     expect(befehl.aufrufe).toBe(0);
   });
 
-  it('entfernt die gefilterte Kopie der Quellen danach, auch nach einem Fehler', () => {
+  ruftAptAuf('entfernt die gefilterte Kopie der Quellen danach, auch nach einem Fehler', () => {
     const r = lauf(['update']);
     expect(r.protokoll).toContain(`Dir::Etc::sourceparts=${join(tmp, 'tmp')}/`);
     expect(readdirSync(join(tmp, 'tmp'))).toEqual([]);

@@ -13,12 +13,16 @@
 //                         RT4; dieselben Regeln wie der Dienst beim Start)
 //
 // Ein vorhandener gültiger Wert bleibt unverändert (ein neuer Code-Schlüssel
-// ließe alle offenen Codes ablaufen). Die Datei hat danach Modus 0600 und wird
-// atomar ersetzt. Die Ausgabe nennt nur Namen und Aktionen, nie Werte.
+// ließe alle offenen Codes ablaufen). Die Datei hat danach Modus 0600 (unter
+// Windows wirkt der Modus nicht: dort regeln die NTFS-Rechte des Verzeichnisses
+// den Zugriff, die Ausgabe sagt das) und wird atomar über eine Temporärdatei
+// `.env.tmp-…` ersetzt, die git ebenfalls ignorieren muss (`.env*` in
+// .gitignore). Die Ausgabe nennt nur Namen und Aktionen, nie Werte.
 //
 // Bricht ab (Exit 1, nichts geschrieben): mit NODE_ENV=production; wenn `.env`
 // keine normale Datei ist (Symlink, Verzeichnis); wenn git sie versioniert oder
-// nicht ignoriert (nie committen); wenn eine der beiden Variablen mehrfach
+// nicht ignoriert (nie committen; ebenso die Temporärdatei, die nach einem
+// Absturz liegen bliebe); wenn eine der beiden Variablen mehrfach
 // oder mit einem ungültigen Wert gesetzt ist, der kein Platzhalter ist – was
 // jemand selbst gesetzt hat, überschreibt das Skript nicht.
 // =============================================================================
@@ -40,6 +44,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const MODUS = 0o600;
+// chmod setzt unter Windows nur das Schreibschutz-Attribut; einen Modus 0600 gibt es dort nicht.
+const POSIX_MODUS = process.platform !== 'win32';
 
 // Regeln wie apps/api/src/konfiguration.ts (geheimnisListe: Code-Schlüssel und
 // Tokens) und apps/web/src/server/sitzung-regeln.ts (Demo); Tests prüfen die
@@ -69,6 +75,8 @@ if (process.env.NODE_ENV === 'production') {
 
 const ziel = join(wurzel, '.env');
 const vorlage = join(wurzel, '.env.example');
+// Temporärdatei im selben Verzeichnis (atomares rename); enthält den ganzen Inhalt.
+const tmpName = `.env.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
 
 /** Code-Schlüssel: Liste wie im Dienst; `null` = gültig, sonst Grund ohne Wert. */
 function pruefeCodeSchluessel(wert, tokens) {
@@ -127,6 +135,9 @@ if (versioniert.error?.code === 'ENOENT') {
   if (ignoriert.status === 1) fehler('.env wird von git nicht ignoriert (.gitignore).');
   if (ignoriert.status !== 0) {
     process.stdout.write('Hinweis: kein git-Arbeitsbaum, .gitignore nicht geprüft.\n');
+  } else if (git('check-ignore', '-q', '--', tmpName).status !== 0) {
+    // Bliebe die Temporärdatei nach einem Abbruch liegen, nähme `git add -A` sie auf.
+    fehler('.env.tmp-… wird von git nicht ignoriert (.gitignore: `.env*` und `!.env.example`).');
   }
 }
 
@@ -188,7 +199,7 @@ for (const [name, art, platzhalter, pruefe] of [
 
 // --- schreiben: atomar, Modus 0600 -------------------------------------------
 if (geaendert) {
-  const tmp = join(wurzel, `.env.tmp-${process.pid}-${randomBytes(4).toString('hex')}`);
+  const tmp = join(wurzel, tmpName);
   let fd;
   try {
     fd = openSync(tmp, 'wx', MODUS);
@@ -203,8 +214,12 @@ if (geaendert) {
     rmSync(tmp, { force: true });
     fehler(`.env nicht geschrieben (${e.code ?? 'Fehler'}).`);
   }
-} else if ((lstatSync(ziel).mode & 0o777) !== MODUS) {
+} else if (POSIX_MODUS && (lstatSync(ziel).mode & 0o777) !== MODUS) {
   chmodSync(ziel, MODUS);
   meldungen.push('Modus auf 0600 gesetzt');
 }
-process.stdout.write(`${meldungen.join('\n')}\n.env: Modus 0600, Werte nicht ausgegeben.\n`);
+const schutz = POSIX_MODUS
+  ? '.env: Modus 0600'
+  : '.env: kein Modus 0600 unter Windows – den Zugriff regeln die NTFS-Rechte des ' +
+    'Verzeichnisses (Checkout im eigenen Benutzerprofil)';
+process.stdout.write(`${meldungen.join('\n')}\n${schutz}, Werte nicht ausgegeben.\n`);

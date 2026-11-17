@@ -120,6 +120,11 @@ describe('vertrag-export.mjs', () => {
           stdio: 'pipe',
         });
       git('add', '-A');
+      // Unter Windows (core.fileMode=false) setzt chmod kein Exec-Bit im Index;
+      // update-index setzt es auf jeder Plattform (unter Linux ohne Wirkung).
+      if (art === 'ausfuehrbar') {
+        git('update-index', '--chmod=+x', 'packages/contract/src/akteur.ts');
+      }
       git(
         '-c',
         'user.name=Test',

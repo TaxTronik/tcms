@@ -1,5 +1,6 @@
 import { generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { KonfigurationsFehler, ladeKonfiguration } from '../konfiguration';
 
@@ -98,7 +99,10 @@ describe('ladeKonfiguration', () => {
   });
 
   it('weist die Platzhalter der .env.example im Repo-Root ab', () => {
-    const beispiel = envAusDatei(new URL('../../../../.env.example', import.meta.url).pathname);
+    // fileURLToPath statt `.pathname`: prozentkodiert und unter Windows `/D:/…`.
+    const beispiel = envAusDatei(
+      fileURLToPath(new URL('../../../../.env.example', import.meta.url)),
+    );
     expect(Object.keys(beispiel)).toEqual(
       expect.arrayContaining([
         'TCMS_SERVICE_TOKENS',

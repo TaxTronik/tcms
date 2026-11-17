@@ -1,12 +1,17 @@
 # Lokale Entwicklungsdatenbank für das Tax-CMS (nur Entwicklung, TS-11).
 # Start: docker compose up -d
+# - Dasselbe PostgreSQL 18 wie CI und Betrieb (Image per Digest gepinnt, wie
+#   POSTGRES_IMAGE im Dockerfile und der Service in .forgejo/workflows/ci.yml).
 # - Port nur an 127.0.0.1 gebunden (nie auf allen Schnittstellen).
 # - Das Init-Skript legt die Rollen tcms_owner und tcms_app an (Passwörter nur für
 #   Entwicklung, siehe packages/db/prisma/init/01_bootstrap.sql); es läuft nur beim
 #   ersten Start mit leerem Volume.
+# - Ab PostgreSQL 18 liegt das Datenverzeichnis unter /var/lib/postgresql/18/docker;
+#   das Volume hängt deshalb an /var/lib/postgresql. Eigenes Volume `tcms-pg18`: Ein
+#   altes Volume `tcms-pg` (PostgreSQL 16) bleibt unberührt und wird nicht gelesen.
 services:
   postgres:
-    image: postgres:16.10-alpine
+    image: postgres:18-alpine@sha256:96d56f7f57c6aacd1fcb908bc83b345ec5f83231ee486dd66a1baadce274db88
     restart: unless-stopped
     environment:
       POSTGRES_USER: tcms
@@ -15,7 +20,7 @@ services:
     ports:
       - '127.0.0.1:5433:5432'
     volumes:
-      - tcms-pg:/var/lib/postgresql/data
+      - tcms-pg18:/var/lib/postgresql
       - ./packages/db/prisma/init:/docker-entrypoint-initdb.d:ro
 volumes:
-  tcms-pg:
+  tcms-pg18:

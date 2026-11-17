@@ -349,6 +349,8 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
     const z = await neueDb();
     const ordner = mkdtempSync(join(tmpdir(), 'tcms-psql-env-'));
     const protokoll = join(ordner, 'umgebung.log');
+    const ca = join(ordner, 'ca.crt');
+    writeFileSync(ca, 'nur ein Platzhalter (sslmode=disable)\n');
     const echt = (await starte('sh', ['-c', 'command -v psql'], {})).stdout.trim();
     expect(echt).not.toBe('');
     writeFileSync(
@@ -359,7 +361,19 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
     try {
       const r = await migriere(z, undefined, SKRIPT, {
         PATH: `${ordner}:${process.env.PATH ?? ''}`,
+        TCMS_DB_SUPERUSER_URL: `${z.superUrl}?sslmode=disable`,
+        TCMS_DB_OWNER_URL: `${z.ownerUrl()}?sslmode=disable`,
+        TCMS_DB_SSLROOTCERT: ca,
         TCMS_TEST_FREMD: 'x',
+        // Befund 79: Namen, die kein Shell-Bezeichner sind, kann bash nicht
+        // löschen; gleichnamige Variablen zu den Arrays des Läufers (SU, OW)
+        // und seinen lokalen Namen (v, extra) dürfen ihn nicht stören.
+        'A.B': 'fremd',
+        'x-y': 'fremd',
+        SU: 'fremd',
+        OW: 'fremd',
+        v: 'fremd',
+        extra: 'fremd',
       });
       expect(r.code, ausgabe(r)).toBe(0);
       const zeilen = readFileSync(protokoll, 'utf8').trim().split('\n');
@@ -384,9 +398,24 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
       expect(su.length).toBe(1);
       expect(ow.length).toBeGreaterThanOrEqual(2);
       for (const a of aufrufe) {
-        expect(a.namen).not.toContain('TCMS_DB_SUPERUSER_URL');
-        expect(a.namen).not.toContain('TCMS_DB_OWNER_URL');
-        expect(a.namen).not.toContain('TCMS_TEST_FREMD');
+        for (const name of [
+          'TCMS_DB_SUPERUSER_URL',
+          'TCMS_DB_OWNER_URL',
+          'TCMS_DB_SSLROOTCERT',
+          'TCMS_TEST_FREMD',
+          'A.B',
+          'x-y',
+          'SU',
+          'OW',
+          'v',
+          'extra',
+        ]) {
+          expect(a.namen).not.toContain(name);
+        }
+      }
+      // TLS (Befund 77): sslmode und die CA-Datei erreichen jede Verbindung.
+      for (const a of verbindungen) {
+        expect(a.namen).toEqual(expect.arrayContaining(['PGSSLMODE', 'PGSSLROOTCERT']));
       }
       // Bootstrap braucht die beiden Rollenpasswörter (\getenv), sonst niemand.
       expect(su[0]!.namen).toEqual(
@@ -421,6 +450,169 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
       } finally {
         rmSync(kopie, { recursive: true, force: true });
       }
+    }
+  });
+
+  /** Kopie von betrieb/ und prisma/ mit einer zusätzlichen Migration (Läufer optional verändert). */
+  function mitMigration(
+    name: string,
+    inhalt: string,
+    skript?: (text: string) => string,
+  ): { kopie: string; skript: string; datei: string } {
+    const kopie = mkdtempSync(join(tmpdir(), 'tcms-mig-'));
+    cpSync(join(DB_PAKET, 'betrieb'), join(kopie, 'betrieb'), { recursive: true });
+    cpSync(join(DB_PAKET, 'prisma'), join(kopie, 'prisma'), { recursive: true });
+    const ziel = join(kopie, 'prisma', 'migrations', name);
+    cpSync(join(MIGRATIONEN, migrationen()[0]!.name), ziel, { recursive: true });
+    writeFileSync(join(ziel, 'migration.sql'), inhalt);
+    const pfad = join(kopie, 'betrieb', 'migrate.sh');
+    if (skript) writeFileSync(pfad, skript(readFileSync(pfad, 'utf8')));
+    return { kopie, skript: pfad, datei: join(ziel, 'migration.sql') };
+  }
+  const tabellen = async (z: Ziel) =>
+    (
+      await abfrage<{ t: string }>(
+        z.superUrl,
+        "SELECT tablename AS t FROM pg_tables WHERE schemaname = 'public' ORDER BY 1",
+      )
+    ).map((x) => x.t);
+
+  it('weist eigene Transaktionssteuerung und offene Literale vor jeder Verbindung ab (Befund 47)', async () => {
+    for (const [inhalt, meldung] of [
+      ['CREATE TABLE a (x int);\nCOMMIT;\n', 'steuert Transaktionen selbst (COMMIT)'],
+      ['CREATE TABLE a (x int); END; CREATE TABLE b (x int);\n', '(END)'],
+      ['CREATE TABLE a (x int);\nEND TRANSACTION;\n', '(END)'],
+      ['SELECT 1; commit work;\n', '(COMMIT)'],
+      ['COMMIT AND CHAIN;\n', '(COMMIT)'],
+      ['ROLLBACK WORK;\n', '(ROLLBACK)'],
+      ['SELECT 1;\nCOMMIT\n;\n', '(COMMIT)'],
+      ["PREPARE TRANSACTION 'x';\n", '(PREPARE TRANSACTION)'],
+      ['START TRANSACTION READ WRITE;\n', '(START)'],
+      ['/* Kommentar */ ABORT;\n', '(ABORT)'],
+      ["SELECT 'offen;\n", 'endet in einem offenen Literal oder Kommentar'],
+      ['SELECT 1;\n/* offen\n', 'endet in einem offenen Literal oder Kommentar'],
+      ['DO $f$ BEGIN PERFORM 1;\n', 'endet in einem offenen Literal oder Kommentar'],
+    ] as const) {
+      const z = await neueDb();
+      const m = mitMigration('29990101000000_transaktion', inhalt);
+      try {
+        const r = await migriere(z, undefined, m.skript);
+        expect(r.code, `${inhalt}\n${ausgabe(r)}`).toBe(65);
+        expect(r.stderr).toContain(meldung);
+        // Vor jeder Verbindung: weder Ledger noch Tabellen.
+        expect(await tabellen(z)).toEqual([]);
+      } finally {
+        rmSync(m.kopie, { recursive: true, force: true });
+      }
+    }
+    // Literale, Kommentare und plpgsql-Rümpfe sind keine Transaktionssteuerung.
+    const z = await neueDb();
+    const m = mitMigration(
+      '29990101000000_keine_steuerung',
+      [
+        `SELECT 'COMMIT; END;' AS a, "x" FROM (SELECT 1 AS "x") s; -- COMMIT;`,
+        '/* ROLLBACK; /* verschachtelt */ END; */',
+        'DO $f$ BEGIN',
+        '  PERFORM 1;',
+        'END;',
+        '$f$;',
+        'CREATE FUNCTION tcms_test_atomar() RETURNS int LANGUAGE sql',
+        'BEGIN ATOMIC',
+        '  SELECT CASE WHEN true THEN 1 ELSE 2 END;',
+        'END;',
+        '',
+      ].join('\n'),
+    );
+    try {
+      const r = await migriere(z, undefined, m.skript);
+      expect(r.code, ausgabe(r)).toBe(0);
+      expect(r.stdout).toContain('angewandt: 29990101000000_keine_steuerung');
+    } finally {
+      rmSync(m.kopie, { recursive: true, force: true });
+    }
+  });
+
+  it('Rückhalt: verlässt eine Migration doch ihre Transaktion, schreibt danach nichts mehr und bucht nichts (Befund 47)', async () => {
+    // Läufer ohne die statische Prüfung: nur der Rückhalt in der Datenbank wirkt.
+    const ohnePruefung = (text: string) => {
+      const aufruf = 'pruefe_transaktionssteuerung "$name" "$tx"';
+      expect(text).toContain(aufruf);
+      return text.replace(aufruf, ':');
+    };
+    for (const [inhalt, meldung] of [
+      [
+        'CREATE TABLE "vorher" (x int);\nCOMMIT;\nCREATE TABLE "nachher" (x int);\n',
+        'read-only transaction',
+      ],
+      [
+        'CREATE TABLE "vorher" (x int);\nCOMMIT;\nSTART TRANSACTION READ WRITE;\nCREATE TABLE "nachher" (x int);\n',
+        'Migration hat die Transaktion verlassen',
+      ],
+    ] as const) {
+      const z = await neueDb();
+      const m = mitMigration('29990101000000_verlaesst', inhalt, ohnePruefung);
+      try {
+        const r = await migriere(z, undefined, m.skript);
+        expect(r.code, ausgabe(r)).toBe(3);
+        expect(r.stderr).toContain(meldung);
+        const t = await tabellen(z);
+        // Der Teil vor dem COMMIT der Migration ist festgeschrieben (nicht zu verhindern),
+        // alles danach nicht, und das Ledger kennt die Migration nicht.
+        expect(t).toContain('vorher');
+        expect(t).not.toContain('nachher');
+        expect((await ledger(z)).map((l) => l.migration_name)).not.toContain(
+          '29990101000000_verlaesst',
+        );
+      } finally {
+        rmSync(m.kopie, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('liest jede Migration genau einmal: geprüft, gehasht und ausgeführt wird derselbe Inhalt (Befund 46)', async () => {
+    // Ein psql-Stellvertreter ändert die Migration beim Bootstrap (nach dem
+    // Lesen, vor der Ausführung) und hängt einen Backslash-Metabefehl an.
+    const z = await neueDb();
+    // Mit RLS und Policy, sonst bricht die Prüfung (Schritt 3) ab.
+    const inhalt =
+      'CREATE TABLE "einmal" (x int);\nALTER TABLE "einmal" ENABLE ROW LEVEL SECURITY;\n' +
+      'ALTER TABLE "einmal" FORCE ROW LEVEL SECURITY;\nCREATE POLICY p ON "einmal" USING (true);\n';
+    const m = mitMigration('29990101000000_einmal', inhalt);
+    const ordner = mkdtempSync(join(tmpdir(), 'tcms-psql-lesen-'));
+    const echt = (await starte('sh', ['-c', 'command -v psql'], {})).stdout.trim();
+    writeFileSync(
+      join(ordner, 'psql'),
+      `#!/bin/sh\nif [ "$PGUSER" != tcms_owner ] && [ "$1" != --version ]; then\n` +
+        `  printf '%s\\n' 'CREATE TABLE "manipuliert" (x int);' '\\! id' >> '${m.datei}'\nfi\n` +
+        `exec '${echt}' "$@"\n`,
+      { mode: 0o755 },
+    );
+    try {
+      const r = await migriere(z, undefined, m.skript, {
+        PATH: `${ordner}:${process.env.PATH ?? ''}`,
+      });
+      expect(r.code, ausgabe(r)).toBe(0);
+      expect(readFileSync(m.datei, 'utf8')).toContain('manipuliert'); // die Datei wurde verändert
+      const t = await tabellen(z);
+      expect(t).toContain('einmal');
+      expect(t).not.toContain('manipuliert');
+      const eintrag = (await ledger(z)).find((l) => l.migration_name === '29990101000000_einmal');
+      expect(eintrag?.checksum).toBe(createHash('sha256').update(inhalt).digest('hex'));
+    } finally {
+      rmSync(m.kopie, { recursive: true, force: true });
+      rmSync(ordner, { recursive: true, force: true });
+    }
+  });
+
+  it('weist eine Migration mit NUL ab (die Shell hielte sie verkürzt)', async () => {
+    const z = await neueDb();
+    const m = mitMigration('29990101000000_nul', 'SELECT 1;\n\0SELECT 2;\n');
+    try {
+      const r = await migriere(z, undefined, m.skript);
+      expect(r.code, ausgabe(r)).toBe(65);
+      expect(r.stderr).toContain('enthält NUL');
+    } finally {
+      rmSync(m.kopie, { recursive: true, force: true });
     }
   });
 
@@ -561,6 +753,31 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
       [{ TCMS_DB_OWNER_URL: mitDb(z.ownerUrl(), 'andere') }, /dieselbe Datenbank/],
       [{ TCMS_DB_SUPERUSER_URL: `${z.superUrl}?options=-c%20x` }, /nur der Parameter sslmode/],
       [{ TCMS_DB_OWNER_PASSWORD: 'zeile\numbruch' }, /Steuerzeichen/],
+      // TLS (Befund 77): verify-* nur mit Zertifikatsquelle, sslrootcert nie in der URL.
+      [
+        {
+          TCMS_DB_SUPERUSER_URL: `${z.superUrl}?sslmode=verify-full`,
+          TCMS_DB_OWNER_URL: `${z.ownerUrl()}?sslmode=verify-full`,
+        },
+        /sslmode=verify-full braucht TCMS_DB_SSLROOTCERT/,
+      ],
+      [
+        { TCMS_DB_OWNER_URL: `${z.ownerUrl()}?sslmode=verify-ca` },
+        /sslmode=verify-ca braucht TCMS_DB_SSLROOTCERT/,
+      ],
+      [
+        { TCMS_DB_SUPERUSER_URL: `${z.superUrl}?sslrootcert=/tmp/ca.crt` },
+        /nur der Parameter sslmode/,
+      ],
+      [{ TCMS_DB_SSLROOTCERT: 'relativ/ca.crt' }, /absoluter Pfad/],
+      [{ TCMS_DB_SSLROOTCERT: '/gibt/es/nicht/ca.crt' }, /keine lesbare Datei/],
+      [
+        {
+          TCMS_DB_SSLROOTCERT: 'system',
+          TCMS_DB_SUPERUSER_URL: `${z.superUrl}?sslmode=require`,
+        },
+        /system nur mit sslmode=verify-full/,
+      ],
     ];
     for (const [aenderung, meldung] of faelle) {
       const r = await starte('bash', [SKRIPT], { ...basis, ...aenderung });
