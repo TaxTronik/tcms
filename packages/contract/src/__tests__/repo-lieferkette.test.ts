@@ -51,7 +51,7 @@ function lauf(
 }
 
 // Jeder Lauf startet sh mit grep/awk (unter Windows langsam).
-describe('scripts/pruefe-lieferkette.sh', { timeout: 60_000 }, () => {
+describe('scripts/pruefe-lieferkette.sh', { timeout: 180_000 }, () => {
   it('besteht mit dem echten Repo-Stand und exakten Versionen', () => {
     const r = lauf();
     expect(r.code, r.ausgabe).toBe(0);
