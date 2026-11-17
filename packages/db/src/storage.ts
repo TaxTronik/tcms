@@ -5,9 +5,9 @@
 // sie. Kein WORM-Speicher: der Schutz ist anwendungsseitig, nicht speicherseitig.
 // =============================================================================
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile, access } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 
 /**
@@ -40,19 +40,57 @@ export interface GespeicherteDatei {
 /** Einzig gültige Form eines Ablagepfads (kein `..`, kein absoluter Pfad, kein Fremdname). */
 const ABLAGEPFAD = /^([0-9a-f]{2})\/([0-9a-f]{64})$/;
 
-export async function speichereDatei(inhalt: Buffer): Promise<GespeicherteDatei> {
-  const sha256 = createHash('sha256').update(inhalt).digest('hex');
-  const rel = `${sha256.slice(0, 2)}/${sha256}`;
-  const ziel = join(/*turbopackIgnore: true*/ speicherWurzel(), rel);
-  await mkdir(join(/*turbopackIgnore: true*/ speicherWurzel(), sha256.slice(0, 2)), {
-    recursive: true,
-  });
+const sha256Von = (inhalt: Buffer) => createHash('sha256').update(inhalt).digest('hex');
+
+/** Liegt unter `ziel` genau der Inhalt mit diesem SHA-256? (Fehlt die Datei: nein.) */
+async function liegtUnversehrt(ziel: string, sha256: string): Promise<boolean> {
   try {
-    await access(ziel);
+    return sha256Von(await readFile(ziel)) === sha256;
   } catch {
-    await writeFile(ziel, inhalt, { flag: 'wx' });
+    return false;
   }
-  return { sha256, speicherpfad: rel, groesse: inhalt.length };
+}
+
+/**
+ * Legt den Inhalt unter seinem SHA-256 ab. Atomar: Geschrieben wird in eine
+ * eigene temporäre Datei im selben Verzeichnis (fsync), die dann per `rename`
+ * an den endgültigen Namen tritt – ein Abbruch hinterlässt dort nie ein
+ * Fragment. Eine vorhandene Datei gilt nur, wenn ihr Inhalt den Hash ergibt;
+ * ein Fragment früherer Läufe wird ersetzt. Gleichzeitiges Speichern desselben
+ * Inhalts gelingt in jedem Aufruf (gleicher Inhalt, gleicher Name).
+ */
+export async function speichereDatei(inhalt: Buffer): Promise<GespeicherteDatei> {
+  const sha256 = sha256Von(inhalt);
+  const rel = `${sha256.slice(0, 2)}/${sha256}`;
+  const verzeichnis = join(/*turbopackIgnore: true*/ speicherWurzel(), sha256.slice(0, 2));
+  const ziel = join(/*turbopackIgnore: true*/ verzeichnis, sha256);
+  const ergebnis = { sha256, speicherpfad: rel, groesse: inhalt.length };
+  await mkdir(verzeichnis, { recursive: true });
+  if (await liegtUnversehrt(ziel, sha256)) return ergebnis;
+
+  const temp = join(
+    /*turbopackIgnore: true*/ verzeichnis,
+    `.${sha256}.${randomBytes(8).toString('hex')}.tmp`,
+  );
+  try {
+    const datei = await open(temp, 'wx', 0o600);
+    try {
+      await datei.writeFile(inhalt);
+      await datei.sync();
+    } finally {
+      await datei.close();
+    }
+    try {
+      await rename(temp, ziel);
+    } catch (e) {
+      // Windows: Ein gleichzeitiges Ersetzen derselben Datei kann scheitern
+      // (EPERM/EACCES). Liegt der richtige Inhalt inzwischen dort, ist das Ziel erreicht.
+      if (!(await liegtUnversehrt(ziel, sha256))) throw e;
+    }
+  } finally {
+    await rm(temp, { force: true });
+  }
+  return ergebnis;
 }
 
 /**
