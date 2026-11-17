@@ -35,4 +35,11 @@ export {
   schreibeAuditFolge,
   type AuditInput,
 } from './audit';
-export { EINGABE_FEHLERCODES, eingabeFehlercode, type EingabeFehlercode } from './fehler';
+export {
+  EINGABE_FEHLERCODES,
+  eingabeFehlercode,
+  KONFLIKT_FEHLERCODES,
+  konfliktFehlercode,
+  type EingabeFehlercode,
+  type KonfliktFehlercode,
+} from './fehler';

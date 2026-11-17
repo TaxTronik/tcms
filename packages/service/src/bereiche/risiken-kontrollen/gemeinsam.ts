@@ -146,44 +146,10 @@ export async function sperreDurchfuehrungen(tx: Tx, kontrolleId: string): Promis
 }
 
 // -----------------------------------------------------------------------------
-// Datenbankfehler → KONFLIKT
+// Datenbankfehler → KONFLIKT: die eine Abbildung aus dem Kern (Befund 92).
 // -----------------------------------------------------------------------------
 
-const KONFLIKT_CODES = new Set([
-  // Prisma: Unique-Verletzung, Schreibkonflikt/Deadlock
-  'P2002',
-  'P2034',
-  // PostgreSQL: unique_violation, serialization_failure, deadlock_detected
-  '23505',
-  '40001',
-  '40P01',
-]);
-
-function fehlerCodes(e: unknown, tiefe = 0): string[] {
-  if (!e || typeof e !== 'object' || tiefe > 4) return [];
-  const x = e as { code?: unknown; meta?: { code?: unknown }; cause?: unknown };
-  const out: string[] = [];
-  if (typeof x.code === 'string') out.push(x.code);
-  if (x.meta && typeof x.meta.code === 'string') out.push(x.meta.code);
-  return [...out, ...fehlerCodes(x.cause, tiefe + 1)];
-}
-
-/**
- * Übersetzt gleichzeitige Änderungen (eindeutige Schlüssel, Deadlock,
- * Serialisierung) in `KONFLIKT`; alle anderen Fehler unverändert. Die
- * Transaktion ist danach ohnehin abgebrochen und rollt vollständig zurück.
- */
-export async function konfliktSicher<T>(fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (e) {
-    if (e instanceof DienstFehler) throw e;
-    if (fehlerCodes(e).some((c) => KONFLIKT_CODES.has(c))) {
-      throw new DienstFehler('KONFLIKT', 'Der Stand wurde inzwischen geändert. Bitte neu laden.');
-    }
-    throw e;
-  }
-}
+export { konfliktSicher } from '../../kern/konflikt';
 
 export function konflikt(meldung: string): DienstFehler {
   return new DienstFehler('KONFLIKT', meldung);

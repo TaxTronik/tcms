@@ -40,3 +40,57 @@ export function eingabeFehlercode(e: unknown): EingabeFehlercode | null {
   };
   return suche(e, 0);
 }
+
+// =============================================================================
+// Gleichzeitige Änderungen (TS-05, Befund 92). Die Datenbank weist ab, wenn
+// zwei Transaktionen sich in die Quere kommen:
+//
+//   23505  unique_violation        eindeutiger Schlüssel (Prisma: P2002)
+//   40001  serialization_failure   Schreibkonflikt (Prisma: P2034)
+//   40P01  deadlock_detected       Verklemmung; Prisma 7 mit adapter-pg kennt
+//                                   dafür keinen eigenen Code (P2039 bei
+//                                   Modellabfragen, P2010 bei Raw-SQL), der
+//                                   SQLSTATE steht nur in
+//                                   `meta.driverAdapterError.cause.originalCode`
+//
+// Gelesen werden wie oben nur die Codes, mit derselben Suchstrecke.
+// =============================================================================
+
+export const KONFLIKT_FEHLERCODES = ['23505', '40001', '40P01'] as const;
+export type KonfliktFehlercode = (typeof KONFLIKT_FEHLERCODES)[number];
+
+/** Prisma-Codes, die genau einem SQLSTATE entsprechen. */
+const PRISMA_KONFLIKT: Readonly<Record<string, KonfliktFehlercode>> = {
+  P2002: '23505',
+  P2034: '40001',
+};
+
+function alsKonfliktCode(c: unknown): KonfliktFehlercode | null {
+  if (typeof c !== 'string') return null;
+  if ((KONFLIKT_FEHLERCODES as readonly string[]).includes(c)) return c as KonfliktFehlercode;
+  return Object.hasOwn(PRISMA_KONFLIKT, c) ? PRISMA_KONFLIKT[c]! : null;
+}
+
+/**
+ * SQLSTATE einer gleichzeitigen Änderung (Eindeutigkeit, Serialisierung,
+ * Verklemmung), sonst `null`. Sucht wie `eingabeFehlercode` in
+ * `code`/`originalCode` des Fehlers und seiner Ursachen (`meta`,
+ * `driverAdapterError`, `cause`; höchstens fünf Ebenen); Prisma-Codes P2002
+ * und P2034 zählen als 23505 bzw. 40001.
+ */
+export function konfliktFehlercode(e: unknown): KonfliktFehlercode | null {
+  const gesehen = new Set<object>();
+  const suche = (x: unknown, tiefe: number): KonfliktFehlercode | null => {
+    if (!x || typeof x !== 'object' || tiefe > 5 || gesehen.has(x)) return null;
+    gesehen.add(x);
+    const o = x as Record<string, unknown>;
+    const direkt = alsKonfliktCode(o['originalCode']) ?? alsKonfliktCode(o['code']);
+    if (direkt) return direkt;
+    for (const k of ['meta', 'driverAdapterError', 'cause']) {
+      const r = suche(o[k], tiefe + 1);
+      if (r) return r;
+    }
+    return null;
+  };
+  return suche(e, 0);
+}

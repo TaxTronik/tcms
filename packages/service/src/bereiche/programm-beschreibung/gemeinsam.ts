@@ -13,7 +13,8 @@
 // =============================================================================
 
 import { DienstFehler, nichtBerechtigt } from '@tcms/contract';
-import { Prisma, type Tx } from '@tcms/db';
+import type { Tx } from '@tcms/db';
+import { konfliktSicher } from '../../kern/konflikt';
 import type { DienstKontext } from '../../kontext';
 import { kannBearbeiten, kannLesen, type KontaktRolle } from '../../rechte';
 import { ladeKontaktRollen } from '../../rollen';
@@ -140,18 +141,12 @@ export async function sperreFreigabe(tx: Tx, mandantId: string, freigabeId: stri
   return f;
 }
 
-/** Eindeutiger Schlüssel verletzt (gleichzeitiges Anlegen) → `KONFLIKT`. */
-export function istEindeutigkeitsfehler(e: unknown): boolean {
-  return e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002';
-}
-
-export async function konfliktBeiEindeutigkeit<T>(meldung: string, fn: () => Promise<T>) {
-  try {
-    return await fn();
-  } catch (e) {
-    if (istEindeutigkeitsfehler(e)) throw new DienstFehler('KONFLIKT', meldung);
-    throw e;
-  }
+/**
+ * Eindeutiger Schlüssel verletzt (gleichzeitiges Anlegen) oder ein anderer
+ * Datenbankkonflikt → `KONFLIKT` (die eine Abbildung aus `kern/konflikt.ts`).
+ */
+export function konfliktBeiEindeutigkeit<T>(meldung: string, fn: () => Promise<T>): Promise<T> {
+  return konfliktSicher(fn, meldung);
 }
 
 export const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
