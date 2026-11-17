@@ -9,7 +9,7 @@
 
 import { z } from 'zod';
 import { AKTEUR_ARTEN } from '../akteur';
-import { MAX_MANDANTEN_JE_ANFRAGE } from '../fehler';
+import { MAX_LISTENEINTRAEGE_JE_ANFRAGE, MAX_MANDANTEN_JE_ANFRAGE } from '../fehler';
 import { einzeilig } from '../zeichen';
 
 /**
@@ -647,7 +647,10 @@ const uuidListe = z.array(z.uuid()).max(MAX_MANDANTEN_JE_ANFRAGE);
  * zuständige:r Berufsträger:in bzw. Hauptbearbeitung ist – wie `cli.bt`/
  * `cli.hb` je Mandant. Doppelte oder fremde Einträge machen die Anfrage
  * ungültig (keine mehrdeutigen Rechte). Höchstens `MAX_MANDANTEN_JE_ANFRAGE`
- * IDs; 5 000 IDs passen in die Body-Grenze von 256 KiB.
+ * IDs je Liste und `MAX_LISTENEINTRAEGE_JE_ANFRAGE` Einträge zusammen: So passt
+ * jeder schemagültige Body (kompaktes JSON) in die Body-Grenze von 256 KiB,
+ * statt dass die Kante eine gültige Liste mit `413` abweist. Wer mehr braucht,
+ * teilt die Liste auf (Zeilen bzw. Einträge gelten je Mandant).
  */
 export const MandantenListeSchema = z
   .object({
@@ -657,6 +660,15 @@ export const MandantenListeSchema = z
   })
   .strict()
   .superRefine((e, ctx) => {
+    const summe = e.mandantIds.length + e.bt.length + e.hb.length;
+    if (summe > MAX_LISTENEINTRAEGE_JE_ANFRAGE) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [],
+        message: `höchstens ${MAX_LISTENEINTRAEGE_JE_ANFRAGE} Einträge in mandantIds, bt und hb zusammen`,
+      });
+      return;
+    }
     const alle = new Set<string>();
     for (const [i, id] of e.mandantIds.entries()) {
       const k = id.toLowerCase();
