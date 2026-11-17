@@ -312,6 +312,9 @@ für KI-Werkzeuge.
   „Unzulässige Zeichen“). Scheitert trotzdem ein Text an der Datenbank (22021, 22P05,
   22P02, `eingabeFehlercode` aus `@tcms/db`), antworten Dienst (`fehlerAntwort`) und
   Dienstkern (`imDienst`, `imSystemdienst`) `UNGUELTIG`; ins Log nur der Code (`dbFehler`).
+  Ebenso antworten beide auf ein Zeitlimit der Datenbank (55P03 `lock_timeout` 5 s, 57014
+  `statement_timeout` = halbes Transaktionslimit, beide setzt `mitTenant` transaktionslokal;
+  `zeitlimitFehlercode` aus `@tcms/db`) mit `503 ZEITLIMIT`.
 - Logs: JSON-Zeilen ohne Header-Werte, Bodys, Namen und rohe Pfade, nur IDs
   und Codes. Keine Secrets in Logs, Fehlermeldungen, Tests oder Commits.
 - Jede Sicherheitsannahme hat einen Negativtest, der ohne die Schutzmaßnahme

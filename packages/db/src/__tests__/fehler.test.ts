@@ -5,7 +5,7 @@
 // =============================================================================
 
 import { describe, expect, it } from 'vitest';
-import { eingabeFehlercode } from '../fehler';
+import { eingabeFehlercode, zeitlimitFehlercode } from '../fehler';
 
 /** Form eines Prisma-Fehlers mit Treiberadapter (wie gemessen, Meldungen gekürzt). */
 const prisma = (code: string, originalCode: string, kind = 'postgres') => ({
@@ -55,5 +55,29 @@ describe('eingabeFehlercode', () => {
     let tief: Record<string, unknown> = { code: '22021' };
     for (let i = 0; i < 10; i += 1) tief = { cause: tief };
     expect(eingabeFehlercode(tief)).toBeNull();
+  });
+});
+
+describe('zeitlimitFehlercode', () => {
+  it('erkennt lock_timeout (55P03) und statement_timeout (57014) in jeder Form', () => {
+    expect(zeitlimitFehlercode(prisma('P2010', '55P03'))).toBe('55P03');
+    expect(zeitlimitFehlercode(prisma('P2010', '57014'))).toBe('57014');
+    expect(zeitlimitFehlercode({ code: '57014' })).toBe('57014');
+    expect(zeitlimitFehlercode(new Error('x', { cause: { code: '55P03' } }))).toBe('55P03');
+  });
+
+  it('andere Fehler sind kein Zeitlimit, Zeitlimits kein Eingabefehler', () => {
+    for (const e of [
+      prisma('P2039', '22021'),
+      prisma('P2034', '40P01'),
+      prisma('P2010', '57P01'),
+      { code: 'P2028' },
+      new Error('55P03'),
+      '57014',
+      null,
+    ]) {
+      expect(zeitlimitFehlercode(e), JSON.stringify(e) ?? String(e)).toBeNull();
+    }
+    expect(eingabeFehlercode(prisma('P2010', '57014'))).toBeNull();
   });
 });

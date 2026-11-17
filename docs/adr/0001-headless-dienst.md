@@ -148,6 +148,19 @@ beides liegt im Hash der Kette. Logs nennen `akteurArt`.
   die App-Rolle nichts. Jede API-Anfrage läuft vollständig in genau einer
   solchen Transaktion (Lesen wie Schreiben). Vor dem Commit prüft `mitTenant`,
   dass der Kontext unverändert ist; sonst Rollback (Abschnitt 10.1).
+- Zeitlimits je Transaktion: Prisma begrenzt die Transaktion (30 s, Warten auf
+  eine Verbindung 10 s), bricht aber eine Anweisung, die in der Datenbank wartet,
+  nicht ab – sein ROLLBACK steht hinter ihr, die Poolverbindung bleibt belegt,
+  bis der Sperrinhaber endet. `mitTenant` setzt deshalb zusammen mit dem Tenant
+  transaktionslokal `lock_timeout` = 5 s (Sperren werden sonst nur Millisekunden
+  gehalten, die Transaktion ruft kein Netz auf; wer länger wartet, steht hinter
+  einer hängenden oder fremden Transaktion, z. B. einer Migration) und
+  `statement_timeout` = halbes Transaktionslimit (15 s; eine einzelne Anweisung
+  endet in der Datenbank, die Verbindung wird frei). Beide sind je Aufruf
+  einstellbar (`sperrWartezeitMs`, `anweisungsdauerMs`). Die Abbrüche (55P03, 57014) beantworten Dienst und Dienstkern mit `503 ZEITLIMIT` und fester
+  Meldung, ins Log nur der Code. Nicht gesetzt: `idle_in_transaction_session_timeout`
+  (zwischen zwei Anweisungen begrenzt das Prisma-Limit, dessen ROLLBACK dann
+  sofort läuft); Poolgröße bleibt der Standard von `pg` (10 je Prozess).
 - Tabelle `akteur_jti (jti PK, exp)`: nicht mandantengebunden, nur INSERT und
   Löschen abgelaufener Einträge.
 - Audit: Kette **je Tenant**; Advisory-Lock je Tenant (nicht global); der Hash
@@ -303,7 +316,9 @@ Routentabelle weisen mehrdeutige Muster ab).
   `401 NICHT_AUTHENTIFIZIERT`,
   `403 NICHT_BERECHTIGT` (mit fachlichem Grund, z. B. Vier-Augen),
   `404 NICHT_GEFUNDEN` (auch fremder Tenant/Mandant), `409 KONFLIKT`
-  (Status hat sich geändert, Doppelentscheidung), `413 ZU_GROSS`. Wo der
+  (Status hat sich geändert, Doppelentscheidung), `413 ZU_GROSS`,
+  `503 ZEITLIMIT` (Zeitlimit der Datenbank – Sperre oder Anweisung, 55P03 bzw.
+  57014, Abschnitt 4 –, nichts geändert, wiederholbar). Wo der
   Aufrufer den gesehenen Status mitschickt (Feststellung weiterschalten,
   `von`), ist ein auf diesem Stand fachlich gesperrter Schritt `400` mit
   Feldfehler, `409` nur die gleichzeitige Änderung.

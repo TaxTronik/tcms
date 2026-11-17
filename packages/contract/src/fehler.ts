@@ -14,6 +14,12 @@ export const FEHLER_STATUS = {
   KONFLIKT: 409,
   ZU_GROSS: 413,
   INTERN: 500,
+  /**
+   * Die Datenbank hat die Anfrage nach ihrem Zeitlimit abgebrochen (zu lange
+   * auf eine Sperre gewartet oder Anweisung zu lange; ADR 0001 §4). Nichts
+   * wurde geändert (Rollback); später erneut versuchen.
+   */
+  ZEITLIMIT: 503,
 } as const;
 
 export type FehlerCode = keyof typeof FEHLER_STATUS;

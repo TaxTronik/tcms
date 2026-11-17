@@ -16,22 +16,31 @@
 export const EINGABE_FEHLERCODES = ['22P05', '22021', '22P02'] as const;
 export type EingabeFehlercode = (typeof EINGABE_FEHLERCODES)[number];
 
-const istEingabeCode = (c: unknown): c is EingabeFehlercode =>
-  typeof c === 'string' && (EINGABE_FEHLERCODES as readonly string[]).includes(c);
+/**
+ * Zeitlimits der Transaktion (`mitTenant`, Befund 33):
+ *
+ *   55P03  lock_not_available   `lock_timeout`: zu lange auf eine Sperre gewartet
+ *   57014  query_canceled       `statement_timeout`: Anweisung zu lange gelaufen
+ *
+ * Dienst und Dienstkern antworten darauf `503 ZEITLIMIT` (wiederholbar) statt
+ * `500 INTERN`; ins Log nur der Code.
+ */
+export const ZEITLIMIT_FEHLERCODES = ['55P03', '57014'] as const;
+export type ZeitlimitFehlercode = (typeof ZEITLIMIT_FEHLERCODES)[number];
 
 /**
- * Code eines Datenbankfehlers wegen ungültiger Texteingabe, sonst `null`.
- * Sucht in `code`/`originalCode` des Fehlers und seiner Ursachen
- * (`meta`, `driverAdapterError`, `cause`; höchstens fünf Ebenen).
+ * Erster Code aus `codes` in `code`/`originalCode` des Fehlers und seiner
+ * Ursachen (`meta`, `driverAdapterError`, `cause`; höchstens fünf Ebenen).
  */
-export function eingabeFehlercode(e: unknown): EingabeFehlercode | null {
+function sucheCode<C extends string>(e: unknown, codes: readonly C[]): C | null {
+  const passt = (c: unknown): c is C => typeof c === 'string' && codes.includes(c as C);
   const gesehen = new Set<object>();
-  const suche = (x: unknown, tiefe: number): EingabeFehlercode | null => {
+  const suche = (x: unknown, tiefe: number): C | null => {
     if (!x || typeof x !== 'object' || tiefe > 5 || gesehen.has(x)) return null;
     gesehen.add(x);
     const o = x as Record<string, unknown>;
-    if (istEingabeCode(o['originalCode'])) return o['originalCode'];
-    if (istEingabeCode(o['code'])) return o['code'];
+    if (passt(o['originalCode'])) return o['originalCode'];
+    if (passt(o['code'])) return o['code'];
     for (const k of ['meta', 'driverAdapterError', 'cause']) {
       const r = suche(o[k], tiefe + 1);
       if (r) return r;
@@ -39,4 +48,14 @@ export function eingabeFehlercode(e: unknown): EingabeFehlercode | null {
     return null;
   };
   return suche(e, 0);
+}
+
+/** Code eines Datenbankfehlers wegen ungültiger Texteingabe, sonst `null`. */
+export function eingabeFehlercode(e: unknown): EingabeFehlercode | null {
+  return sucheCode(e, EINGABE_FEHLERCODES);
+}
+
+/** Code eines Zeitlimits der Datenbank (Sperre, Anweisung), sonst `null`. */
+export function zeitlimitFehlercode(e: unknown): ZeitlimitFehlercode | null {
+  return sucheCode(e, ZEITLIMIT_FEHLERCODES);
 }

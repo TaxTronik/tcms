@@ -21,8 +21,10 @@ export {
   pruefeLaufzeitRolle,
   pruefeLaufzeitverbindung,
   pruefeTenantId,
+  SPERR_WARTEZEIT_MS,
   sperrSchluessel,
   TENANT_EINSTELLUNG,
+  TRANSAKTION_MS,
   TenantFehler,
   tenantSperre,
   type TenantOptionen,
@@ -35,4 +37,11 @@ export {
   schreibeAuditFolge,
   type AuditInput,
 } from './audit';
-export { EINGABE_FEHLERCODES, eingabeFehlercode, type EingabeFehlercode } from './fehler';
+export {
+  EINGABE_FEHLERCODES,
+  eingabeFehlercode,
+  ZEITLIMIT_FEHLERCODES,
+  zeitlimitFehlercode,
+  type EingabeFehlercode,
+  type ZeitlimitFehlercode,
+} from './fehler';
