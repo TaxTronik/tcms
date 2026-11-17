@@ -130,6 +130,12 @@ export function gestoert(wert: string, stoer: string): string {
   return wert.slice(0, m) + stoer + wert.slice(m + 1);
 }
 
+/** Derselbe Wert mit `zusatz` in der Mitte eingefügt (kein Zeichen ersetzt). */
+export function eingefuegt(wert: string, zusatz: string): string {
+  const m = Math.floor(wert.length / 2);
+  return wert.slice(0, m) + zusatz + wert.slice(m);
+}
+
 /** Störzeichen einzeiliger Texte (Zeichen nur als Escape). */
 const EINZEILIG_STOER: Record<string, string> = {
   LF: '\n',
@@ -432,9 +438,68 @@ describe('Eingaben: jede Zeichenkette ohne Richtungssteuerzeichen (tcms-s9)', ()
   it('mehrzeilige Freitexte behalten ZWJ, Variantenselektoren und Richtungsmarken', () => {
     const verletzt: string[] = [];
     for (const b of mehrzeilig) {
-      // Familie (ZWJ-Sequenz), Herz mit VS16, LRM/RLM/ALM.
+      // Familie (ZWJ-Sequenz), Herz mit VS16, LRM/RLM/ALM \u2013 eingef\u00fcgt, nicht
+      // statt eines Buchstabens (Mindestl\u00e4ngen z\u00e4hlen sichtbare Zeichen).
       for (const z of ['\u{1f468}\u200d\u{1f469}', '\u2764\ufe0f', '\u200e', '\u200f', '\u061c']) {
-        if (!b.schema.safeParse(gestoert(harmlos(b)!, z)).success) verletzt.push(`${b.pfad} ${z}`);
+        if (!b.schema.safeParse(eingefuegt(harmlos(b)!, z)).success) {
+          verletzt.push(`${b.pfad} ${z}`);
+        }
+      }
+    }
+    expect(verletzt).toEqual([]);
+  });
+
+  it('mehrzeilige Freitexte weisen Steuer- und Versteckzeichen ab, wie freitext (Befund 87)', () => {
+    // ESC, BS, FF, DEL, NEL, CSI, Zeilen-/Absatztrenner, BOM im Text, veraltetes
+    // Formatzeichen, Interlinear-Anmerkung und Tag-Zeichen (\u201eTag-Schmuggel\u201c).
+    const stoer: Record<string, string> = {
+      ESC: '\u001b',
+      BS: '\u0008',
+      FF: '\u000c',
+      DEL: '\u007f',
+      NEL: '\u0085',
+      CSI: '\u009b',
+      LS: '\u2028',
+      PS: '\u2029',
+      BOM: '\ufeff',
+      'U+206A': '\u206a',
+      'U+FFF9': '\ufff9',
+      Tag: '\u{e0068}',
+    };
+    const verletzt: string[] = [];
+    for (const b of mehrzeilig) {
+      for (const [name, z] of Object.entries(stoer)) {
+        if (b.schema.safeParse(eingefuegt(harmlos(b)!, z)).success) {
+          verletzt.push(`${b.pfad} nimmt ${name} an`);
+        }
+      }
+    }
+    expect(verletzt).toEqual([]);
+  });
+
+  it('Mindestl\u00e4ngen z\u00e4hlen sichtbare Zeichen: ZWSP und U+2800 f\u00fcllen keine Begr\u00fcndung (Befund 87)', () => {
+    const mitMindestlaenge = frei.filter(
+      (b) => ((b.schema as unknown as { minLength: number | null }).minLength ?? 0) >= 10,
+    );
+    // Begr\u00fcndungen mit 30 Zeichen (\u00dcbersteuerung, Zur\u00fcckweisen, \u00a7-153) u. a.
+    for (const p of [
+      'uebersteuerungBeantragen body.begruendung',
+      'risikoZurueckweisen body.begruendung',
+      'p153Entscheiden body.begruendung',
+    ]) {
+      expect(
+        mitMindestlaenge.map((b) => b.pfad),
+        p,
+      ).toContain(p);
+    }
+    const verletzt: string[] = [];
+    for (const b of mitMindestlaenge) {
+      const min = (b.schema as unknown as { minLength: number }).minLength;
+      for (const [name, wert] of [
+        ['ZWSP', `a${'\u200b'.repeat(min - 2)}b`],
+        ['U+2800', '\u2800'.repeat(min)],
+      ] as const) {
+        if (b.schema.safeParse(wert).success) verletzt.push(`${b.pfad} nimmt ${name} an`);
       }
     }
     expect(verletzt).toEqual([]);

@@ -44,4 +44,28 @@ describe('pruefeVerweis: Dateiname wie der Vertrag', () => {
     }
     expect(pruefeVerweis({ ...VERWEIS, dateiname: 'Prüfung.pdf' })).toEqual({});
   });
+
+  // Befund 86: Rand, Punkt am Ende, Füllzeichen, Zeichenstapel, leer wirkende
+  // Namen und dieselbe Längenzählung (UTF-16) wie Nachweis und Anlage.
+  it('weist Rand-, Füll- und Platzhalterzeichen ab und zählt die Länge wie der Vertrag', () => {
+    const z = (cp: number, n = 1) => String.fromCodePoint(cp).repeat(n);
+    const abgewiesen = [
+      ' beleg.pdf',
+      'beleg.pdf ',
+      'beleg.pdf.',
+      '...',
+      `rechnung.pdf${z(0x2003, 60)}.exe`,
+      z(0x2800),
+      `a${z(0x0301, 5)}.pdf`,
+      `${z(0xe000)}.pdf`,
+      z(0x1f600, 128),
+    ];
+    for (const dateiname of abgewiesen) {
+      expect(pruefeVerweis({ ...VERWEIS, dateiname })['dateiname'], dateiname).toBeDefined();
+      expect(gueltigerNachweisDateiname(dateiname), dateiname).toBe(false);
+    }
+    for (const dateiname of ['Rechnung  2026.pdf', z(0x1f600, 127), 'a'.repeat(255)]) {
+      expect(pruefeVerweis({ ...VERWEIS, dateiname }), dateiname).toEqual({});
+    }
+  });
 });
