@@ -67,7 +67,18 @@ import {
 import type { DienstKontext } from '../kontext';
 import { beteiligteVon, kannLesen, kannVertraulichLesen, type MandantRolle } from '../rechte';
 import { ladeKontaktRollen } from '../rollen';
-import { heuteDatum, leseStand, tagesende } from './zeit';
+import {
+  ereignisZumStand,
+  feststellungsStatusZumStand,
+  folgeZumStand,
+  KEINE_SPAETEREN,
+  ladeSpaetereEintraege,
+  massnahmenZumStand,
+  p153EntschiedenAm,
+  p153OffenAm,
+  type SpaetereEintraege,
+} from './rueckrechnung';
+import { auditGrenze, heuteDatum, leseStand, tagesende } from './zeit';
 
 export interface RisikoView {
   id: string;
@@ -606,7 +617,22 @@ export async function ladeKontext(
     orderBy: { createdAt: 'desc' },
     include: PROGRAMM_INHALT,
   });
-  const k = berechne({ heute, stand, historisch }, ctx.akteur, mandant, kontakte, programm);
+  // Historischer Stand: Zustände, die die Zeilen nur heute tragen, aus späteren
+  // Audit-Einträgen zurückrechnen (kern/rueckrechnung.ts); im aktuellen Stand ohne Abfrage.
+  const spaeter = programm
+    ? await ladeSpaetereEintraege(tx, [programm.id], {
+        historisch,
+        auditEnde: auditGrenze(stand, heute),
+      })
+    : KEINE_SPAETEREN;
+  const k = berechne(
+    { heute, stand, historisch },
+    ctx.akteur,
+    mandant,
+    kontakte,
+    programm,
+    spaeter,
+  );
   return vollende(ctx, k, true);
 }
 
@@ -676,6 +702,7 @@ export async function jeAktuellerKontext(
         m,
         kontakte.filter((x) => x.mandantId === m.id),
         programmJe.get(m.id) ?? null,
+        KEINE_SPAETEREN,
       );
       fn(await vollende(ctx, k, false), akteur);
     }
@@ -685,7 +712,8 @@ export async function jeAktuellerKontext(
 /**
  * Berechnet den Kontext aus den Rohdaten (rein, ohne Datenbank). `akteur`
  * bestimmt nur die Sicht auf vertrauliche Feststellungen (Maskierung und die
- * daraus abgeleiteten Kennzahlen), nie Rechte zum Laden.
+ * daraus abgeleiteten Kennzahlen), nie Rechte zum Laden. `spaeter` sind die
+ * Audit-Einträge nach dem Stichtag (nur im historischen Stand, sonst leer).
  */
 function berechne(
   zeit: { heute: Date; stand: Date; historisch: boolean },
@@ -693,6 +721,7 @@ function berechne(
   mandant: MandantRoh,
   kontakte: readonly KontaktRoh[],
   programm: ProgrammRoh | null,
+  spaeter: SpaetereEintraege,
 ): TcmsKontext {
   const { heute, stand, historisch } = zeit;
   const ende = tagesende(stand);
@@ -934,15 +963,48 @@ function berechne(
   kontrollen.sort((a, b) => a.code.localeCompare(b.code));
   const kontrolleJe = new Map(kontrollen.map((k) => [k.id, k]));
 
+  // ---- Ereignisse (Stand zum Stichtag, kern/rueckrechnung.ts) ----
+  const nachStand = (id: string) => spaeter.get(id) ?? [];
+  const ereignisse: EreignisView[] = programm.ereignisse
+    .filter((e) => {
+      if (e.gemeldetAm.getTime() > ende.getTime()) {
+        ausgeblendet++;
+        return false;
+      }
+      return true;
+    })
+    .map((e) => ({
+      id: e.id,
+      nummer: e.nummer,
+      typ: e.typ,
+      titel: e.titel,
+      beschreibung: e.beschreibung,
+      quelle: e.quelle,
+      gemeldetVon: e.gemeldetVon,
+      gemeldetAm: e.gemeldetAm,
+      ereignisDatum: e.ereignisDatum,
+      ...ereignisZumStand(e, nachStand(e.id), ende),
+      folgen: e.folgen.flatMap((f) => {
+        const amStand = folgeZumStand(f, nachStand(f.id), ende);
+        if (!amStand) return [];
+        return [
+          {
+            id: f.id,
+            art: f.art,
+            ziel: f.ziel,
+            text: f.text,
+            zustaendig: f.zustaendig,
+            frist: f.frist,
+            ...amStand,
+          },
+        ];
+      }),
+    }));
+
   // ---- Bewertungen ----
   const offeneEreignisseJe = new Map<string, number>();
-  for (const e of programm.ereignisse) {
-    if (
-      e.gemeldetAm.getTime() > ende.getTime() ||
-      e.status === 'ERLEDIGT' ||
-      e.status === 'VERWORFEN'
-    )
-      continue;
+  for (const e of ereignisse) {
+    if (e.status === 'ERLEDIGT' || e.status === 'VERWORFEN') continue;
     for (const f of e.folgen) {
       if (f.ziel && f.status !== 'ERLEDIGT' && f.status !== 'VERWORFEN')
         offeneEreignisseJe.set(f.ziel, (offeneEreignisseJe.get(f.ziel) ?? 0) + 1);
@@ -1044,19 +1106,10 @@ function berechne(
       return true;
     })
     .map((f) => {
-      const p153Entschieden =
-        f.p153EntschiedenAm != null && f.p153EntschiedenAm.getTime() <= ende.getTime();
-      const massnahmen = f.massnahmen.filter(
-        (m) => m.createdAt.getTime() <= ende.getTime() || true,
-      );
-      const offen = massnahmen.filter(
-        (m) => m.status === 'OFFEN' || (m.erledigtAm && m.erledigtAm.getTime() > ende.getTime()),
-      );
-      const fristen = offen.map((m) => m.frist.getTime()).sort((a, b) => a - b);
-      const geschlossenBisStand =
-        f.status === 'GESCHLOSSEN' && f.geschlossenAm && f.geschlossenAm.getTime() > ende.getTime()
-          ? 'NACHKONTROLLE'
-          : f.status;
+      // Stand zum Stichtag (kern/rueckrechnung.ts, wie Liste und Detail der Feststellungen).
+      const p153Entschieden = p153EntschiedenAm(f, ende);
+      const massnahmen = massnahmenZumStand(f.massnahmen, ende);
+      const statusAmStand = feststellungsStatusZumStand(f, nachStand(f.id), ende);
       return {
         maskiert: false as const,
         id: f.id,
@@ -1068,17 +1121,14 @@ function berechne(
         klasse: f.klasse,
         schwere: f.schwere,
         auswirkung: f.auswirkung,
-        status: geschlossenBisStand,
+        status: statusAmStand,
         vertraulich: f.vertraulich,
         beteiligte: beteiligteVon(f),
         p153Entscheidung: p153Entschieden ? f.p153Entscheidung : null,
-        p153Offen:
-          (f.auswirkung === 'JA' || f.auswirkung === 'UNKLAR') &&
-          !p153Entschieden &&
-          f.status !== 'VERWORFEN',
-        massnahmenOffen: offen.length,
-        massnahmen: massnahmen.length,
-        aeltesteFrist: fristen.length ? new Date(fristen[0]!) : null,
+        p153Offen: p153OffenAm(f, p153Entschieden, statusAmStand),
+        massnahmenOffen: massnahmen.offen.length,
+        massnahmen: massnahmen.bestand.length,
+        aeltesteFrist: massnahmen.aeltesteFrist,
         erfasstAm: f.erfasstAm,
         risikoCodes: f.risiken.map((x) => x.risiko.code).sort(),
       };
@@ -1093,41 +1143,6 @@ function berechne(
       : maskiereFeststellung(f),
   );
   const lesbareFeststellungen = feststellungen.filter((f): f is FeststellungView => !f.maskiert);
-
-  // ---- Ereignisse ----
-  const ereignisse: EreignisView[] = programm.ereignisse
-    .filter((e) => {
-      if (e.gemeldetAm.getTime() > ende.getTime()) {
-        ausgeblendet++;
-        return false;
-      }
-      return true;
-    })
-    .map((e) => ({
-      id: e.id,
-      nummer: e.nummer,
-      typ: e.typ,
-      titel: e.titel,
-      beschreibung: e.beschreibung,
-      quelle: e.quelle,
-      gemeldetVon: e.gemeldetVon,
-      gemeldetAm: e.gemeldetAm,
-      ereignisDatum: e.ereignisDatum,
-      status: e.triagiertAm && e.triagiertAm.getTime() > ende.getTime() ? 'NEU' : e.status,
-      verwerfenBegruendung: e.verwerfenBegruendung,
-      triagiertVon: e.triagiertVon,
-      triagiertAm: e.triagiertAm,
-      folgen: e.folgen.map((f) => ({
-        id: f.id,
-        art: f.art,
-        ziel: f.ziel,
-        text: f.text,
-        zustaendig: f.zustaendig,
-        frist: f.frist,
-        status: f.status,
-        objektId: f.objektId,
-      })),
-    }));
 
   // ---- Länder (jüngster Stand je Land bis zum Stichtag) ----
   const laenderJe = new Map<string, (typeof programm.laender)[number]>();

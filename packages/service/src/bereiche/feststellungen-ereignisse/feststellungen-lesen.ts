@@ -28,6 +28,14 @@ import {
   type FeststellungStatus,
   type Paragraph153Entscheidung,
 } from '@tcms/domain';
+import {
+  feststellungsStatusZumStand,
+  ladeSpaetereEintraege,
+  massnahmeErledigtAm,
+  massnahmenZumStand,
+  p153EntschiedenAm,
+  p153OffenAm,
+} from '../../kern/rueckrechnung';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { beteiligteVon, kannVertraulichLesen } from '../../rechte';
@@ -58,11 +66,10 @@ interface MassnahmeRoh {
   createdAt: Date;
 }
 
-/** Maßnahme zum Stichtag (später angelegte fehlen, später erledigte sind offen). */
+/** Maßnahme zum Stichtag (später angelegte fehlen, später erledigte sind offen; kern/rueckrechnung.ts). */
 function massnahmeAm(m: MassnahmeRoh, ende: Date): MassnahmeZeile | null {
   if (m.createdAt.getTime() > ende.getTime()) return null;
-  const erledigt =
-    m.status === 'ERLEDIGT' && m.erledigtAm != null && m.erledigtAm.getTime() <= ende.getTime();
+  const erledigt = massnahmeErledigtAm(m, ende);
   return {
     id: m.id,
     feststellungId: m.feststellungId,
@@ -96,10 +103,15 @@ export async function ladeFeststellungen(
   const mandantId = e.mandantId.toLowerCase();
   pruefeKanzleiZugriff(ctx, mandantId);
   await pruefeMandant(ctx.tx, mandantId);
-  const { stand, historisch, ende } = stichtag(ctx, e.stand);
+  const { stand, historisch, heute, ende } = stichtag(ctx, e.stand);
   const kopf = { stand: isoTag(stand), historisch };
   const programm = await programmVon(ctx.tx, mandantId);
   if (!programm) return { ...kopf, programmId: null, feststellungen: [], namen: [] };
+  // Status zum Stichtag wie Kontext und Detail (spätere Statuswechsel, Verwerfen).
+  const spaeter = await ladeSpaetereEintraege(ctx.tx, [programm.id], {
+    historisch,
+    auditEnde: auditGrenze(stand, heute),
+  });
 
   const roh = await ctx.tx.feststellung.findMany({
     where: { programmId: programm.id },
@@ -114,10 +126,7 @@ export async function ladeFeststellungen(
     .filter((f) => f.erfasstAm.getTime() <= ende.getTime())
     .sort((a, b) => b.nummer.localeCompare(a.nummer))
     .map((f): FeststellungListenEintrag => {
-      const status: FeststellungStatus =
-        f.status === 'GESCHLOSSEN' && f.geschlossenAm && f.geschlossenAm.getTime() > ende.getTime()
-          ? 'NACHKONTROLLE'
-          : f.status;
+      const status = feststellungsStatusZumStand(f, spaeter.get(f.id) ?? [], ende);
       const zeilen = f.massnahmen
         .map((m) => massnahmeAm(m, ende))
         .filter((m): m is MassnahmeZeile => !!m);
@@ -138,15 +147,9 @@ export async function ladeFeststellungen(
           })),
         };
       }
-      const entschieden =
-        f.p153Entscheidung != null &&
-        f.p153EntschiedenAm != null &&
-        f.p153EntschiedenAm.getTime() <= ende.getTime();
-      // Kennzahlen wie im Tax-CMS-Kontext (kern/tcms-kontext.ts).
-      const offen = f.massnahmen.filter(
-        (m) => m.status === 'OFFEN' || (m.erledigtAm && m.erledigtAm.getTime() > ende.getTime()),
-      );
-      const fristen = offen.map((m) => m.frist.getTime()).sort((a, b) => a - b);
+      const entschieden = p153EntschiedenAm(f, ende);
+      // Kennzahlen wie im Tax-CMS-Kontext über dieselben Maßnahmen wie die Zeilen.
+      const kennzahlen = massnahmenZumStand(f.massnahmen, ende);
       personen.push(f.erfasstVon, entschieden ? f.p153EntschiedenVon : null);
       for (const m of zeilen) personen.push(m.verantwortlich, m.erledigtVon);
       return {
@@ -174,15 +177,12 @@ export async function ladeFeststellungen(
               am: isoZeit(f.p153EntschiedenAm!),
             }
           : null,
-        p153Offen:
-          (f.auswirkung === 'JA' || f.auswirkung === 'UNKLAR') &&
-          !entschieden &&
-          f.status !== 'VERWORFEN',
+        p153Offen: p153OffenAm(f, entschieden, status),
         verwerfenOffen:
           !!f.verwerfenBeantragtVon && !f.verwerfenBestaetigtVon && f.status !== 'VERWORFEN',
-        massnahmenOffen: offen.length,
-        massnahmenGesamt: f.massnahmen.length,
-        aeltesteFrist: fristen.length ? isoTag(new Date(fristen[0]!)) : null,
+        massnahmenOffen: kennzahlen.offen.length,
+        massnahmenGesamt: kennzahlen.bestand.length,
+        aeltesteFrist: kennzahlen.aeltesteFrist ? isoTag(kennzahlen.aeltesteFrist) : null,
         risikoCodes: f.risiken.map((x) => x.risiko.code).sort(),
         massnahmen: zeilen,
       };
@@ -278,23 +278,6 @@ function begrenzeStatus(
   return r > max ? RANG[max]! : s;
 }
 
-/** Status zum Stichtag: spätere Statuswechsel aus dem Audit-Log zurückrechnen. */
-function statusZumStand(
-  aktuell: FeststellungStatus,
-  ereignisseNachStand: { aktion: string; detail: Record<string, unknown> }[],
-  geschlossenNach: boolean,
-): FeststellungStatus {
-  const erster = ereignisseNachStand.find(
-    (e) =>
-      e.aktion === 'tcms.feststellung.status' ||
-      e.aktion === 'tcms.feststellung.verwerfen_bestaetigt',
-  );
-  const von = erster?.detail['von'];
-  if (typeof von === 'string' && von in FESTSTELLUNG_STATUS_LABEL) return von as FeststellungStatus;
-  if (aktuell === 'GESCHLOSSEN' && geschlossenNach) return 'NACHKONTROLLE';
-  return aktuell;
-}
-
 /**
  * Detail einer Feststellung zum Stichtag (Maßnahmen, Nachkontrolle, Verlauf
  * aus dem Audit-Log). Für Nicht-Beteiligte einer vertraulichen Feststellung
@@ -368,14 +351,11 @@ export async function ladeFeststellung(
       : f.vertraulich;
   if (vertraulich && !darf) return maskiert;
 
+  // Status zum Stichtag: dieselbe Regel wie Liste und Kontext (kern/rueckrechnung.ts).
   const nachStand = audits
-    .filter((a) => !bisStand(a))
-    .map((a) => ({ aktion: a.aktion, detail: detail(a) }));
-  const status = statusZumStand(
-    f.status,
-    nachStand,
-    !!f.geschlossenAm && f.geschlossenAm.getTime() > ende.getTime(),
-  );
+    .filter((a) => a.objektId === f.id && !bisStand(a))
+    .map((a) => ({ aktion: a.aktion, objektId: a.objektId, detail: detail(a) }));
+  const status = feststellungsStatusZumStand(f, nachStand, ende);
 
   const nachweisJe = new Map<string, string>();
   for (const a of audits) {
@@ -384,10 +364,7 @@ export async function ladeFeststellung(
     }
   }
 
-  const p153Gilt =
-    f.p153Entscheidung != null &&
-    f.p153EntschiedenAm != null &&
-    f.p153EntschiedenAm.getTime() <= ende.getTime();
+  const p153Gilt = p153EntschiedenAm(f, ende);
 
   const nk = f.nachkontrolle;
   const nkSichtbar = !!nk && !(nk.ausserplanmaessig && nk.createdAt.getTime() > ende.getTime());

@@ -30,7 +30,11 @@ für KI-Werkzeuge.
   Kern aller Bereiche in `src/kern/` (Export über `bereiche/lesepfade.ts`):
   `ladeKontext(ctx, { mandantId, stand? })` lädt den Tax-CMS-Kontext eines
   Mandanten zu einem Stichtag (prüft `kannLesen`, maskiert vertrauliche
-  Feststellungen), Nummernkreise je Tenant, reine Stichtag-Helfer, das Lesen
+  Feststellungen), Nummernkreise je Tenant, reine Stichtag-Helfer, die
+  Rückrechnung historischer Stände (`kern/rueckrechnung.ts`: Maßnahmen,
+  Feststellungsstatus, Ereignisse und Folgen zum Stichtag für Kontext, Listen
+  und Details), der Antrag einer Frequenzabweichung (`kern/abweichung.ts`,
+  Stände nach Version), das Lesen
   des Geschäftsprofils (`kern/profil.ts`, Profilregeln in `@tcms/domain`) und
   die Kontrollvorlagen für neue Kontrollen aus dem Katalog
   (`kern/kontroll-vorlage.ts`: Vorbelegung der Zuständigkeit, erster Stand,
