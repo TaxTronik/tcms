@@ -35,7 +35,13 @@ import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { beteiligteVon, gleicheId, kannVertraulichLesen } from '../../rechte';
 import { ladeLage, pruefeEingabe, pruefeLeserecht, type Lage } from './lage';
-import { darfPortalLesen, durchfuehrungsRechte, rechteFlags } from './rechte';
+import {
+  aufgabenRang,
+  darfPortalLesen,
+  durchfuehrungsRechte,
+  portalAufgabe,
+  rechteFlags,
+} from './rechte';
 import {
   leseKennzahlen,
   leseSchrittAntworten,
@@ -462,13 +468,6 @@ export async function ladeKontrollaufgabe(
   };
 }
 
-const OFFEN_ANZEIGE = new Set<AnzeigeStatus>([
-  'FAELLIG',
-  'UEBERFAELLIG',
-  'IN_DURCHFUEHRUNG',
-  'ZURUECKGEWIESEN',
-]);
-
 /**
  * Offene Kontrollaufgaben eines Mandantenkontakts (P2): Durchführungen der
  * Partei Mandant, die fällig, in Arbeit, zurückgegeben oder in 30 Tagen
@@ -485,7 +484,6 @@ export async function listeKontrollaufgaben(
   const rollen = await pruefeLeserecht(ctx, mandantId);
   const heute = heuteDatum(ctx.uhr);
   const ende = tagesende(heute);
-  const horizont = addTage(heute, 30);
   const zeilen = await ctx.tx.durchfuehrung.findMany({
     where: {
       kontrolle: { programm: { mandantId } },
@@ -505,33 +503,24 @@ export async function listeKontrollaufgaben(
     if (k.aktivAb.getTime() > ende.getTime()) continue;
     if (k.entfallenAb && k.entfallenAb.getTime() <= ende.getTime()) continue;
     const ks = d.kontrolleStand;
-    const zustaendigkeit = {
-      partei: ks.partei,
-      durchfuehrendId: ks.durchfuehrendId,
-      vertretungId: ks.vertretungId,
-      gegenzeichnerId: ks.gegenzeichnerId,
-    };
-    if (!darfPortalLesen(a, mandantId, rollen, zustaendigkeit)) continue;
     const anzeige = statusAm(d, heute);
-    const bald =
-      anzeige === 'GEPLANT' &&
-      d.faelligAm.getTime() <= horizont.getTime() &&
-      d.periodeBis.getTime() < horizont.getTime();
-    let art: 'DURCHFUEHREN' | 'BESTAETIGEN';
-    let eigene: boolean;
-    if (OFFEN_ANZEIGE.has(anzeige) || bald) {
-      art = 'DURCHFUEHREN';
-      eigene = gleicheId(a.id, ks.durchfuehrendId) || gleicheId(a.id, ks.vertretungId);
-    } else if (
-      anzeige === 'ZUR_GEGENZEICHNUNG' &&
-      ks.gegenzeichnungMandant &&
-      !d.mandantBestaetigtVon
-    ) {
-      art = 'BESTAETIGEN';
-      eigene =
-        (gleicheId(a.id, ks.gegenzeichnerId) || gleicheId(a.id, ks.vertretungId)) &&
-        !gleicheId(a.id, d.durchgefuehrtVon);
-    } else continue;
+    // Eine Regel für P1 und P2 (Sichtbarkeit, Art, eigene): `portalAufgabe`.
+    const aufgabe = portalAufgabe(
+      a,
+      mandantId,
+      rollen,
+      {
+        partei: ks.partei,
+        durchfuehrendId: ks.durchfuehrendId,
+        vertretungId: ks.vertretungId,
+        gegenzeichnerId: ks.gegenzeichnerId,
+        gegenzeichnungMandant: ks.gegenzeichnungMandant,
+      },
+      { ...d, anzeige },
+      heute,
+    );
+    if (!aufgabe) continue;
+    const { art, eigene } = aufgabe;
     aufgaben.push({
       id: d.id,
       kontrolleCode: k.code,
@@ -548,15 +537,9 @@ export async function listeKontrollaufgaben(
       mindestNachweise: ks.mindestNachweise,
     });
   }
-  const prio = (x: (typeof aufgaben)[number]) =>
-    x.anzeige === 'UEBERFAELLIG'
-      ? 0
-      : x.anzeige === 'ZURUECKGEWIESEN'
-        ? 1
-        : x.art === 'BESTAETIGEN'
-          ? 2
-          : 3;
-  aufgaben.sort((x, y) => prio(x) - prio(y) || x.faelligAm.localeCompare(y.faelligAm));
+  aufgaben.sort(
+    (x, y) => aufgabenRang(x) - aufgabenRang(y) || x.faelligAm.localeCompare(y.faelligAm),
+  );
   return { aufgaben, heute: isoDatum(heute) };
 }
 

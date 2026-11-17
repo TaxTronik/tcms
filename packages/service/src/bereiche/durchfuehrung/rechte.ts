@@ -17,6 +17,7 @@
 
 import type { Akteur, VerweigerungGrund } from '@tcms/contract';
 import {
+  addTage,
   fmtDatum,
   OFFENE_GESPEICHERTE_STATUS,
   type AnzeigeStatus,
@@ -137,6 +138,81 @@ export function darfPortalLesen(
   if (aktiveRollen(a, mandantId, rollen).size === 0) return false;
   if (kannPortalLesen(a, mandantId, rollen)) return true;
   return [k.durchfuehrendId, k.vertretungId, k.gegenzeichnerId].some((id) => gleicheId(a.id, id));
+}
+
+/** Anzeigestatus, in denen eine Durchführung der Partei Mandant als offene Aufgabe gilt. */
+export const AUFGABE_OFFEN: ReadonlySet<AnzeigeStatus> = new Set<AnzeigeStatus>([
+  'FAELLIG',
+  'UEBERFAELLIG',
+  'IN_DURCHFUEHRUNG',
+  'ZURUECKGEWIESEN',
+]);
+/** Geplante Durchführungen werden so viele Tage vor der Fälligkeit zur Aufgabe. */
+export const AUFGABE_VORLAUF_TAGE = 30;
+
+/** Was eine Durchführung zur offenen Mandantenaufgabe macht (Stand heute). */
+export interface AufgabenStand {
+  anzeige: AnzeigeStatus;
+  faelligAm: Date;
+  periodeBis: Date;
+  durchgefuehrtVon: string | null;
+  mandantBestaetigtVon: string | null;
+}
+
+export interface PortalAufgabe {
+  art: 'DURCHFUEHREN' | 'BESTAETIGEN';
+  /** Der Person zugewiesen (Vertrag: „eigene“), nicht „darf handeln“ – das prüft die Operation. */
+  eigene: boolean;
+}
+
+/**
+ * Offene Mandantenaufgabe einer Durchführung für einen Mandantenkontakt – eine
+ * Regel für die Portal-Übersicht (P1) und die Aufgabenliste (P2), null, wenn
+ * es keine ist oder die Person sie nicht sehen darf (`darfPortalLesen`):
+ *   - DURCHFUEHREN: fällig, überfällig, in Arbeit oder zurückgewiesen, oder
+ *     geplant mit Fälligkeit und Periodenende innerhalb von
+ *     `AUFGABE_VORLAUF_TAGE`; eigene für durchführende Person und Vertretung.
+ *   - BESTAETIGEN: zur Gegenzeichnung mit Bestätigung beim Mandanten, solange
+ *     niemand bestätigt hat (`mandantBestaetigtVon`, Status bleibt bis zum
+ *     Abschluss der Kanzlei); eigene für Gegenzeichnung oder Vertretung, nie
+ *     für die einreichende Person.
+ */
+export function portalAufgabe(
+  a: Akteur,
+  mandantId: string,
+  rollen: readonly KontaktRolle[],
+  k: KontrollZustaendigkeit,
+  d: AufgabenStand,
+  heute: Date,
+): PortalAufgabe | null {
+  if (!darfPortalLesen(a, mandantId, rollen, k)) return null;
+  const horizont = addTage(heute, AUFGABE_VORLAUF_TAGE).getTime();
+  const bald =
+    d.anzeige === 'GEPLANT' &&
+    d.faelligAm.getTime() <= horizont &&
+    d.periodeBis.getTime() < horizont;
+  if (AUFGABE_OFFEN.has(d.anzeige) || bald) {
+    return {
+      art: 'DURCHFUEHREN',
+      eigene: gleicheId(a.id, k.durchfuehrendId) || gleicheId(a.id, k.vertretungId),
+    };
+  }
+  if (d.anzeige === 'ZUR_GEGENZEICHNUNG' && k.gegenzeichnungMandant && !d.mandantBestaetigtVon) {
+    return {
+      art: 'BESTAETIGEN',
+      eigene:
+        (gleicheId(a.id, k.gegenzeichnerId) || gleicheId(a.id, k.vertretungId)) &&
+        !gleicheId(a.id, d.durchgefuehrtVon),
+    };
+  }
+  return null;
+}
+
+/** Reihenfolge der Mandantenaufgaben: überfällig, zurückgewiesen, Bestätigungen, Rest. */
+export function aufgabenRang(x: { anzeige: AnzeigeStatus; art: PortalAufgabe['art'] }): number {
+  if (x.anzeige === 'UEBERFAELLIG') return 0;
+  if (x.anzeige === 'ZURUECKGEWIESEN') return 1;
+  return x.art === 'BESTAETIGEN' ? 2 : 3;
 }
 
 /** Ablehnung von `kannDurchfuehren`: andere Seite (PARTEI) oder nicht zugewiesen. */
