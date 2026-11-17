@@ -321,7 +321,9 @@ export async function ladeRisiken(
 ): Promise<RisikenListe> {
   const e = pruefeEingabe(RisikenLesenSchema, eingabe);
   const k = await kontextFuerStaff(ctx, kanonisch(e.mandantId), e.stand);
-  const [hinweise, akz] = await Promise.all([neuBewertenHinweise(ctx, k), akzeptanzen(ctx, k)]);
+  // Nacheinander: Eine Transaktion hat genau eine Verbindung (keine parallelen Abfragen).
+  const hinweise = await neuBewertenHinweise(ctx, k);
+  const akz = await akzeptanzen(ctx, k);
   const risiken = k.risiken.map((r) =>
     risikoEintrag(r, hinweise.get(r.id) ?? [], akz.get(r.id) ?? []),
   );
@@ -343,21 +345,19 @@ export async function ladeRisiko(ctx: DienstKontext, eingabe: RisikoLesen): Prom
   const r = k.risiken.find((x) => x.id === e.risikoId);
   if (!r || !k.programm) throw new DienstFehler('NICHT_GEFUNDEN');
   const ende = tagesende(k.stand);
-  const [hinweise, akz, roh, audit] = await Promise.all([
-    neuBewertenHinweise(ctx, k),
-    akzeptanzen(ctx, k),
-    ctx.tx.risiko.findFirst({
-      where: { id: r.id, programmId: k.programm.id },
-      select: {
-        aktivAb: true,
-        staende: {
-          where: { gueltigAb: { lte: ende } },
-          orderBy: [{ gueltigAb: 'desc' }, { version: 'desc' }, { id: 'desc' }],
-        },
+  const hinweise = await neuBewertenHinweise(ctx, k);
+  const akz = await akzeptanzen(ctx, k);
+  const roh = await ctx.tx.risiko.findFirst({
+    where: { id: r.id, programmId: k.programm.id },
+    select: {
+      aktivAb: true,
+      staende: {
+        where: { gueltigAb: { lte: ende } },
+        orderBy: [{ gueltigAb: 'desc' }, { version: 'desc' }, { id: 'desc' }],
       },
-    }),
-    auditSpur(ctx.tx, k, 'Risiko', r.id),
-  ]);
+    },
+  });
+  const audit = await auditSpur(ctx.tx, k, 'Risiko', r.id);
   if (!roh) throw new DienstFehler('NICHT_GEFUNDEN');
   const risiko = risikoEintrag(r, hinweise.get(r.id) ?? [], akz.get(r.id) ?? []);
   const staende = roh.staende.map((s) => ({
@@ -563,14 +563,12 @@ export async function ladeKontrollen(
   const e = pruefeEingabe(KontrollenLesenSchema, eingabe);
   const k = await kontextFuerStaff(ctx, kanonisch(e.mandantId), e.stand);
   const ende = tagesende(k.stand);
-  const [fj, staende] = await Promise.all([
-    feststellungenJeDurchfuehrung(ctx.tx, k),
-    kontrollStaende(
-      ctx.tx,
-      k.kontrollen.filter((x) => x.abweichung).map((x) => x.id),
-      ende,
-    ),
-  ]);
+  const fj = await feststellungenJeDurchfuehrung(ctx.tx, k);
+  const staende = await kontrollStaende(
+    ctx.tx,
+    k.kontrollen.filter((x) => x.abweichung).map((x) => x.id),
+    ende,
+  );
   const kontrollen = k.kontrollen.map((x) => kontrolleEintrag(x, staende.get(x.id) ?? [], fj));
   return {
     ...lesestand(k),
@@ -591,11 +589,9 @@ export async function ladeKontrolle(
   const x = k.kontrollen.find((c) => c.id === e.kontrolleId);
   if (!x || !k.programm) throw new DienstFehler('NICHT_GEFUNDEN');
   const ende = tagesende(k.stand);
-  const [fj, staendeJe, audit] = await Promise.all([
-    feststellungenJeDurchfuehrung(ctx.tx, k),
-    kontrollStaende(ctx.tx, [x.id], ende),
-    auditSpur(ctx.tx, k, 'Kontrolle', x.id),
-  ]);
+  const fj = await feststellungenJeDurchfuehrung(ctx.tx, k);
+  const staendeJe = await kontrollStaende(ctx.tx, [x.id], ende);
+  const audit = await auditSpur(ctx.tx, k, 'Kontrolle', x.id);
   const roh = staendeJe.get(x.id) ?? [];
   const kontrolle = kontrolleEintrag(x, roh, fj);
   const staende = roh

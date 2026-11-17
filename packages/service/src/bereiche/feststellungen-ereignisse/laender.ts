@@ -185,20 +185,19 @@ export async function ladeLaender(ctx: DienstKontext, eingabe: LaenderLesen): Pr
   if (!programm)
     return { ...kopf, programmId: null, historie: [], feststellungen: [], bezuege: [], namen: [] };
 
-  const [staende, feststellungen] = await Promise.all([
-    ctx.tx.landStand.findMany({
-      where: { programmId: programm.id },
-      orderBy: [{ stand: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
-    }),
-    ctx.tx.feststellung.findMany({
-      where: {
-        programmId: programm.id,
-        ...(liestAlleVertraulichen(ctx.akteur) ? {} : { vertraulich: false }),
-      },
-      include: { erklaerungen: { select: { land: true }, orderBy: { id: 'asc' } } },
-      orderBy: [{ nummer: 'desc' }, { id: 'desc' }],
-    }),
-  ]);
+  // Nacheinander: Eine Transaktion hat genau eine Verbindung (keine parallelen Abfragen).
+  const staende = await ctx.tx.landStand.findMany({
+    where: { programmId: programm.id },
+    orderBy: [{ stand: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+  });
+  const feststellungen = await ctx.tx.feststellung.findMany({
+    where: {
+      programmId: programm.id,
+      ...(liestAlleVertraulichen(ctx.akteur) ? {} : { vertraulich: false }),
+    },
+    include: { erklaerungen: { select: { land: true }, orderBy: { id: 'asc' } } },
+    orderBy: [{ nummer: 'desc' }, { id: 'desc' }],
+  });
   const historie = new Map<string, LandStand[]>();
   for (const s of staende) {
     if (s.stand.getTime() > ende.getTime() || s.createdAt.getTime() > ende.getTime()) continue;

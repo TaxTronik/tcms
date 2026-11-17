@@ -140,16 +140,15 @@ export async function ladeBeschreibung(
   }
   const programmId = k.programm.id;
   const tx = ctx.tx;
-  const [versionen, freigaben] = await Promise.all([
-    tx.beschreibungVersion.findMany({
-      where: { programmId },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    }),
-    tx.freigabe.findMany({
-      where: { programmId, art: 'BESCHREIBUNG' },
-      orderBy: [{ angefordertAm: 'asc' }, { id: 'asc' }],
-    }),
-  ]);
+  // Nacheinander: Eine Transaktion hat genau eine Verbindung (keine parallelen Abfragen).
+  const versionen = await tx.beschreibungVersion.findMany({
+    where: { programmId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  });
+  const freigaben = await tx.freigabe.findMany({
+    where: { programmId, art: 'BESCHREIBUNG' },
+    orderBy: [{ angefordertAm: 'asc' }, { id: 'asc' }],
+  });
   const ids = versionen.map((v) => v.id);
   const audit = ids.length
     ? await tx.auditEvent.findMany({

@@ -190,16 +190,15 @@ export async function ladePortalFreigaben(
     namen: [],
   };
   if (!ids.length) return leer;
-  const [alle, versionen] = await Promise.all([
-    tx.freigabe.findMany({
-      where: { programmId: { in: ids } },
-      orderBy: [{ angefordertAm: 'desc' }, { id: 'asc' }],
-    }),
-    tx.beschreibungVersion.findMany({
-      where: { programmId: { in: ids } },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    }),
-  ]);
+  // Nacheinander: Eine Transaktion hat genau eine Verbindung (keine parallelen Abfragen).
+  const alle = await tx.freigabe.findMany({
+    where: { programmId: { in: ids } },
+    orderBy: [{ angefordertAm: 'desc' }, { id: 'asc' }],
+  });
+  const versionen = await tx.beschreibungVersion.findMany({
+    where: { programmId: { in: ids } },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  });
   const freigaben = alle.filter((f) => lesen || gleicheId(f.empfaengerId, a.id));
   const versionJe = new Map(versionen.map((v) => [v.id, v]));
   const jetzt = new Date(); // Codefristen: echte Zeit
