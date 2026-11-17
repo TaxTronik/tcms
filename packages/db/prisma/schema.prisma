@@ -573,6 +573,8 @@ model Feststellung {
   verwerfenBegruendung   String?
   verwerfenBeantragtVon  String?
   verwerfenBestaetigtVon String?
+  /// Kennung des jüngsten Verwerfen-Antrags (je Antrag neu); die Bestätigung nennt die gesehene.
+  verwerfenAntragId      String                 @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   erfasstVon             String
   erfasstAm              DateTime               @default(now())
   geschlossenAm          DateTime?
@@ -672,7 +674,7 @@ model Ereignis {
   tenantId              String                   @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId            String
   programm              TcmsProgramm             @relation(fields: [tenantId, programmId], references: [tenantId, id])
-  /// `<Jahr>-T-<nnnn>`, je Kanzlei (Tenant) eindeutig.
+  /// `<Jahr>-T-<nnnn>`, je Programm eindeutig (wie Feststellungsnummern).
   nummer                String
   typ                   String
   titel                 String
@@ -685,13 +687,15 @@ model Ereignis {
   verwerfenBegruendung  String?
   /// Antragsteller:in des offenen Antrags auf Verwerfen (Vier-Augen).
   verwerfenBeantragtVon String?
+  /// Kennung des jüngsten Verwerfen-Antrags (je Antrag neu); die Bestätigung nennt die gesehene.
+  verwerfenAntragId     String                   @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   triagiertVon          String?
   triagiertAm           DateTime?
   folgen                EreignisFolge[]
   idempotenz            PortalMeldungIdempotenz?
 
   @@unique([tenantId, id])
-  @@unique([tenantId, nummer])
+  @@unique([tenantId, programmId, nummer])
   @@index([tenantId, programmId])
 }
 
