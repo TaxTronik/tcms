@@ -22,7 +22,16 @@ import {
   type Turnus,
 } from '@tcms/domain';
 import type { KontrollNeuplanung } from '@tcms/contract';
+import { gleicheAbweichung } from '../../kern/abweichung';
 import { konflikt, sperreDurchfuehrungen } from './gemeinsam';
+
+// Regel der Frequenzabweichung im Kern (eine Regel für Operation, Arbeitskorb und Historie).
+export {
+  abweichungOffen,
+  antragAnzeige,
+  antragDerAbweichung,
+  type Antrag,
+} from '../../kern/abweichung';
 
 export type KontrolleStandRoh = Prisma.KontrolleStandGetPayload<object>;
 
@@ -30,62 +39,6 @@ export interface RisikoFuerPlanung {
   code: string;
   gt: GovernanceTyp;
   brutto: Klasse;
-}
-
-/** true, wenn der Stand eine beantragte, noch nicht freigegebene Abweichung trägt. */
-export function abweichungOffen(
-  s: Pick<KontrolleStandRoh, 'abweichungTurnus' | 'abweichungFreigegebenVon'>,
-): boolean {
-  return s.abweichungTurnus != null && !s.abweichungFreigegebenVon;
-}
-
-function gleicheAbweichung(a: KontrolleStandRoh, b: KontrolleStandRoh): boolean {
-  return (
-    a.abweichungTurnus === b.abweichungTurnus &&
-    (a.abweichungAnlass ?? false) === (b.abweichungAnlass ?? false) &&
-    a.abweichungBegruendung === b.abweichungBegruendung &&
-    a.abweichungFreigegebenVon === b.abweichungFreigegebenVon
-  );
-}
-
-function gleicherAntrag(a: KontrolleStandRoh, b: KontrolleStandRoh): boolean {
-  return (
-    a.abweichungTurnus === b.abweichungTurnus &&
-    (a.abweichungAnlass ?? false) === (b.abweichungAnlass ?? false) &&
-    a.abweichungBegruendung === b.abweichungBegruendung
-  );
-}
-
-export interface Antrag {
-  von: string | null;
-  am: Date | null;
-}
-
-/**
- * Wer hat die offene Abweichung beantragt? Der früheste Stand der
- * ununterbrochenen Folge mit derselben offenen Abweichung (spätere Stände
- * können durch Design- oder Personenänderungen entstanden sein). Für die
- * Vier-Augen-Prüfung werden die Stände unter der Sperre der Kontrolle gelesen.
- */
-export function antragDerAbweichung(staendeAufsteigend: readonly KontrolleStandRoh[]): Antrag {
-  const letzter = staendeAufsteigend[staendeAufsteigend.length - 1];
-  if (!letzter || !abweichungOffen(letzter)) return { von: null, am: null };
-  let i = staendeAufsteigend.length - 1;
-  while (i > 0 && gleicheAbweichung(staendeAufsteigend[i - 1]!, letzter)) i--;
-  return { von: staendeAufsteigend[i]!.erstelltVon, am: staendeAufsteigend[i]!.gueltigAb };
-}
-
-/** Antrag einer offenen oder freigegebenen Abweichung (Anzeige). */
-export function antragAnzeige(staendeAufsteigend: readonly KontrolleStandRoh[]): Antrag {
-  const offen = antragDerAbweichung(staendeAufsteigend);
-  if (offen.von) return offen;
-  const letzter = staendeAufsteigend[staendeAufsteigend.length - 1];
-  if (!letzter || letzter.abweichungTurnus == null || !letzter.abweichungFreigegebenVon) {
-    return { von: null, am: null };
-  }
-  let i = staendeAufsteigend.length - 1;
-  while (i > 0 && gleicherAntrag(staendeAufsteigend[i - 1]!, letzter)) i--;
-  return { von: staendeAufsteigend[i]!.erstelltVon, am: staendeAufsteigend[i]!.gueltigAb };
 }
 
 /** Kurzbeschreibung der Änderung eines Kontrollstands gegenüber dem Vorgänger. */

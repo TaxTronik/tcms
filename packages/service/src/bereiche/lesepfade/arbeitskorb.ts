@@ -21,6 +21,7 @@ import {
   tageZwischen,
   type AnzeigeStatus,
 } from '@tcms/domain';
+import { antragDerAbweichung } from '../../kern/abweichung';
 import {
   jeAktuellerKontext,
   type FeststellungView,
@@ -65,44 +66,6 @@ const OFFEN_ODER_FAELLIG: readonly AnzeigeStatus[] = [
   'UEBERFAELLIG',
 ];
 
-interface AbweichungsStand {
-  kontrolleId: string;
-  gueltigAb: Date;
-  erstelltVon: string | null;
-  abweichungTurnus: string | null;
-  abweichungAnlass: boolean | null;
-  abweichungBegruendung: string | null;
-  abweichungFreigegebenVon: string | null;
-}
-
-function gleicheAbweichung(a: AbweichungsStand, b: AbweichungsStand): boolean {
-  return (
-    a.abweichungTurnus === b.abweichungTurnus &&
-    (a.abweichungAnlass ?? false) === (b.abweichungAnlass ?? false) &&
-    a.abweichungBegruendung === b.abweichungBegruendung &&
-    a.abweichungFreigegebenVon === b.abweichungFreigegebenVon
-  );
-}
-
-/**
- * Wer die offene Frequenzabweichung beantragt hat: der früheste Stand der
- * ununterbrochenen Folge mit derselben offenen Abweichung (spätere Stände
- * können durch Design- oder Personenänderungen entstanden sein). Gleiche
- * Regel wie die Kontrollhistorie der Demo (`antragDerAbweichung`).
- */
-function abweichungsAntrag(aufsteigend: readonly AbweichungsStand[]): {
-  von: string | null;
-  am: Date | null;
-} {
-  const letzter = aufsteigend[aufsteigend.length - 1];
-  if (!letzter || letzter.abweichungTurnus == null || letzter.abweichungFreigegebenVon) {
-    return { von: null, am: null };
-  }
-  let i = aufsteigend.length - 1;
-  while (i > 0 && gleicheAbweichung(aufsteigend[i - 1]!, letzter)) i--;
-  return { von: aufsteigend[i]!.erstelltVon, am: aufsteigend[i]!.gueltigAb };
-}
-
 /** Arbeitskorb über die bestätigten Mandanten (nur Kanzleipersonen). */
 export async function ladeArbeitskorb(
   ctx: DienstKontext,
@@ -120,12 +83,14 @@ export async function ladeArbeitskorb(
   const abweichungsKontrollIds = kontexte.flatMap((c) =>
     c.k.kontrollen.filter((x) => x.abweichung && !x.abweichung.freigegebenVon).map((x) => x.id),
   );
-  const abweichungsStaende: AbweichungsStand[] = abweichungsKontrollIds.length
+  const abweichungsStaende = abweichungsKontrollIds.length
     ? await ctx.tx.kontrolleStand.findMany({
         where: { kontrolleId: { in: abweichungsKontrollIds } },
-        orderBy: [{ gueltigAb: 'asc' }, { id: 'asc' }],
+        orderBy: [{ version: 'asc' }, { id: 'asc' }],
         select: {
+          id: true,
           kontrolleId: true,
+          version: true,
           gueltigAb: true,
           erstelltVon: true,
           abweichungTurnus: true,
@@ -155,7 +120,7 @@ export async function ladeArbeitskorb(
         orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
       })
     : [];
-  const staendeJe = new Map<string, AbweichungsStand[]>();
+  const staendeJe = new Map<string, (typeof abweichungsStaende)[number][]>();
   for (const st of abweichungsStaende) {
     staendeJe.set(st.kontrolleId, [...(staendeJe.get(st.kontrolleId) ?? []), st]);
   }
@@ -261,7 +226,8 @@ export async function ladeArbeitskorb(
       }
       for (const x of c.kontrollen) {
         if (!x.abweichung || x.abweichung.freigegebenVon) continue;
-        const info = abweichungsAntrag(staendeJe.get(x.id) ?? []);
+        // Dieselbe Regel wie die Operation: Stände bis zum offenen Stand, nach Version.
+        const info = antragDerAbweichung(staendeJe.get(x.id) ?? [], x);
         if (!zweitePerson(nutzer, info.von)) continue;
         korb.vierAugen.push({
           mandant,
