@@ -291,4 +291,21 @@ describe.skipIf(!AKTIV)('Tax-CMS-Kontext gegen PostgreSQL', () => {
     );
     expect(block).toEqual([DEMO_IDS.seestern]);
   });
+
+  it('Mandant.aktiv wirkt nicht: inaktiver Mandant wie jeder andere (Zugang steuert die kanzleikonsole)', async () => {
+    const t = randomUUID();
+    const m = randomUUID();
+    await mitTenant(t, (tx) =>
+      tx.mandant.create({
+        data: { id: m, name: 'Inaktiv GmbH', rechtsform: 'KapG', aktiv: false },
+      }),
+    );
+    const a = kanzlei(randomUUID(), m, { tenantId: t, admin: true, zustaendig: true });
+    expect((await lade(a, { mandantId: m })).mandant.id).toBe(m);
+    const block: string[] = [];
+    await imDienst(a, PORTS, (ctx) =>
+      jeAktuellerKontext(ctx, [{ mandantId: m, akteur: a }], (k) => block.push(k.mandant.id)),
+    );
+    expect(block).toEqual([m]);
+  });
 });

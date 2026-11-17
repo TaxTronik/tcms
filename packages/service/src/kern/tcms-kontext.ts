@@ -580,13 +580,15 @@ export interface KontextZugang {
 export const KONTEXT_BLOCK = 50;
 
 /**
- * Lädt die aktuellen Kontexte (Stand heute) mehrerer aktiver Mandanten in
- * Blöcken zu `KONTEXT_BLOCK` Mandanten – je Block eine feste Zahl Abfragen
- * statt einer je Mandant – und ruft `fn` je Kontext auf; die Rohdaten eines
- * Blocks werden danach verworfen. Rechte je Mandant wie `ladeKontext`
- * (`kannLesen` und Maskierung mit dem Akteur des Zugangs); Mandanten ohne
- * Leserecht, unbekannte, inaktive oder doppelte werden ausgelassen, ohne das
- * zu verraten. Namen werden hier nicht aufgelöst (`namen` bleibt leer).
+ * Lädt die aktuellen Kontexte (Stand heute) mehrerer Mandanten in Blöcken zu
+ * `KONTEXT_BLOCK` Mandanten – je Block eine feste Zahl Abfragen statt einer je
+ * Mandant – und ruft `fn` je Kontext auf; die Rohdaten eines Blocks werden
+ * danach verworfen. Rechte je Mandant wie `ladeKontext` (`kannLesen` und
+ * Maskierung mit dem Akteur des Zugangs); Mandanten ohne Leserecht, unbekannte
+ * oder doppelte werden ausgelassen, ohne das zu verraten. `Mandant.aktiv` wirkt
+ * hier wie überall nicht: Welche Mandanten eine Person betreut, bestimmt allein
+ * die kanzleikonsole (Liste und `cli`, ADR 0001 §5). Namen werden hier nicht
+ * aufgelöst (`namen` bleibt leer).
  */
 export async function jeAktuellerKontext(
   ctx: DienstKontext,
@@ -607,7 +609,7 @@ export async function jeAktuellerKontext(
   for (let i = 0; i < ids.length; i += groesse) {
     const block = ids.slice(i, i + groesse);
     const mandanten = await tx.mandant.findMany({
-      where: { id: { in: block }, aktiv: true },
+      where: { id: { in: block } },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
       select: { id: true, name: true, rechtsform: true, datevNr: true },
     });
