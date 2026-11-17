@@ -142,6 +142,46 @@ describe.skipIf(!AKTIV)('Demo feststellungen-ereignisse gegen PostgreSQL', () =>
     expect(r?.fehler).toMatch(/nicht unterstützt/);
   });
 
+  it('Portal: erst prüfen, dann ablegen; Anlagen-Fehler eigens gemeldet; Namen bereinigt', async () => {
+    als(DEMO_IDS.jana);
+    const dateienInAblage = () => readdirSync(ablage, { recursive: true }).length;
+    const vorher = dateienInAblage();
+    const neu = Buffer.concat([Buffer.from('%PDF-1.4\n'), randomBytes(64)]);
+    const pdf = (name: string) => new File([neu], name, { type: 'application/pdf' });
+    // Zu kurze Bezeichnung: abgewiesen, keine Datei auf der Platte.
+    const kurz = meldung(pdf('Kurz.pdf'));
+    kurz.set('titel', 'abc');
+    expect((await meldeEreignis(null, kurz))?.fehler).toMatch(/Bezeichnung/);
+    // Dieselbe Datei zweimal: eigene Meldung zu den Anlagen, nichts abgelegt.
+    const doppelt = meldung(pdf('a.pdf'));
+    doppelt.append('anlagen', pdf('b.pdf'));
+    expect((await meldeEreignis(null, doppelt))?.fehler).toMatch(/Anlage kann nicht angenommen/);
+    // Zusammen über 20 MB: abgewiesen, bevor etwas gelesen oder abgelegt wird.
+    const gross = meldung();
+    for (let i = 0; i < 3; i++)
+      gross.append(
+        'anlagen',
+        new File([Buffer.alloc(8 * 1024 * 1024, i)], `teil${i}.pdf`, { type: 'application/pdf' }),
+      );
+    expect((await meldeEreignis(null, gross))?.fehler).toMatch(/zusammen höchstens 20 MB/);
+    expect(dateienInAblage()).toBe(vorher);
+    // Weicher Trennstrich und Variantenselektor im Namen: bereinigt angenommen.
+    const name = `Rech${String.fromCodePoint(0xad)}nung ${String.fromCodePoint(0x2714, 0xfe0f)}.pdf`;
+    const ziel = await umleitungVon(meldeEreignis(null, meldung(pdf(name))));
+    const nummer = decodeURIComponent(ziel.split('gemeldet=')[1] ?? '');
+    const e = await imDemo((tx) => tx.ereignis.findFirstOrThrow({ where: { nummer } }));
+    const audit = await imDemo((tx) =>
+      tx.auditEvent.findFirstOrThrow({
+        where: { objektId: e.id, aktion: 'tcms.ereignis.gemeldet' },
+      }),
+    );
+    const anlagen = (audit.detail as { anlagen: { dateiname: string }[] }).anlagen;
+    expect(anlagen.map((a) => a.dateiname)).toEqual([
+      `Rechnung ${String.fromCodePoint(0x2714)}.pdf`,
+    ]);
+    expect(dateienInAblage()).toBeGreaterThan(vorher);
+  });
+
   it('TS-09 Download: über den Service, mit Integritätsprüfung, als Download ausgeliefert', async () => {
     als(DEMO_IDS.anna);
     const ok = await anfrage(T, ereignisId, sha);
