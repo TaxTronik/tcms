@@ -367,6 +367,12 @@ export const SetupEntwurfSchema = z
     freigabe: ZieleSchrittSchema.shape.freigabe,
     risiken: z.record(katalogCode, EntwurfRisikoGespeichertSchema),
     kontrollen: KontrollenSchrittSchema.shape.kontrollen,
+    /**
+     * Zähler der Speicherungen (TS-05): Speichern und Anlegen nennen ihn als `gesehen`;
+     * weicht er ab, hat inzwischen jemand anderes gespeichert (`KONFLIKT`). Fehlt er
+     * (Entwurf aus der Zeit davor), gilt 0.
+     */
+    stand: z.number().int().min(0).optional(),
     /** Person (ID), die zuletzt gespeichert hat. */
     gespeichertVon: uuid.nullable().optional(),
     gespeichertAm: isoZeit.nullable().optional(),
@@ -412,9 +418,20 @@ export type EinrichtungLesenEingabe = z.infer<typeof EinrichtungLesenEingabeSche
 
 const ZielAktion = z.enum(['speichern', 'weiter', 'zurueck']);
 
+/**
+ * Gesehener Stand des Entwurfs (`entwurf.stand` aus dem Lesen; 0, solange nichts
+ * gespeichert ist). Unter der Programmsperre verglichen: Hat inzwischen jemand
+ * anderes gespeichert, antwortet der Dienst `KONFLIKT` (neu laden), statt die
+ * Änderung zu überschreiben bzw. einen nie gesehenen Entwurf als Version 1
+ * anzulegen. Optional für bestehende Aufrufer; ohne Angabe kein Abgleich.
+ */
+const gesehen = z.number().int().min(0).max(1_000_000_000).optional();
+
 function entwurfVarianten<M extends z.ZodRawShape>(basis: M) {
   const v = <S extends z.ZodRawShape>(s: S) =>
-    z.object({ ...basis, ziel: ZielAktion, personen: EinrichtungPersonenSchema, ...s }).strict();
+    z
+      .object({ ...basis, ziel: ZielAktion, personen: EinrichtungPersonenSchema, gesehen, ...s })
+      .strict();
   return z.discriminatedUnion('schritt', [
     v({ schritt: z.literal(1), daten: TeilbereichSchrittSchema }),
     v({ schritt: z.literal(2), daten: ProfilSchrittSchema }),
@@ -436,13 +453,15 @@ export const EntwurfSpeichernErgebnisSchema = z
     angelegt: z.boolean(),
     abgeschlossen: z.number().int().min(0).max(5),
     geaendert: z.boolean(),
+    /** Neuer Stand des Entwurfs (für das nächste `gesehen`). */
+    stand: z.number().int().min(0),
   })
   .strict();
 export type EntwurfSpeichernErgebnis = z.infer<typeof EntwurfSpeichernErgebnisSchema>;
 
 /** Version 1 anlegen: Zuständigkeiten aus Schritt 5 und Personen (wie beim Speichern). */
 export const ProgrammAnlegenBodySchema = z
-  .object({ daten: KontrollenSchrittSchema, personen: EinrichtungPersonenSchema })
+  .object({ daten: KontrollenSchrittSchema, personen: EinrichtungPersonenSchema, gesehen })
   .strict();
 export const ProgrammAnlegenEingabeSchema = ProgrammAnlegenBodySchema.extend({
   mandantId: uuid,

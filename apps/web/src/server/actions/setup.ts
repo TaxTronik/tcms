@@ -22,6 +22,7 @@ const Basis = z.object({
   schritt: z.coerce.number().int().min(1).max(5),
   ziel: z.enum(['speichern', 'weiter', 'zurueck', 'anlegen']),
   daten: z.string().min(2).max(400_000),
+  gesehen: z.coerce.number().int().min(0).max(1_000_000_000),
 });
 
 /** Meldung je Schritt, wenn die Struktur der Eingabe nicht passt (wie bisher). */
@@ -53,9 +54,10 @@ export async function speichereSchritt(_prev: Ergebnis, fd: FormData): Promise<E
     schritt: fd.get('schritt'),
     ziel: fd.get('ziel'),
     daten: fd.get('daten'),
+    gesehen: fd.get('gesehen'),
   });
   if (!b.success) return { fehler: 'Bitte die Eingaben prüfen.' };
-  const { mandantId, schritt, ziel } = b.data;
+  const { mandantId, schritt, ziel, gesehen } = b.data;
   const akteur = await demoAkteur(mandantId);
   if (!akteur) redirect('/anmelden');
   if (ziel === 'anlegen' && schritt !== 5)
@@ -70,12 +72,13 @@ export async function speichereSchritt(_prev: Ergebnis, fd: FormData): Promise<E
   try {
     await imDienst(akteur, DEMO_PORTS, async (ctx) => {
       if (ziel === 'anlegen') {
-        await legeProgrammAn(ctx, { mandantId, daten: daten as never, personen });
+        await legeProgrammAn(ctx, { mandantId, daten: daten as never, personen, gesehen });
       } else {
         await speichereEinrichtungsschritt(ctx, {
           mandantId,
           ziel,
           personen,
+          gesehen,
           schritt,
           daten,
         } as never);

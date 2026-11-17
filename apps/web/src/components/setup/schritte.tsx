@@ -27,6 +27,8 @@ type Aktion = (prev: Ergebnis, fd: FormData) => Promise<Ergebnis>;
 interface Basis {
   aktion: Aktion;
   mandantId: string;
+  /** Gesehener Stand des Entwurfs (TS-05). */
+  gesehen: number;
   darf: boolean;
   gesperrtGrund?: string;
 }

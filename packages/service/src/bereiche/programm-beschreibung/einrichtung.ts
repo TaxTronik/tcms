@@ -177,6 +177,21 @@ async function ladeProgramm(
 const eingerichtet = (p: ProgrammZeile | null) =>
   !!p && (p.status !== 'ENTWURF' || p.version1Am !== null);
 
+/**
+ * TS-05 für den (unversionierten) Entwurf: Der Aufrufer nennt den Stand, den er
+ * gesehen hat; unter der Programmsperre verglichen. Ohne Angabe kein Abgleich
+ * (bestehende Aufrufer).
+ */
+function pruefeGesehen(gesehen: number | undefined, alt: SetupEntwurf): void {
+  if (gesehen === undefined) return;
+  if (gesehen !== (alt.stand ?? 0)) {
+    throw new DienstFehler(
+      'KONFLIKT',
+      'Der Entwurf wurde inzwischen von einer anderen Person gespeichert. Bitte neu laden.',
+    );
+  }
+}
+
 function planView(p: AufbauPlan): PlanView {
   return {
     appetit: p.appetit,
@@ -316,7 +331,8 @@ export async function speichereEinrichtungsschritt(
   if (eingerichtet(programm)) throw new DienstFehler('KONFLIKT', BEREITS_EINGERICHTET);
   const { umfeld, gvIds } = await baueUmfeld(ctx.tx, mandant, e.personen, heute);
   const alt = leseEntwurf(programm?.setupEntwurf, heute, aufbauRollen(umfeld).gv);
-  const neu: SetupEntwurf = { ...alt };
+  pruefeGesehen(e.gesehen, alt);
+  const neu: SetupEntwurf = { ...alt, stand: (alt.stand ?? 0) + 1 };
   let geaendert = false;
   switch (e.schritt) {
     case 1:
@@ -422,10 +438,22 @@ export async function speichereEinrichtungsschritt(
       objektTyp: 'TcmsProgramm',
       objektId: programmId,
       programmId,
-      detail: { schritt: e.schritt, aktion: e.ziel, abgeschlossen: neu.abgeschlossen, geaendert },
+      detail: {
+        schritt: e.schritt,
+        aktion: e.ziel,
+        abgeschlossen: neu.abgeschlossen,
+        geaendert,
+        stand: neu.stand ?? 0,
+      },
     });
     return {
-      wert: { programmId, angelegt: !programm, abgeschlossen: neu.abgeschlossen, geaendert },
+      wert: {
+        programmId,
+        angelegt: !programm,
+        abgeschlossen: neu.abgeschlossen,
+        geaendert,
+        stand: neu.stand ?? 0,
+      },
       protokoll: protokolle,
     };
   });
@@ -456,7 +484,13 @@ export async function legeProgrammAn(
   await halteRollenFest(ctx.tx, mandantId);
   const { umfeld, gvIds } = await baueUmfeld(ctx.tx, mandant, e.personen, heute);
   const alt = leseEntwurf(programm.setupEntwurf, heute, aufbauRollen(umfeld).gv);
-  const neu: SetupEntwurf = { ...alt, kontrollen: kontrollenKanonisch(e.daten.kontrollen) };
+  // TS-05: Version 1 entsteht nur aus dem Entwurf, den die anlegende Person gesehen hat.
+  pruefeGesehen(e.gesehen, alt);
+  const neu: SetupEntwurf = {
+    ...alt,
+    kontrollen: kontrollenKanonisch(e.daten.kontrollen),
+    stand: (alt.stand ?? 0) + 1,
+  };
   if (alt.abgeschlossen < 4) {
     fachlichUngueltig('Version 1 kann noch nicht angelegt werden.', 'version1', [
       'Bitte zuerst die Schritte 1 bis 4 mit „Weiter" abschließen.',

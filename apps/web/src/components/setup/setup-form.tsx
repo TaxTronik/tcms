@@ -60,6 +60,7 @@ export function FehlerListe({ text }: { text: string }) {
 export function SetupForm({
   aktion,
   mandantId,
+  gesehen,
   schritt,
   daten,
   darf,
@@ -69,6 +70,8 @@ export function SetupForm({
 }: {
   aktion: Aktion;
   mandantId: string;
+  /** Stand des Entwurfs, den die Seite zeigt (TS-05: Abgleich im Dienst). */
+  gesehen: number;
   schritt: number;
   daten: unknown;
   darf: boolean;
@@ -83,6 +86,7 @@ export function SetupForm({
     <form action={formAction}>
       <input type="hidden" name="mandantId" value={mandantId} />
       <input type="hidden" name="schritt" value={schritt} />
+      <input type="hidden" name="gesehen" value={gesehen} />
       <input type="hidden" name="daten" value={JSON.stringify(daten)} />
       <fieldset disabled={!darf} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         {children}

@@ -461,6 +461,132 @@ describe.skipIf(!AKTIV)('Einrichtungsassistent (Service, PostgreSQL)', () => {
     expect(v1).toBe(1);
   });
 
+  it('TS-05: Speichern und „Version 1 anlegen" nur auf dem gesehenen Entwurf (sonst KONFLIKT)', async () => {
+    const m = await neuerMandant(w);
+    await bereiteVor(w, m.mandantId, m.gv);
+    const a = btFuer(w, m.mandantId);
+    const b = kanzlei(w, w.hb, m.mandantId, { hb: true });
+    const gesehen = (await lies(a, m.mandantId)).entwurf!.stand!;
+    expect(gesehen).toBe(4);
+    // B speichert Schritt 3 mit „weiter" (andere Ziele) auf dem gesehenen Stand.
+    const s3 = schritt3(w);
+    const ziele = s3.ziele.map((z, i) => (i === 0 ? { ...z, aktiv: false } : z));
+    const rb = await im(b, (ctx) =>
+      speichereEinrichtungsschritt(ctx, {
+        mandantId: m.mandantId,
+        ziel: 'weiter',
+        personen: personen(w),
+        gesehen,
+        schritt: 3,
+        daten: { ziele, freigabe: { anfordern: true, empfaengerId: m.gv } },
+      }),
+    );
+    expect(rb.stand).toBe(gesehen + 1);
+    // A speichert bzw. legt auf dem alten Stand an: KONFLIKT, nichts geändert.
+    const s = await fehlerVon(
+      im(a, (ctx) =>
+        speichereEinrichtungsschritt(ctx, {
+          mandantId: m.mandantId,
+          ziel: 'weiter',
+          personen: personen(w),
+          gesehen,
+          schritt: 3,
+          daten: { ziele: s3.ziele, freigabe: s3.freigabe },
+        }),
+      ),
+    );
+    expect(s.code).toBe('KONFLIKT');
+    const f = await fehlerVon(
+      im(a, (ctx) =>
+        legeProgrammAn(ctx, {
+          mandantId: m.mandantId,
+          daten: { kontrollen: {} },
+          personen: personen(w),
+          gesehen,
+        }),
+      ),
+    );
+    expect(f.code).toBe('KONFLIKT');
+    const nachher = await lies(a, m.mandantId);
+    expect(nachher.eingerichtet).toBe(false);
+    expect(nachher.entwurf!.ziele[0]!.aktiv).toBe(false);
+    // Mit dem neuen Stand gelingt es.
+    const r = await im(a, (ctx) =>
+      legeProgrammAn(ctx, {
+        mandantId: m.mandantId,
+        daten: { kontrollen: {} },
+        personen: personen(w),
+        gesehen: nachher.entwurf!.stand!,
+      }),
+    );
+    expect(r.ziele).toBe(s3.ziele.length - 1);
+  });
+
+  it('Version 1: Audit-Spur je Ziel, übernommenem Risiko und Kontrolle (mit Zuständigkeit)', async () => {
+    const m = await neuerMandant(w);
+    await bereiteVor(w, m.mandantId, m.gv);
+    const r = await im(btFuer(w, m.mandantId), (ctx) =>
+      legeProgrammAn(ctx, {
+        mandantId: m.mandantId,
+        daten: { kontrollen: {} },
+        personen: personen(w),
+      }),
+    );
+    const [audit, ziele, risiken, kontrollen, kette] = await inWelt(w, async (tx) => [
+      await tx.auditEvent.findMany({
+        where: { programmId: r.programmId },
+        orderBy: { pos: 'asc' },
+      }),
+      await tx.complianceZiel.findMany({
+        where: { teilbereich: { programmId: r.programmId } },
+        orderBy: { id: 'asc' },
+      }),
+      await tx.risiko.findMany({
+        where: { programmId: r.programmId, entscheidung: 'UEBERNOMMEN' },
+        orderBy: { id: 'asc' },
+      }),
+      await tx.kontrolle.findMany({
+        where: { programmId: r.programmId },
+        include: { staende: { orderBy: [{ version: 'asc' }, { id: 'asc' }] } },
+        orderBy: { id: 'asc' },
+      }),
+      await pruefeAuditKette(tx),
+    ]);
+    expect(kette.gueltig).toBe(true);
+    const zu = (aktion: string, id: string) =>
+      audit.filter((x) => x.aktion === aktion && x.objektId === id);
+    for (const z of ziele) {
+      const e = zu('tcms.ziel.angelegt', z.id);
+      expect(e).toHaveLength(1);
+      expect(e[0]!.detail).toMatchObject({
+        text: z.text,
+        wesentlichkeitEur: z.wesentlichkeitEur,
+        risikoappetit: z.risikoappetit,
+      });
+    }
+    for (const x of risiken) {
+      expect(zu('tcms.risiko.aufgenommen', x.id), x.code).toHaveLength(1);
+    }
+    for (const k of kontrollen) {
+      const e = zu('tcms.kontrolle.angelegt', k.id);
+      expect(e, k.code).toHaveLength(1);
+      const s = k.staende[0]!;
+      expect(e[0]!.detail, k.code).toMatchObject({
+        code: k.code,
+        zustaendigkeit: {
+          partei: s.partei,
+          durchfuehrend: s.durchfuehrendId,
+          vertretung: s.vertretungId,
+          gegenzeichnung: s.gegenzeichnerId,
+          gegenzeichnungMandant: s.gegenzeichnungMandant,
+        },
+      });
+    }
+    // Das Sammelereignis bleibt das erste Ereignis der Folge von Version 1.
+    const erstes = audit.findIndex((x) => x.aktion === 'tcms.programm.version1_angelegt');
+    expect(audit.findIndex((x) => x.aktion === 'tcms.kontrolle.angelegt')).toBeGreaterThan(erstes);
+  });
+
   // ---------------------------------------------------------------------------
   // Zuständigkeiten (Befunde 9/10/41/117): eine Regel mit Verantwortliche ändern
   // ---------------------------------------------------------------------------

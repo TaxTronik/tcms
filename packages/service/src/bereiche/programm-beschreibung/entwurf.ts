@@ -63,6 +63,7 @@ export function neuerEntwurf(heute: Date, gvId: string | null): SetupEntwurf {
     freigabe: { anfordern: gvId != null, empfaengerId: gvId },
     risiken: {},
     kontrollen: {},
+    stand: 0,
   };
 }
 
@@ -104,6 +105,8 @@ export function leseEntwurf(roh: unknown, heute: Date, gvId: string | null): Set
     freigabe: zi.success ? zi.data.freigabe : basis.freigabe,
     risiken: ri.success ? ri.data.risiken : {},
     kontrollen: ko.success ? ko.data.kontrollen : {},
+    stand:
+      typeof r.stand === 'number' && Number.isSafeInteger(r.stand) && r.stand >= 0 ? r.stand : 0,
     gespeichertVon:
       typeof r.gespeichertVon === 'string' && UUID.test(r.gespeichertVon)
         ? r.gespeichertVon.toLowerCase()

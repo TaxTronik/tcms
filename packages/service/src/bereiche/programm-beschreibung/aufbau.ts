@@ -370,15 +370,34 @@ export async function schreibeVersion1(
 
   const ziele = e.ziele.filter((z) => z.aktiv);
   const anfordern = e.freigabe.anfordern && e.freigabe.empfaengerId != null;
+  // Objektbezogene Audit-Spur (Befund 118): je Ziel, übernommenem Risiko und Kontrolle ein
+  // Eintrag mit Inhalt bzw. Zuständigkeit, in derselben Folge wie das Sammelereignis.
+  const QUELLE = 'Einrichtungsassistent (Version 1)';
   for (const z of ziele) {
-    await tx.complianceZiel.create({
+    const freigabe = anfordern ? 'AUSSTEHEND' : 'ENTWURF';
+    const ziel = await tx.complianceZiel.create({
       data: {
         teilbereichId: tb.id,
         text: z.text.trim(),
         wesentlichkeitEur: z.wesentlichkeitEur,
         risikoappetit: z.risikoappetit,
-        freigabe: anfordern ? 'AUSSTEHEND' : 'ENTWURF',
+        freigabe,
         createdAt: zeitpunkt,
+      },
+      select: { id: true },
+    });
+    protokolle.push({
+      aktion: 'tcms.ziel.angelegt',
+      objektTyp: 'ComplianceZiel',
+      objektId: ziel.id,
+      programmId,
+      detail: {
+        teilbereichId: tb.id,
+        text: z.text.trim(),
+        wesentlichkeitEur: z.wesentlichkeitEur,
+        risikoappetit: z.risikoappetit,
+        freigabe,
+        quelle: QUELLE,
       },
     });
   }
@@ -433,8 +452,23 @@ export async function schreibeVersion1(
           : {}),
       },
     });
-    if (pr.uebernehmen) risikoIds.set(k.code, risiko.id);
-    else {
+    if (pr.uebernehmen) {
+      risikoIds.set(k.code, risiko.id);
+      protokolle.push({
+        aktion: 'tcms.risiko.aufgenommen',
+        objektTyp: 'Risiko',
+        objektId: risiko.id,
+        programmId,
+        detail: {
+          code: k.code,
+          vorschlagsgrund: pr.grund,
+          vorher: null,
+          brutto: pr.brutto.klasse,
+          ownerId: r.tcb,
+          quelle: QUELLE,
+        },
+      });
+    } else {
       abgelehnt++;
       protokolle.push({
         aktion: 'tcms.risiko.abgelehnt',
@@ -464,6 +498,27 @@ export async function schreibeVersion1(
       durchf.push(
         geplanteDurchfuehrung(k.id, k.staende[0]!.id, kat.faelligNachTagen, p, zeitpunkt),
       );
+    // Nur IDs (ADR 0001 §5); Namen löst die kanzleikonsole auf.
+    protokolle.push({
+      aktion: 'tcms.kontrolle.angelegt',
+      objektTyp: 'Kontrolle',
+      objektId: k.id,
+      programmId,
+      detail: {
+        code: kat.code,
+        risiken: pk.risikoCodes,
+        frequenz: pk.ableitung.effektiv,
+        zustaendigkeit: {
+          partei: pk.zust.partei,
+          durchfuehrend: pk.zust.durchfuehrendId,
+          vertretung: pk.zust.vertretungId,
+          gegenzeichnung: pk.zust.gegenzeichnerId,
+          gegenzeichnungMandant: pk.zust.gegenzeichnungMandant,
+        },
+        perioden: pk.perioden.length,
+        anlass: QUELLE,
+      },
+    });
   }
   if (durchf.length) await tx.durchfuehrung.createMany({ data: durchf });
 
