@@ -23,7 +23,8 @@ zeile() {
   grep -Eq "$muster" "$datei" || fehlt "$meldung"
 }
 
-zeile package.json '"packageManager"[[:space:]]*:[[:space:]]*"pnpm@12\.14\.0"' \
+# Optional mit Integritäts-Suffix (Corepack/pnpm: `+sha512.<128 Hex-Zeichen>`).
+zeile package.json '"packageManager"[[:space:]]*:[[:space:]]*"pnpm@12\.14\.0(\+sha512\.[0-9a-f]{128})?"' \
   'packageManager muss auf pnpm@12.14.0 gepinnt sein.'
 W=pnpm-workspace.yaml
 zeile $W '^minimumReleaseAge:[[:space:]]*10080([[:space:]]*#.*)?$' 'minimumReleaseAge muss 10080 (7 Tage) sein.'
@@ -43,12 +44,58 @@ if grep -Eq '^(minimumReleaseAgeExclude|trustPolicyExclude):' $W; then
   fehlt 'Ausnahmen (minimumReleaseAgeExclude/trustPolicyExclude) brauchen eine Prüfung im Review; Guard anpassen.'
 fi
 
-# Abhängigkeiten nur mit exakten Versionen (keine ^, ~, *, latest, Git, URLs).
+# Abhängigkeiten nur mit exakten Versionen – als Positivliste: jeder Eintrag
+# der Abhängigkeitsblöcke ist `"name": "X.Y.Z[-pre]"` oder `"name":
+# "workspace:*"` auf einer eigenen Zeile (wie Prettier formatiert). Bereiche
+# (4, 4.x, >=4, ^, ~, *), Tags (latest, next), Aliase (npm:), Git, URLs,
+# GitHub-Kurzformen, catalog:, workspace:^ und leere Werte scheitern; ebenso
+# ein Block, der nicht so formatiert ist.
+# Ohne Backslash: awk -v verarbeitet Escapes im Wert.
+VERSION='[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?'
 for paket in package.json apps/*/package.json packages/*/package.json; do
-  if grep -Eq '"[^"]+"[[:space:]]*:[[:space:]]*"(\^|~|\*|latest|git|https?:|file:|link:)' "$paket"; then
-    fehlt "$paket: Abhängigkeit ohne exakte Version"
+  [ -f "$paket" ] || continue # Muster ohne Treffer
+  if ! awk -v version="$VERSION" '
+    BEGIN { block = 0; fehler = 0 }
+    block == 0 && /"(dependencies|devDependencies|peerDependencies|optionalDependencies)"[[:space:]]*:/ {
+      kopf = "^[[:space:]]*\"[A-Za-z]+\"[[:space:]]*:[[:space:]]*[{][[:space:]]*"
+      if ($0 ~ (kopf "[}],?[[:space:]]*$")) next
+      if ($0 !~ (kopf "$")) { fehler = 1; next }
+      block = 1
+      next
+    }
+    block == 1 {
+      if ($0 ~ /^[[:space:]]*\},?[[:space:]]*$/) { block = 0; next }
+      if ($0 !~ ("^[[:space:]]*\"[^\"]+\"[[:space:]]*:[[:space:]]*\"(" version "|workspace:[*])\",?[[:space:]]*$")) fehler = 1
+    }
+    END { exit (fehler || block) }
+  ' "$paket"; then
+    fehlt "$paket: Abhängigkeit ohne exakte Version (X.Y.Z oder workspace:*)"
+  fi
+  # Versionsangaben außerhalb der Blöcke (pnpm.overrides, resolutions, overrides)
+  # gehören nur geprüft in pnpm-workspace.yaml.
+  if grep -Eq '"(overrides|resolutions|pnpm)"[[:space:]]*:' "$paket"; then
+    fehlt "$paket: overrides/resolutions/pnpm nur in pnpm-workspace.yaml"
   fi
 done
+
+# overrides in pnpm-workspace.yaml: jeder Eintrag mit exakter Version.
+if ! awk -v version="$VERSION" -v q="'" '
+  BEGIN { block = 0; fehler = 0 }
+  /^overrides:[[:space:]]*$/ { block = 1; next }
+  /^overrides:/ { fehler = 1; next }
+  block == 1 && /^[^[:space:]#]/ { block = 0 }
+  block == 1 && /^[[:space:]]*(#.*)?$/ { next }
+  block == 1 {
+    if ($0 !~ ("^[[:space:]]+[^[:space:]#][^#]*:[[:space:]]*(" q version q "|\"" version "\"|" version ")[[:space:]]*(#.*)?$")) fehler = 1
+  }
+  END { exit fehler }
+' $W; then
+  fehlt 'overrides in pnpm-workspace.yaml nur mit exakter Version (X.Y.Z).'
+fi
+# Weitere Wege zu Versionsbereichen brauchen eine Prüfung im Review; Guard anpassen.
+if grep -Eq '^(catalog|catalogs|packageExtensions):' $W; then
+  fehlt 'catalog/catalogs/packageExtensions in pnpm-workspace.yaml: Guard anpassen.'
+fi
 
 [ "$FEHLER" -eq 0 ] || exit 1
 echo 'pruefe-lieferkette: pnpm-Einstellungen in Ordnung'
