@@ -10,9 +10,17 @@
 //   ohne-grund  `new DienstFehler('KONFLIKT', …)` in einem Ablauf mit
 //               `konflikte` (auch in aufgerufenen Hilfsfunktionen)
 //
-// Der Ablauf eines Endpunkts ist die Operation, die seine Route ruft, mit allen
-// Funktionen, die sie transitiv aufruft (gleiche Datei und relative Importe des
-// Dienstes; Funktionen aus @tcms/contract und @tcms/db werfen keinen Konflikt).
+// Der Ablauf eines Endpunkts ist die Operation, die seine Route ruft (aus den
+// Routendateien in apps/api/src/routen abgeleitet: genau eine Funktion aus
+// @tcms/service im Handler von `endpunkt(ENDPUNKTE.<name>, …)`), mit allen
+// Funktionen, die sie transitiv aufruft: gleiche Datei, benannte (auch
+// umbenannte) und Namensraum-Importe des Dienstes, Re-Exporte über
+// Barrel-Dateien (`export { … } from`, `export * from`); Funktionen aus
+// @tcms/contract und @tcms/db werfen keinen Konflikt. Ein Name aus einem
+// relativen Modul, der dort nicht aufzulösen ist, lässt den Test scheitern
+// (kein stilles Ende der Verfolgung). Nicht verfolgt werden Methodenaufrufe an
+// Objekten (Ports wie `ctx.ablage.annehmen`, Delegates): Sie stammen aus dem
+// Dienstkontext bzw. der Datenbank und werfen keinen Konfliktgrund.
 // Das Inventar hält jede Stelle mit ihrem Grund fest (Review der Zuordnung).
 // =============================================================================
 
@@ -32,19 +40,30 @@ const GUELTIG = new Set<string>(KONFLIKT_GRUENDE);
 
 type Befund = { regel: 'dynamisch' | 'direkt' | 'ohne-grund'; zeile: number };
 
+/** Dateien der Prüferfälle (Pfad relativ zur Wurzel → Quelltext), statt der Platte. */
+const VIRTUELL = new Map<string, string>();
 const quellen = new Map<string, ts.SourceFile>();
 function quelle(datei: string): ts.SourceFile {
   let q = quellen.get(datei);
   if (!q) {
     q = ts.createSourceFile(
       datei,
-      readFileSync(join(WURZEL, datei), 'utf8'),
+      VIRTUELL.get(datei) ?? readFileSync(join(WURZEL, datei), 'utf8'),
       ts.ScriptTarget.Latest,
       true,
     );
     quellen.set(datei, q);
   }
   return q;
+}
+
+function existiert(datei: string): boolean {
+  if (VIRTUELL.has(datei)) return true;
+  try {
+    return statSync(join(WURZEL, datei)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** Gründe eines Ausdrucks: Literal der Liste oder Bedingung aus solchen. */
@@ -124,26 +143,91 @@ function funktion(sf: ts.SourceFile, name: string): ts.Node | null {
   return treffer;
 }
 
-/** Relativer Import eines Namens → Datei des Dienstes (sonst null: Paket, nicht verfolgt). */
-function importDatei(sf: ts.SourceFile, datei: string, name: string): string | null {
-  for (const s of sf.statements) {
-    if (!ts.isImportDeclaration(s) || !ts.isStringLiteral(s.moduleSpecifier)) continue;
-    const ziel = s.moduleSpecifier.text;
-    const benannt = s.importClause?.namedBindings;
-    if (!benannt || !ts.isNamedImports(benannt)) continue;
-    if (!benannt.elements.some((e) => e.name.text === name)) continue;
-    if (!ziel.startsWith('.')) return null;
-    const basis = resolve(WURZEL, dirname(datei), ziel);
-    for (const kandidat of [`${basis}.ts`, join(basis, 'index.ts')]) {
-      try {
-        if (statSync(kandidat).isFile()) return relative(WURZEL, kandidat).split(sep).join('/');
-      } catch {
-        // nächster Kandidat
+/** Der Prüfer kann einen Namen, ein Modul oder eine Route nicht auflösen (Test scheitert). */
+class AufloesungsFehler extends Error {}
+
+/** Pakete, deren Quelltext verfolgt wird (Einstieg der Routen in den Dienst). */
+const PAKETE: Record<string, string> = { '@tcms/service': 'packages/service/src/index.ts' };
+
+/** Modul eines Imports bzw. Re-Exports → Datei; andere Pakete (contract, db, domain, node:…) → null. */
+function modulDatei(von: string, modul: string): string | null {
+  if (!modul.startsWith('.')) return PAKETE[modul] ?? null;
+  const basis = relative(WURZEL, resolve(WURZEL, dirname(von), modul))
+    .split(sep)
+    .join('/');
+  for (const k of [`${basis}.ts`, `${basis}.tsx`, `${basis}/index.ts`]) if (existiert(k)) return k;
+  throw new AufloesungsFehler(`Import ${modul} in ${von} nicht gefunden`);
+}
+
+interface Deklaration {
+  datei: string;
+  name: string;
+  knoten: ts.Node;
+}
+
+/**
+ * Deklaration der Funktion `name`, gesehen aus `datei`: dort selbst, über einen
+ * benannten (auch umbenannten) Import oder einen Re-Export (`export { a as b }
+ * from`, `export * from`), transitiv. `null`: kein Import und keine Funktion der
+ * Datei (Parameter, Variable, global) oder aus einem Paket außer dem Dienst.
+ * Kommt der Name aus einem Modul des Dienstes, wird er dort aber nicht
+ * gefunden, scheitert der Test.
+ */
+function deklaration(
+  datei: string,
+  name: string,
+  kette: readonly string[] = [],
+): Deklaration | null {
+  const schluessel = `${datei}#${name}`;
+  if (kette.includes(schluessel)) return null;
+  const weiter = [...kette, schluessel];
+  const sf = quelle(datei);
+  const f = funktion(sf, name);
+  if (f) return { datei, name, knoten: f };
+  const aus = (modul: string, original: string): Deklaration | null => {
+    const ziel = modulDatei(datei, modul);
+    if (!ziel) return null;
+    const d = deklaration(ziel, original, weiter);
+    if (!d) throw new AufloesungsFehler(`${original} aus ${modul} (${datei}) nicht gefunden`);
+    return d;
+  };
+  const sterne: string[] = [];
+  for (const st of sf.statements) {
+    if (ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier)) {
+      const b = st.importClause?.namedBindings;
+      const el = b && ts.isNamedImports(b) ? b.elements.find((e) => e.name.text === name) : null;
+      if (el) return aus(st.moduleSpecifier.text, el.propertyName?.text ?? name);
+    }
+    if (
+      ts.isExportDeclaration(st) &&
+      st.moduleSpecifier &&
+      ts.isStringLiteral(st.moduleSpecifier)
+    ) {
+      const k = st.exportClause;
+      if (!k) sterne.push(st.moduleSpecifier.text);
+      else if (ts.isNamedExports(k)) {
+        const el = k.elements.find((e) => e.name.text === name);
+        if (el) return aus(st.moduleSpecifier.text, el.propertyName?.text ?? name);
       }
     }
-    throw new Error(`Import ${ziel} in ${datei} nicht gefunden`);
+  }
+  for (const modul of sterne) {
+    const ziel = modulDatei(datei, modul);
+    const d = ziel ? deklaration(ziel, name, weiter) : null;
+    if (d) return d;
   }
   return null;
+}
+
+/** Namensraum-Importe einer Datei (`import * as ns from '…'`): Name → Modul. */
+function namensraeume(sf: ts.SourceFile): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+    const b = st.importClause?.namedBindings;
+    if (b && ts.isNamespaceImport(b)) out.set(b.name.text, st.moduleSpecifier.text);
+  }
+  return out;
 }
 
 /** Ablauf: Funktion samt transitiv aufgerufener Funktionen des Dienstes. */
@@ -151,29 +235,41 @@ function ablauf(datei: string, start: string) {
   const besucht = new Set<string>();
   const befunde: string[] = [];
   const gefunden = new Set<string>();
-  const folge = (d: string, name: string) => {
-    const schluessel = `${d}#${name}`;
+  const besuche = (d: Deklaration) => {
+    const schluessel = `${d.datei}#${d.name}`;
     if (besucht.has(schluessel)) return;
-    const sf = quelle(d);
-    const f = funktion(sf, name);
-    if (!f) {
-      const ziel = importDatei(sf, d, name);
-      if (ziel) folge(ziel, name);
-      return;
-    }
     besucht.add(schluessel);
-    const r = untersuche(f, sf, true);
-    for (const b of r.befunde) befunde.push(`${d}:${b.zeile} ${b.regel}`);
+    const sf = quelle(d.datei);
+    const r = untersuche(d.knoten, sf, true);
+    for (const b of r.befunde) befunde.push(`${d.datei}:${b.zeile} ${b.regel}`);
     for (const g of r.gruende) for (const x of g.split('|')) gefunden.add(x);
-    const aufrufe = new Set<string>();
+    const ns = namensraeume(sf);
     const lauf = (n: ts.Node) => {
-      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression)) aufrufe.add(n.expression.text);
+      if (ts.isCallExpression(n)) {
+        const e = n.expression;
+        if (ts.isIdentifier(e)) {
+          const x = deklaration(d.datei, e.text);
+          if (x) besuche(x);
+        } else if (
+          ts.isPropertyAccessExpression(e) &&
+          ts.isIdentifier(e.expression) &&
+          ns.has(e.expression.text)
+        ) {
+          const ziel = modulDatei(d.datei, ns.get(e.expression.text)!);
+          if (ziel) {
+            const x = deklaration(ziel, e.name.text);
+            if (!x) throw new AufloesungsFehler(`${e.getText()} (${d.datei}) nicht gefunden`);
+            besuche(x);
+          }
+        }
+      }
       ts.forEachChild(n, lauf);
     };
-    lauf(f);
-    for (const a of aufrufe) folge(d, a);
+    lauf(d.knoten);
   };
-  folge(datei, start);
+  const s0 = deklaration(datei, start);
+  if (!s0) throw new AufloesungsFehler(`${start} in ${datei} nicht gefunden`);
+  besuche(s0);
   return { besucht: [...besucht].sort(), befunde, gruende: gefunden };
 }
 
@@ -193,13 +289,63 @@ function dateien(verzeichnis: string): string[] {
 
 const FREIGABEN = 'packages/service/src/bereiche/programm-beschreibung/freigaben.ts';
 const PORTAL = 'packages/service/src/bereiche/feststellungen-ereignisse/portal.ts';
+const ROUTEN = 'apps/api/src/routen';
 
-/** Operation je Endpunkt mit `konflikte` (Route in apps/api/src/routen/*). */
-const ABLAEUFE: Record<string, { datei: string; funktion: string }> = {
-  portalFreigabeCodeAnfordern: { datei: FREIGABEN, funktion: 'fordereFreigabeCodeAn' },
-  portalFreigabeErteilen: { datei: FREIGABEN, funktion: 'erteileFreigabe' },
-  portalMeldungErfassen: { datei: PORTAL, funktion: 'meldeEreignis' },
-};
+/**
+ * Operation je Endpunkt aus den Routendateien: der Handler von
+ * `<r>.endpunkt(ENDPUNKTE.<name>, …)` und die Funktionen aus @tcms/service, die
+ * er ruft (Deklaration über die Re-Exporte des Dienstes aufgelöst).
+ */
+function ablaeufeAusRouten(): Record<string, { datei: string; funktionen: string[] }> {
+  const out: Record<string, { datei: string; funktionen: string[] }> = {};
+  for (const datei of dateien(ROUTEN)) {
+    if (TEST.test(datei)) continue;
+    const sf = quelle(datei);
+    const dienst = new Set<string>();
+    for (const st of sf.statements) {
+      if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+      if (st.moduleSpecifier.text !== '@tcms/service') continue;
+      const b = st.importClause?.namedBindings;
+      if (b && ts.isNamedImports(b)) for (const e of b.elements) dienst.add(e.name.text);
+    }
+    const lauf = (n: ts.Node) => {
+      if (
+        ts.isCallExpression(n) &&
+        ts.isPropertyAccessExpression(n.expression) &&
+        n.expression.name.text === 'endpunkt' &&
+        n.arguments.length >= 2 &&
+        ts.isPropertyAccessExpression(n.arguments[0]!) &&
+        ts.isIdentifier(n.arguments[0].expression) &&
+        n.arguments[0].expression.text === 'ENDPUNKTE'
+      ) {
+        const name = n.arguments[0].name.text;
+        const gerufen = new Set<string>();
+        const handler = (h: ts.Node) => {
+          if (
+            ts.isCallExpression(h) &&
+            ts.isIdentifier(h.expression) &&
+            dienst.has(h.expression.text)
+          )
+            gerufen.add(h.expression.text);
+          ts.forEachChild(h, handler);
+        };
+        handler(n.arguments[1]!);
+        if (out[name]) throw new AufloesungsFehler(`Endpunkt ${name} doppelt in den Routen`);
+        const ziele = [...gerufen].map((g) => deklaration(PAKETE['@tcms/service']!, g));
+        if (ziele.some((z) => !z))
+          throw new AufloesungsFehler(`${name}: Operation nicht im Dienst gefunden`);
+        const dateienDerZiele = [...new Set(ziele.map((z) => z!.datei))];
+        out[name] = {
+          datei: dateienDerZiele.length === 1 ? dateienDerZiele[0]! : '',
+          funktionen: ziele.map((z) => z!.name).sort(),
+        };
+      }
+      ts.forEachChild(n, lauf);
+    };
+    lauf(sf);
+  }
+  return out;
+}
 
 /** Jede Stelle mit Grund, Quelltextreihenfolge (Zuordnung: KONFLIKT_GRUENDE im Vertrag). */
 const INVENTAR: Record<string, string[]> = {
@@ -226,6 +372,42 @@ const INVENTAR: Record<string, string[]> = {
 
 describe('Konfliktgrund an jedem 409 der Abläufe mit `konflikte` (statisch)', () => {
   describe('Prüfer', () => {
+    it('verfolgt Barrel-Re-Exporte, Umbenennungen und Namensräume; scheitert an Unauflösbarem', () => {
+      const v = 'packages/service/src/__virtuell__';
+      const dateien: Record<string, string> = {
+        [`${v}/op.ts`]: `
+          import { helfer as h } from './barrel';
+          import * as ns from './ns';
+          import { fremd } from '@tcms/contract';
+          export function op() { h(); ns.tief(); fremd(); lokal(); }
+          function lokal() { return 1; }`,
+        [`${v}/barrel.ts`]: `export { helfer } from './helfer';`,
+        [`${v}/helfer.ts`]: `export function helfer() { throw new DienstFehler('KONFLIKT', 'x'); }`,
+        [`${v}/ns.ts`]: `export * from './andere';\nexport * from './tief';`,
+        [`${v}/andere.ts`]: `export function anderes() { return 0; }`,
+        [`${v}/tief.ts`]: `export const tief = () => { throw konfliktMitGrund('CODE_FEHLT', 'x'); };`,
+        [`${v}/kaputt.ts`]: `import { fehlt } from './barrel';\nexport function op() { fehlt(); }`,
+      };
+      for (const [d, t] of Object.entries(dateien)) VIRTUELL.set(d, t);
+      try {
+        const r = ablauf(`${v}/op.ts`, 'op');
+        expect(r.besucht).toEqual([
+          `${v}/helfer.ts#helfer`,
+          `${v}/op.ts#lokal`,
+          `${v}/op.ts#op`,
+          `${v}/tief.ts#tief`,
+        ]);
+        expect(r.befunde).toEqual([`${v}/helfer.ts:1 ohne-grund`]);
+        expect([...r.gruende]).toEqual(['CODE_FEHLT']);
+        expect(() => ablauf(`${v}/kaputt.ts`, 'op')).toThrow(AufloesungsFehler);
+      } finally {
+        for (const d of Object.keys(dateien)) {
+          VIRTUELL.delete(d);
+          quellen.delete(d);
+        }
+      }
+    });
+
     it('erkennt dynamische Gründe, direkte Konstruktion und 409 ohne Grund im Ablauf', () => {
       const code = `
         throw konfliktMitGrund('CODE_FEHLT', 'x');
@@ -267,18 +449,28 @@ describe('Konfliktgrund an jedem 409 der Abläufe mit `konflikte` (statisch)', (
     expect(gefunden).toEqual(INVENTAR);
   });
 
-  it('jeder Endpunkt mit `konflikte` hat einen geprüften Ablauf und umgekehrt', () => {
-    expect(
-      Object.values(ENDPUNKTE)
-        .filter((e) => e.konflikte.length > 0)
-        .map((e) => e.name)
-        .sort(),
-    ).toEqual(Object.keys(ABLAEUFE).sort());
+  const ABLAEUFE = ablaeufeAusRouten();
+  const MIT_KONFLIKTEN = Object.values(ENDPUNKTE)
+    .filter((e) => e.konflikte.length > 0)
+    .map((e) => e.name)
+    .sort();
+
+  it('jeder Endpunkt mit `konflikte` hat eine Route, die genau eine Operation des Dienstes ruft', () => {
+    for (const name of MIT_KONFLIKTEN) {
+      expect(ABLAEUFE[name]?.funktionen, name).toHaveLength(1);
+    }
+    // Abgleich mit dem Inventar: die Abläufe liegen in den inventarisierten Dateien.
+    expect(MIT_KONFLIKTEN.map((n) => `${n} ${ABLAEUFE[n]!.datei}`)).toEqual([
+      `portalFreigabeCodeAnfordern ${FREIGABEN}`,
+      `portalFreigabeErteilen ${FREIGABEN}`,
+      `portalMeldungErfassen ${PORTAL}`,
+    ]);
   });
 
-  for (const [name, a] of Object.entries(ABLAEUFE)) {
+  for (const name of MIT_KONFLIKTEN) {
     it(`${name}: jedes 409 mit Grund, genau die Gründe des Registers`, () => {
-      const r = ablauf(a.datei, a.funktion);
+      const a = ABLAEUFE[name]!;
+      const r = ablauf(a.datei, a.funktionen[0]!);
       // Der Ablauf wurde wirklich verfolgt (Prüfung, Sperre, Rollen, Nachricht, Audit).
       expect(r.besucht.length).toBeGreaterThan(8);
       expect(r.befunde).toEqual([]);

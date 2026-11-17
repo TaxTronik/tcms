@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { VERWEIGERUNG_GRUENDE, type Akteur } from '@tcms/contract';
 import type { KontaktRolle } from '../../rechte';
-import { darfPortalLesen, durchfuehrungsRechte, rechteFlags, type RechteLage } from './rechte';
+import {
+  darfPortalLesen,
+  durchfuehrungsRechte,
+  portalAufgabe,
+  rechteFlags,
+  type RechteLage,
+} from './rechte';
 import { pruefeEinreichung, leseWerte, toleranzLagen, type KennzahlDef } from './werte';
 
 const T = '7a1e0000-0000-4000-8000-00000000d3e0';
@@ -417,5 +423,59 @@ describe('Einreichprüfung', () => {
     const w = leseWerte(roh, defs);
     expect(Object.keys(w)).toEqual(['a']);
     expect(Object.getPrototypeOf(w)).toBeNull();
+  });
+});
+
+describe('Offene Mandantenaufgabe (P1 und P2, eine Regel: portalAufgabe)', () => {
+  const heute = new Date('2026-10-16T00:00:00Z');
+  const k = {
+    partei: 'MANDANT' as const,
+    durchfuehrendId: MA,
+    vertretungId: GV,
+    gegenzeichnerId: id(13),
+    gegenzeichnungMandant: true,
+  };
+  const rollen = [
+    rolle(MA, 'MITARBEITER'),
+    rolle(GV, 'GESETZLICHER_VERTRETER'),
+    rolle(id(13), 'MITARBEITER'),
+    rolle(id(14), 'MITARBEITER'),
+  ];
+  type Stand = Parameters<typeof portalAufgabe>[4];
+  const d = (over: Partial<Stand> = {}): Stand => ({
+    anzeige: 'ZUR_GEGENZEICHNUNG',
+    faelligAm: new Date('2026-10-30T00:00:00Z'),
+    periodeBis: new Date('2026-09-30T00:00:00Z'),
+    durchgefuehrtVon: MA,
+    mandantBestaetigtVon: null,
+    ...over,
+  });
+  const aufgabe = (pid: string, over: Partial<Stand> = {}) =>
+    portalAufgabe(kontakt(pid), M, rollen, k, d(over), heute);
+
+  it('Bestätigung: offen bis zur Bestätigung, eigene für Gegenzeichnung und Vertretung, nie die einreichende Person', () => {
+    expect(aufgabe(GV)).toEqual({ art: 'BESTAETIGEN', eigene: true });
+    expect(aufgabe(id(13))).toEqual({ art: 'BESTAETIGEN', eigene: true });
+    expect(aufgabe(MA)).toEqual({ art: 'BESTAETIGEN', eigene: false });
+    expect(aufgabe(GV, { durchgefuehrtVon: GV })).toEqual({ art: 'BESTAETIGEN', eigene: false });
+    // Bestätigt: Status bleibt bis zum Abschluss der Kanzlei, die Aufgabe ist erledigt.
+    expect(aufgabe(GV, { mandantBestaetigtVon: id(13) })).toBeNull();
+  });
+
+  it('Durchführen: offen oder bald fällig; Sichtbarkeit wie darfPortalLesen', () => {
+    expect(aufgabe(MA, { anzeige: 'FAELLIG' })).toEqual({ art: 'DURCHFUEHREN', eigene: true });
+    expect(aufgabe(GV, { anzeige: 'UEBERFAELLIG' })).toEqual({ art: 'DURCHFUEHREN', eigene: true });
+    expect(aufgabe(id(13), { anzeige: 'FAELLIG' })).toEqual({ art: 'DURCHFUEHREN', eigene: false });
+    expect(aufgabe(MA, { anzeige: 'GEPLANT' })?.art).toBe('DURCHFUEHREN');
+    expect(
+      aufgabe(MA, { anzeige: 'GEPLANT', periodeBis: new Date('2026-12-31T00:00:00Z') }),
+    ).toBeNull();
+    expect(aufgabe(MA, { anzeige: 'OHNE_BEFUND' })).toBeNull();
+    // Nicht zugewiesene Mitarbeitende, Kanzleipersonen und Kanzlei-Kontrollen: keine Aufgabe.
+    expect(aufgabe(id(14), { anzeige: 'FAELLIG' })).toBeNull();
+    expect(portalAufgabe(kanzlei(BT, { bt: true, zust: true }), M, [], k, d(), heute)).toBeNull();
+    expect(
+      portalAufgabe(kontakt(GV), M, rollen, { ...k, partei: 'KANZLEI' }, d(), heute),
+    ).toBeNull();
   });
 });

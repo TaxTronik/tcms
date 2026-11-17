@@ -138,27 +138,79 @@ export async function ladeBeteiligte(
   tx: Tx,
   d: Pick<DurchfuehrungRoh, 'id' | 'durchgefuehrtVon' | 'nachweise'>,
 ): Promise<string[]> {
+  const audit = await auditBeteiligteJe(tx, [d.id]);
+  return beteiligteAus(d.durchgefuehrtVon, d.nachweise, audit.get(d.id) ?? []);
+}
+
+/**
+ * Beteiligte mehrerer Durchführungen mit einer festen Zahl Abfragen (Lesepfade
+ * über viele Durchführungen, z. B. der Arbeitskorb): dieselbe Regel wie
+ * `ladeBeteiligte`, die Nachweise (nicht entfernt) werden hier gelesen.
+ */
+export async function ladeBeteiligteJe(
+  tx: Tx,
+  liste: readonly { id: string; durchgefuehrtVon: string | null }[],
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (liste.length === 0) return out;
+  const ids = [...new Set(liste.map((d) => d.id))];
+  const nachweise = await tx.nachweis.findMany({
+    where: { durchfuehrungId: { in: ids }, entferntAm: null },
+    select: { durchfuehrungId: true, hochgeladenVon: true },
+    orderBy: [{ hochgeladenAm: 'asc' }, { id: 'asc' }],
+  });
+  const audit = await auditBeteiligteJe(tx, ids);
+  for (const d of liste) {
+    out.set(
+      d.id,
+      beteiligteAus(
+        d.durchgefuehrtVon,
+        nachweise.filter((n) => n.durchfuehrungId === d.id),
+        audit.get(d.id) ?? [],
+      ),
+    );
+  }
+  return out;
+}
+
+/** Durchführende Person, Hochladende und Audit-Akteure, kanonisch klein und sortiert. */
+function beteiligteAus(
+  durchgefuehrtVon: string | null,
+  nachweise: readonly { hochgeladenVon: string | null }[],
+  auditAkteure: readonly string[],
+): string[] {
   const ids = new Set<string>();
   const merke = (id: string | null | undefined) => {
     if (id) ids.add(id.toLowerCase());
   };
-  merke(d.durchgefuehrtVon);
-  for (const n of d.nachweise) merke(n.hochgeladenVon);
+  merke(durchgefuehrtVon);
+  for (const n of nachweise) merke(n.hochgeladenVon);
+  for (const a of auditAkteure) merke(a);
+  return [...ids].sort();
+}
+
+/** Akteure der Durchführungs-Aktionen im Audit je Durchführung (auch entfernte Nachweise). */
+async function auditBeteiligteJe(tx: Tx, ids: readonly string[]): Promise<Map<string, string[]>> {
   // Zwei Zweige als UNION, damit je ein Index greift: (tenant_id, objektTyp, objektId)
   // und (tenant_id, detailDurchfuehrungId). Die generierte Spalte statt
   // `detail->>'durchfuehrungId'`: `->>` ist nicht LEAKPROOF, unter RLS darf
   // PostgreSQL damit keinen Index nutzen (Migration 20261117070000).
   const aktionen = [...DURCHFUEHRUNGS_AKTIONEN];
-  const audit = await tx.$queryRaw<{ actorId: string | null }[]>`
-    SELECT "actorId" FROM "AuditEvent"
+  const liste = [...ids];
+  const zeilen = await tx.$queryRaw<{ durchfuehrungId: string | null; actorId: string | null }[]>`
+    SELECT "objektId" AS "durchfuehrungId", "actorId" FROM "AuditEvent"
      WHERE aktion = ANY(${aktionen}::text[])
-       AND "objektTyp" = 'Durchfuehrung' AND "objektId" = ${d.id}
+       AND "objektTyp" = 'Durchfuehrung' AND "objektId" = ANY(${liste}::text[])
     UNION
-    SELECT "actorId" FROM "AuditEvent"
+    SELECT "detailDurchfuehrungId" AS "durchfuehrungId", "actorId" FROM "AuditEvent"
      WHERE aktion = ANY(${aktionen}::text[])
-       AND "detailDurchfuehrungId" = ${d.id}`;
-  for (const e of audit) merke(e.actorId);
-  return [...ids].sort();
+       AND "detailDurchfuehrungId" = ANY(${liste}::text[])`;
+  const out = new Map<string, string[]>();
+  for (const z of zeilen) {
+    if (!z.durchfuehrungId || !z.actorId) continue;
+    out.set(z.durchfuehrungId, [...(out.get(z.durchfuehrungId) ?? []), z.actorId]);
+  }
+  return out;
 }
 
 export function zustaendigkeitVon(d: DurchfuehrungRoh): KontrollZustaendigkeit {

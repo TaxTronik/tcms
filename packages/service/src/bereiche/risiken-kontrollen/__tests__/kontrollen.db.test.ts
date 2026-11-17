@@ -401,6 +401,56 @@ describe.skipIf(!AKTIV)('Kontrollen: Fachoperationen', () => {
       expect(staende).toHaveLength(1);
     });
 
+    it('Antragsteller nach Version, auch wenn `gueltigAb` zurückspringt (Demo-Uhr, Vier-Augen)', async () => {
+      const belegt = new Set(
+        monatlich()
+          .slice(0, 3)
+          .map((x) => x.id),
+      );
+      const k = kanzleiKontrollen().find((x) => !belegt.has(x.id) && x.risikoIds.length > 0)!;
+      const st = await stand(k.id);
+      const antrag = await rufe(akt.hb, (ctx) =>
+        frequenzAbweichungBeantragen(ctx, {
+          mandantId: a.mandantId,
+          kontrolleId: k.id,
+          standId: st.id,
+          turnus: k.frequenz.turnus === 'JAEHRLICH' ? 'QUARTALSWEISE' : 'JAEHRLICH',
+          anlass: false,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      const zwischen = await rufe(akt.bt, (ctx) =>
+        designBeurteilen(ctx, {
+          mandantId: a.mandantId,
+          kontrolleId: k.id,
+          standId: antrag.standId,
+          design: 'ANGEMESSEN',
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      // Der jüngste Stand trägt ein früheres `gueltigAb` als alle anderen (Uhrensprung).
+      await lies((tx) =>
+        tx.kontrolleStand.update({
+          where: { id: zwischen.standId },
+          data: { gueltigAb: new Date(st.gueltigAb.getTime() - 86_400_000) },
+        }),
+      );
+      const entscheide = (akteur: typeof akt.hb) =>
+        rufe(akteur, (ctx) =>
+          frequenzAbweichungEntscheiden(ctx, {
+            mandantId: a.mandantId,
+            kontrolleId: k.id,
+            standId: zwischen.standId,
+            entscheidung: 'ABLEHNEN',
+            begruendung: BEGRUENDUNG,
+          }),
+        );
+      // Ein Filter nach `gueltigAb` sähe nur den jüngsten Stand (von bt) und ließe hb entscheiden.
+      const selbst = await fehlerVon(entscheide(akt.hb));
+      expect([selbst.code, selbst.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
+      await entscheide(akt.bt);
+    });
+
     it('gleiche Frequenz, offener Antrag, ohne Turnus und Anlass, Rechte', async () => {
       const k = monatlich()[2] ?? monatlich()[0]!;
       const st = await stand(k.id);

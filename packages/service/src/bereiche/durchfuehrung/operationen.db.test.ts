@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Akteur } from '@tcms/contract';
-import { pruefeAuditKette } from '@tcms/db';
+import { pruefeAuditKette } from '@tcms/db/testhilfe';
 import type { DienstKontext } from '../../kontext';
 import { ladeKontext } from '../../kern/tcms-kontext';
 import {

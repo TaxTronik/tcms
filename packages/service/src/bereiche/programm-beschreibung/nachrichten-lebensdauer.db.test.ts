@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { pruefeAuditKette } from '@tcms/db';
+import { pruefeAuditKette } from '@tcms/db/testhilfe';
 import { dbAbgewiesen, regel } from '@tcms/db/testhilfe';
 import { MAX_FEHLVERSUCHE } from './code';
 import { adressiereFreigabeNeu, erteileFreigabe, fordereFreigabeCodeAn } from './freigaben';

@@ -537,7 +537,7 @@ export async function gegenzeichneDurchfuehrung(
       const vorhanden = await tx.feststellung.findFirst({
         where: { durchfuehrungId: d.id },
         select: { id: true, nummer: true },
-        orderBy: { nummer: 'asc' },
+        orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
       });
       if (vorhanden) {
         if (e.feststellung) {
@@ -740,6 +740,7 @@ export async function legeNachtragAn(
     const offen = await tx.durchfuehrung.findFirst({
       where: { nachtragZuId: d.id, status: { in: NACHTRAG_OFFEN } },
       select: { id: true },
+      orderBy: { id: 'asc' },
     });
     if (offen) {
       throw new DienstFehler(

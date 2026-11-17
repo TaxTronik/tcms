@@ -33,6 +33,12 @@ import {
   type VerlaufEintrag,
 } from '@tcms/contract';
 import { statusAm } from '@tcms/domain';
+import {
+  ereignisZumStand,
+  folgeZumStand,
+  ladeSpaetereEintraege,
+  type SpaeterEintrag,
+} from '../../kern/rueckrechnung';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { ereignisRecht, type EreignisSchritt } from './ereignisse';
@@ -76,7 +82,14 @@ type EreignisRoh = {
   triagiertAm: Date | null;
 };
 
-function grunddaten(e: EreignisRoh, ende: Date): Omit<EreignisListenEintrag, 'folgen'> {
+/** Grunddaten zum Stichtag; `spaeter`: Audit-Einträge des Ereignisses nach dem Stichtag. */
+function grunddaten(
+  e: EreignisRoh,
+  ende: Date,
+  spaeter: readonly SpaeterEintrag[],
+): Omit<EreignisListenEintrag, 'folgen'> {
+  // Stand zum Stichtag wie im Tax-CMS-Kontext (kern/rueckrechnung.ts).
+  const amStand = ereignisZumStand(e, spaeter, ende);
   return {
     id: e.id,
     nummer: e.nummer,
@@ -87,11 +100,10 @@ function grunddaten(e: EreignisRoh, ende: Date): Omit<EreignisListenEintrag, 'fo
     gemeldetVon: e.gemeldetVon,
     gemeldetAm: isoZeit(e.gemeldetAm),
     ereignisDatum: isoTag(e.ereignisDatum),
-    // Status zum Stichtag wie im Tax-CMS-Kontext: erst triagiert nach dem Stand → neu.
-    status: e.triagiertAm && e.triagiertAm.getTime() > ende.getTime() ? 'NEU' : e.status,
-    verwerfenBeantragt: !!e.verwerfenBegruendung && e.status !== 'VERWORFEN',
-    triagiertVon: e.triagiertVon,
-    triagiertAm: isoZeitOderNull(e.triagiertAm),
+    status: amStand.status,
+    verwerfenBeantragt: !!amStand.verwerfenBegruendung && amStand.status !== 'VERWORFEN',
+    triagiertVon: amStand.triagiertVon,
+    triagiertAm: isoZeitOderNull(amStand.triagiertAm),
   };
 }
 
@@ -107,10 +119,15 @@ export async function ladeEreignisse(
   const mandantId = x.mandantId.toLowerCase();
   pruefeKanzleiZugriff(ctx, mandantId);
   await pruefeMandant(ctx.tx, mandantId);
-  const { stand, historisch, ende } = stichtag(ctx, x.stand);
+  const { stand, historisch, heute, ende } = stichtag(ctx, x.stand);
   const kopf = { stand: isoTag(stand), historisch };
   const programm = await programmVon(ctx.tx, mandantId);
   if (!programm) return { ...kopf, programmId: null, ereignisse: [], namen: [] };
+  const spaeter = await ladeSpaetereEintraege(ctx.tx, [programm.id], {
+    historisch,
+    auditEnde: auditGrenze(stand, heute),
+  });
+  const nachStand = (id: string) => spaeter.get(id) ?? [];
   const roh = await ctx.tx.ereignis.findMany({
     where: { programmId: programm.id },
     include: { folgen: { orderBy: { id: 'asc' } } },
@@ -119,14 +136,11 @@ export async function ladeEreignisse(
   const ereignisse = roh
     .filter((e) => e.gemeldetAm.getTime() <= ende.getTime())
     .map((e) => ({
-      ...grunddaten(e, ende),
-      folgen: e.folgen.map((f) => ({
-        id: f.id,
-        art: f.art,
-        ziel: f.ziel,
-        status: f.status,
-        objektId: f.objektId,
-      })),
+      ...grunddaten(e, ende, nachStand(e.id)),
+      folgen: e.folgen.flatMap((f) => {
+        const amStand = folgeZumStand(f, nachStand(f.id), ende);
+        return amStand ? [{ id: f.id, art: f.art, ziel: f.ziel, ...amStand }] : [];
+      }),
     }));
   return {
     ...kopf,
@@ -267,15 +281,18 @@ export async function ladeEreignis(
   // Audit-Zeitstempel sind echte Zeit (auditGrenze, kern/zeit.ts).
   const auditEnde = auditGrenze(stand, heute);
   const bisEnde = (a: { at: Date }) => a.at.getTime() <= auditEnde.getTime();
+  const nachStand = (id: string): SpaeterEintrag[] =>
+    audits
+      .filter((a) => a.objektId === id && !bisEnde(a))
+      .map((a) => ({ aktion: a.aktion, objektId: a.objektId, detail: det(a) }));
   const folgen: FolgeDetail[] = e.folgen
-    .filter((f) => {
-      // Später hinzugefügte Folgen gehören nicht zum Stand.
-      const neu = audits.find(
-        (a) => a.objektId === f.id && a.aktion === 'tcms.ereignis.folge_hinzugefuegt',
-      );
-      return !neu || bisEnde(neu);
+    .flatMap((f) => {
+      // Stand zum Stichtag wie Liste und Kontext (kern/rueckrechnung.ts); später
+      // hinzugefügte Folgen gehören nicht zum Stand.
+      const amStand = folgeZumStand(f, nachStand(f.id), ende);
+      return amStand ? [{ f, ...amStand }] : [];
     })
-    .map((f): FolgeDetail => {
+    .map(({ f, status, objektId }): FolgeDetail => {
       const verwRoh = audits
         .filter((a) => a.objektId === f.id && a.aktion === 'tcms.ereignis.folge_verworfen')
         .at(-1);
@@ -284,18 +301,7 @@ export async function ladeEreignis(
         .at(-1);
       const verw = verwRoh && bisEnde(verwRoh) ? verwRoh : undefined;
       const angelegt = angelegtRoh && bisEnde(angelegtRoh) ? angelegtRoh : undefined;
-      // Status zum Stichtag aus den protokollierten Schritten zurückrechnen.
-      let status: FolgeDetail['status'] = f.status;
-      if (status === 'VERWORFEN' && verwRoh && !verw) {
-        const vorher = det(verwRoh)['vorher'];
-        status = vorher === 'ANGELEGT' ? 'ANGELEGT' : 'VORGESCHLAGEN';
-      }
-      if (status === 'ERLEDIGT' && f.erledigtAm && f.erledigtAm.getTime() > ende.getTime())
-        status = 'ANGELEGT';
-      if (status === 'ANGELEGT' && angelegtRoh && !angelegt) status = 'VORGESCHLAGEN';
-      if (status === 'ERLEDIGT' && angelegtRoh && !angelegt) status = 'VORGESCHLAGEN';
-      const sichtbarObjekt = status !== 'VORGESCHLAGEN';
-      const d = sichtbarObjekt && f.objektId ? dJe.get(f.objektId) : undefined;
+      const d = objektId ? dJe.get(objektId) : undefined;
       return {
         id: f.id,
         art: f.art,
@@ -305,7 +311,7 @@ export async function ladeEreignis(
         frist: isoTagOderNull(f.frist),
         status,
         erledigtAm: status === 'ERLEDIGT' ? isoZeitOderNull(f.erledigtAm) : null,
-        objektId: sichtbarObjekt ? f.objektId : null,
+        objektId,
         durchfuehrung: d
           ? {
               id: d.id,
@@ -327,7 +333,7 @@ export async function ladeEreignis(
               ),
             }
           : null,
-        feststellung: sichtbarObjekt && f.objektId ? (fJe.get(f.objektId) ?? null) : null,
+        feststellung: objektId ? (fJe.get(objektId) ?? null) : null,
         verwerfen: verw
           ? {
               begruendung: text(det(verw)['begruendung']),
@@ -361,21 +367,33 @@ export async function ladeEreignis(
       text: verlaufText(a.aktion, det(a)),
     }))
     .reverse();
-  const basis = grunddaten(e, ende);
+  const basis = grunddaten(e, ende, nachStand(e.id));
+  // Verwerfen-Antrag zum Stichtag (kern/rueckrechnung.ts): ein später abgelehnter
+  // Antrag steht nur noch im Audit, mit Person und Zeitpunkt seines Eintrags.
+  const amStand = ereignisZumStand(e, nachStand(e.id), ende);
+  const antragHeute = amStand.verwerfenBegruendung === e.verwerfenBegruendung;
+  const antragBisStand = audits
+    .filter(
+      (a) =>
+        a.objektTyp === 'Ereignis' &&
+        a.aktion === 'tcms.ereignis.verwerfen_beantragt' &&
+        bisEnde(a),
+    )
+    .at(-1);
   const verwerfenAntrag =
-    e.verwerfenBegruendung && e.status !== 'VERWORFEN'
+    amStand.verwerfenBegruendung && amStand.status !== 'VERWORFEN'
       ? {
-          vonId: e.verwerfenBeantragtVon,
-          am: isoZeit(antrag?.at ?? e.gemeldetAm),
-          begruendung: e.verwerfenBegruendung,
+          vonId: antragHeute ? e.verwerfenBeantragtVon : (antragBisStand?.actorId ?? null),
+          am: isoZeit((antragHeute ? antrag : antragBisStand)?.at ?? e.gemeldetAm),
+          begruendung: amStand.verwerfenBegruendung,
         }
       : null;
   const verwerfen =
-    e.status === 'VERWORFEN' && e.verwerfenBegruendung
+    amStand.status === 'VERWORFEN' && amStand.verwerfenBegruendung
       ? {
           vonId: bestaetigt?.actorId ?? null,
           am: isoZeit(bestaetigt?.at ?? e.gemeldetAm),
-          begruendung: e.verwerfenBegruendung,
+          begruendung: amStand.verwerfenBegruendung,
         }
       : null;
   // Rechte-Kennzeichen auf dem aktuellen Stand der Zeile, mit derselben

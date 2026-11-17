@@ -291,4 +291,57 @@ describe.skipIf(!AKTIV)('Tax-CMS-Kontext gegen PostgreSQL', () => {
     );
     expect(block).toEqual([DEMO_IDS.seestern]);
   });
+
+  it('Mandant.aktiv wirkt nicht: inaktiver Mandant wie jeder andere (Zugang steuert die kanzleikonsole)', async () => {
+    const t = randomUUID();
+    const m = randomUUID();
+    await mitTenant(t, (tx) =>
+      tx.mandant.create({
+        data: { id: m, name: 'Inaktiv GmbH', rechtsform: 'KapG', aktiv: false },
+      }),
+    );
+    const a = kanzlei(randomUUID(), m, { tenantId: t, admin: true, zustaendig: true });
+    expect((await lade(a, { mandantId: m })).mandant.id).toBe(m);
+    const block: string[] = [];
+    await imDienst(a, PORTS, (ctx) =>
+      jeAktuellerKontext(ctx, [{ mandantId: m, akteur: a }], (k) => block.push(k.mandant.id)),
+    );
+    expect(block).toEqual([m]);
+  });
+
+  it('lädt nur, was der Kontext braucht: kein Snapshot der Beschreibungen, keine Werte der Durchführungen', async () => {
+    const args: unknown[] = [];
+    await imDienst(
+      kanzlei(DEMO_IDS.anna, DEMO_IDS.talwind, { admin: true, zustaendig: true }),
+      PORTS,
+      (ctx) => {
+        const programm = new Proxy(ctx.tx.tcmsProgramm, {
+          get(ziel, name, empfaenger) {
+            const wert = Reflect.get(ziel, name, empfaenger) as unknown;
+            if (name !== 'findFirst' || typeof wert !== 'function') return wert;
+            return (a: unknown) => {
+              args.push(a);
+              return (wert as (x: unknown) => unknown).call(ziel, a);
+            };
+          },
+        });
+        const tx = new Proxy(ctx.tx, {
+          get: (ziel, name, empfaenger) =>
+            name === 'tcmsProgramm' ? programm : (Reflect.get(ziel, name, empfaenger) as unknown),
+        });
+        return ladeKontext({ ...ctx, tx }, { mandantId: DEMO_IDS.talwind });
+      },
+    );
+    const inhalt = (args[0] as { include: Record<string, { select?: Record<string, unknown> }> })
+      .include;
+    const beschreibungen = Object.keys(inhalt['beschreibungen']!.select!);
+    expect(beschreibungen).toContain('snapshotSha256');
+    expect(beschreibungen).not.toContain('snapshot');
+    const kontrollen = inhalt['kontrollen'] as unknown as {
+      include: { durchfuehrungen: { select: Record<string, unknown> } };
+    };
+    const durchfuehrungen = Object.keys(kontrollen.include.durchfuehrungen.select);
+    for (const gross of ['schritte', 'werte', 'ergebnisKommentar'])
+      expect(durchfuehrungen).not.toContain(gross);
+  });
 });

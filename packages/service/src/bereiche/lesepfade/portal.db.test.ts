@@ -7,9 +7,10 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PortalUebersichtAntwortSchema, type PortalUebersichtEingabe } from '@tcms/contract';
-import { mitTenant } from '@tcms/db';
+import { mitTenant, type Prisma } from '@tcms/db';
 import { DEMO_IDS, DEMO_TENANT_ID } from '@tcms/db/demo';
 import { DEMODATEN_FRIST_MS, sperreDemodaten } from '../../__tests__/demodaten-sperre';
+import { listeKontrollaufgaben } from '../durchfuehrung/lesen';
 import { ladePortalUebersicht } from './portal';
 import { fehlerVon, im, kanzlei, kontakt } from './testhilfen';
 
@@ -82,6 +83,74 @@ describe.skipIf(!AKTIV)('Portal-Übersicht gegen PostgreSQL', () => {
       await mitTenant(DEMO_TENANT_ID, (tx) =>
         tx.mandantKontaktRolle.updateMany({ where: { kontaktId: neu }, data: { aktiv: false } }),
       );
+    }
+  });
+
+  it('eine Regel mit der Aufgabenliste (P2): dieselben Aufgaben, Art und eigene; bestätigte nicht mehr offen', async () => {
+    // Nur gespeichert offene Durchführungen: Abgeschlossene mit Zeitpunkt nach der Testuhr
+    // (Seed relativ zum echten Datum) wären nur für den Kontext offen – mit echter Uhr gibt
+    // es sie nicht, und P2 liest gespeichert abgeschlossene gar nicht erst.
+    const offen = new Set(
+      (
+        await mitTenant(DEMO_TENANT_ID, (t) =>
+          t.durchfuehrung.findMany({
+            where: {
+              kontrolle: { programm: { mandantId: T } },
+              status: {
+                in: ['GEPLANT', 'IN_DURCHFUEHRUNG', 'ZURUECKGEWIESEN', 'ZUR_GEGENZEICHNUNG'],
+              },
+            },
+            select: { id: true },
+            orderBy: { id: 'asc' },
+          }),
+        )
+      ).map((x) => x.id),
+    );
+    const p1 = async (a: Parameters<typeof im>[0]) =>
+      (await lade(a)).aufgaben
+        .filter((x) => offen.has(x.durchfuehrungId))
+        .map((x) => `${x.durchfuehrungId} ${x.art} ${x.eigene}`)
+        .sort();
+    const p2 = async (a: Parameters<typeof im>[0]) =>
+      (await im(a, (ctx) => listeKontrollaufgaben(ctx, { mandantId: T }))).aufgaben
+        .map((x) => `${x.id} ${x.art} ${x.eigene}`)
+        .sort();
+    const personen = [kontakt(DEMO_IDS.jana, T), kontakt(DEMO_IDS.sabine, T)];
+    expect((await p2(personen[0]!)).length).toBeGreaterThan(0);
+    for (const a of personen) expect(await p1(a)).toEqual(await p2(a));
+
+    // Bestätigung beim Mandanten (K-EC-23): eingereicht → Aufgabe BESTAETIGEN; nach der
+    // Bestätigung (Status bleibt bis zum Abschluss der Kanzlei) keine offene Aufgabe mehr.
+    const d = await mitTenant(DEMO_TENANT_ID, (tx) =>
+      tx.durchfuehrung.findFirstOrThrow({
+        where: {
+          kontrolle: { code: 'K-EC-23', programm: { mandantId: T } },
+          kontrolleStand: { gegenzeichnungMandant: true },
+          status: 'IN_DURCHFUEHRUNG',
+        },
+        orderBy: [{ faelligAm: 'asc' }, { id: 'asc' }],
+      }),
+    );
+    const setze = (data: Prisma.DurchfuehrungUpdateInput) =>
+      mitTenant(DEMO_TENANT_ID, (t) => t.durchfuehrung.update({ where: { id: d.id }, data }));
+    const art = async (a: Parameters<typeof im>[0]) =>
+      (await lade(a)).aufgaben.find((x) => x.durchfuehrungId === d.id)?.art ?? null;
+    try {
+      await setze({
+        status: 'ZUR_GEGENZEICHNUNG',
+        eingereichtAm: new Date('2026-10-15T09:00:00Z'),
+      });
+      expect(await art(personen[0]!)).toBe('BESTAETIGEN');
+      for (const a of personen) expect(await p1(a)).toEqual(await p2(a));
+      await setze({ mandantBestaetigtVon: DEMO_IDS.jana });
+      expect(await art(personen[0]!)).toBeNull();
+      for (const a of personen) expect(await p1(a)).toEqual(await p2(a));
+    } finally {
+      await setze({
+        status: d.status,
+        eingereichtAm: d.eingereichtAm,
+        mandantBestaetigtVon: d.mandantBestaetigtVon,
+      });
     }
   });
 

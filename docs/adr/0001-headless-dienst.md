@@ -188,7 +188,10 @@ beginnt mit dieser Stufe neu (eine neue Init-Migration ersetzt die bisherige).
   `tenant_id`, `name`, `rechtsform` (von der kanzleikonsole beim Einrichten
   übergeben und per Endpunkt aktualisierbar). Schlüssel ist `(tenant_id, id)`:
   Das Anlegen verrät nie, ob dieselbe ID in einem anderen Tenant besteht. `berufstraegerId` und
-  `bearbeitungId` entfallen; Zuständigkeit kommt aus `cli.bt` / `cli.hb`.
+  `bearbeitungId` entfallen; Zuständigkeit kommt aus `cli.bt` / `cli.hb`. Die Spalte `aktiv`
+  bleibt ein Stammdatenfeld ohne Wirkung: Ob ein Mandat besteht, entscheidet allein die
+  kanzleikonsole (Mandantenliste, `cli`, Kontaktrollen); kein Lesepfad und keine Operation
+  filtert danach, kein Endpunkt setzt sie.
 - Neu `MandantKontaktRolle (tenant_id, mandant_id, kontakt_id, rolle, funktion, aktiv)`:
   Rollen der Mandantenseite (`GESETZLICHER_VERTRETER`,
   `TAX_COMPLIANCE_BEAUFTRAGTER`, `MITARBEITER`). Pflege durch Personen mit

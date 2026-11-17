@@ -32,7 +32,6 @@ export {
 } from './tenant';
 export {
   AUDIT_SPERRE,
-  pruefeAuditKette,
   schreibeAudit,
   schreibeAuditFolge,
   type AuditInput,

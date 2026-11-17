@@ -18,8 +18,15 @@
 //               Transaktion je Tenant) und bei einer Relation der Fremdschlüssel
 //               zum Elternobjekt (z. B. `risikoId` je Kontrolle in
 //               `RisikoKontrolle`, `pos` je Tenant im Audit).
-//   unbestimmt  Argumente, `include`, `select` oder `orderBy`, die der Prüfer
-//               nicht als Objekt-Literal bzw. Modell auflösen kann
+//   findfirst   `findFirst`/`findFirstOrThrow` ohne eindeutiges `where` (ein
+//               Schlüssel des Schemas mit festen Werten, `tenantId` fest) und
+//               ohne eindeutiges `orderBy`: Bei mehreren Treffern entschiede der
+//               Abfrageplan, welcher zurückkommt
+//   unbestimmt  Argumente, `include`, `select`, `where` (bei `findFirst`) oder
+//               `orderBy`, die der Prüfer nicht als Objekt-Literal bzw. Modell
+//               auflösen kann – auch ein Lesezugriff (`find…`) über einen
+//               Delegate, dessen Modell nicht als `<x>.<modell>` bzw.
+//               `<x>['<modell>']` dasteht (Variable, Parameter, berechneter Name)
 //
 // `_count` zählt nur und braucht keine Reihenfolge. Ausnahmen je Datei, Regel
 // und Ort mit Begründung; eine nicht mehr gebrauchte Ausnahme lässt den Test
@@ -34,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-type Regel = 'findmany' | 'relation' | 'eindeutig' | 'unbestimmt';
+type Regel = 'findmany' | 'findfirst' | 'relation' | 'eindeutig' | 'unbestimmt';
 
 export interface Befund {
   regel: Regel;
@@ -74,6 +81,15 @@ const METHODEN = new Set([
   'updateManyAndReturn',
   'upsert',
   'delete',
+]);
+
+/** Lesemethoden, die es nur an Prisma-Delegates gibt (für unauflösbare Empfänger). */
+const LESEN = new Set([
+  'findMany',
+  'findFirst',
+  'findFirstOrThrow',
+  'findUnique',
+  'findUniqueOrThrow',
 ]);
 
 const liste = (s: string) =>
@@ -262,6 +278,32 @@ export function pruefeQuelltext(text: string, schema: Schema, datei = 'x.ts'): B
     }
   };
 
+  /**
+   * `where` legt einen Schlüssel des Modells mit festen Werten fest (gleich, nicht
+   * `in`/`not`/Bereich); `null`: nicht auflösbar.
+   */
+  const whereEindeutig = (o: ts.ObjectLiteralExpression, modell: string): boolean | null => {
+    const w = eigenschaft(o, 'where');
+    if (!w) return false;
+    const wo = objekt(w.wert);
+    const props = wo ? eigenschaften(wo) : null;
+    if (!props) return null;
+    const fest = new Set(['tenantId']);
+    for (const p of props) {
+      const v = kern(p.wert);
+      if (ts.isObjectLiteralExpression(v)) {
+        // Zusammengesetzter Schlüssel (`tenantId_id: { … }`) oder `{ equals: x }`.
+        const innen = eigenschaften(v)?.map((x) => x.name) ?? [];
+        if (innen.length === 1 && innen[0] === 'equals') fest.add(p.name);
+        else if (p.name.includes('_') && innen.length > 0) for (const x of innen) fest.add(x);
+        continue;
+      }
+      fest.add(p.name);
+    }
+    const m = schema.get(modell);
+    return !!m && m.schluessel.some((k) => k.every((f) => fest.has(f)));
+  };
+
   /** `include`/`select`-Baum eines Modells, rekursiv über alle Relationen. */
   const geprueft = new Set<ts.Node>();
   const pruefeBaum = (wert: ts.Expression, modell: string, ort: string, stelle: ts.Node) => {
@@ -310,18 +352,29 @@ export function pruefeQuelltext(text: string, schema: Schema, datei = 'x.ts'): B
     }
   };
 
+  /** Modellname eines Delegates `<x>.<modell>` bzw. `<x>['<modell>']`, sonst null. */
+  const delegateModell = (e: ts.Expression): string | null => {
+    if (ts.isPropertyAccessExpression(e)) return gross(e.name.text);
+    if (ts.isElementAccessExpression(e) && ts.isStringLiteralLike(e.argumentExpression))
+      return gross(e.argumentExpression.text);
+    return null;
+  };
+
   const besuche = (n: ts.Node) => {
     // Aufrufe `<x>.<delegate>.<methode>({ … })`: Modell aus dem Delegate.
     if (
       ts.isCallExpression(n) &&
       ts.isPropertyAccessExpression(n.expression) &&
-      METHODEN.has(n.expression.name.text) &&
-      ts.isPropertyAccessExpression(n.expression.expression)
+      METHODEN.has(n.expression.name.text)
     ) {
       const methode = n.expression.name.text;
-      const modell = gross(n.expression.expression.name.text);
+      const name = delegateModell(n.expression.expression);
+      const modell = name && schema.has(name) ? name : null;
       const ort = n.expression.getText().replace(/\s+/g, '');
-      if (schema.has(modell)) {
+      // Lesezugriff über einen Delegate ohne erkennbares Modell: nicht prüfbar.
+      if (!modell && LESEN.has(methode))
+        befunde.push({ regel: 'unbestimmt', ort, zeile: zeile(n) });
+      if (modell) {
         const arg = n.arguments[0];
         const o = arg ? objekt(arg) : null;
         if (!o) {
@@ -331,6 +384,12 @@ export function pruefeQuelltext(text: string, schema: Schema, datei = 'x.ts'): B
         } else {
           if (methode === 'findMany') {
             pruefeOrderBy(o, modell, new Set(['tenantId']), ort, n, 'findmany');
+          }
+          if (methode === 'findFirst' || methode === 'findFirstOrThrow') {
+            const w = whereEindeutig(o, modell);
+            if (w === null)
+              befunde.push({ regel: 'unbestimmt', ort: `${ort}.where`, zeile: zeile(n) });
+            else if (!w) pruefeOrderBy(o, modell, new Set(['tenantId']), ort, n, 'findfirst');
           }
           for (const art of ['include', 'select']) {
             const b = eigenschaft(o, art);
@@ -453,13 +512,44 @@ describe('Stabile Reihenfolge jeder Listenabfrage des Dienstes (statisch)', () =
       expect(r.map((b) => `${b.regel}:${b.zeile} ${b.ort}`)).toEqual([
         'findmany:2 tx.risiko.findMany',
         'eindeutig:3 tx.risiko.findMany.orderBy',
+        'findfirst:5 tx.kontrolle.findFirst',
         'relation:5 tx.kontrolle.findFirst.include.staende',
+        'findfirst:6 tx.tcmsProgramm.findFirst',
         'eindeutig:6 tx.tcmsProgramm.findFirst.include.risiken.include.staende.orderBy',
         'unbestimmt:7 tx.feststellung.findUnique.include.massnahmen.orderBy',
         'unbestimmt:8 tx.feststellung.findMany',
         'relation:9 B.kontrollen',
         'relation:9 B.kontrollen.include.durchfuehrungen',
         'unbestimmt:11 include',
+      ]);
+    });
+
+    it('erkennt Delegates über Variable oder Elementzugriff und findFirst ohne eindeutigen Treffer', () => {
+      const r = pruefeQuelltext(
+        `
+        await tx['risiko'].findMany({ where: { a: 1 } });
+        const d = tx.risiko; await d.findMany({ orderBy: [{ id: 'asc' }] });
+        await tx[name].findFirst({ where: { id } });
+        await tx.risiko.findFirst({ where: { programmId } });
+        await tx.risiko.findFirst({ where: { programmId }, orderBy: { code: 'asc' } });
+        await tx.risiko.findFirst({ where: { programmId }, orderBy: [{ code: 'asc' }, { id: 'asc' }] });
+        await tx.risiko.findFirst({ where: { id: x, programm: { mandantId } } });
+        await tx.risiko.findFirst({ where: { id: { in: ids } } });
+        await tx.mandant.findFirst({ where: { id: mandantId } });
+        await tx.risiko.findFirstOrThrow({ where: bedingung });
+        await tx.risiko.findFirst({ where: { id: { equals: x } } });
+        ids.delete(x); karte.findLast(y);
+      `,
+        schema,
+      );
+      expect(r.map((b) => `${b.regel}:${b.zeile} ${b.ort}`)).toEqual([
+        "findmany:2 tx['risiko'].findMany",
+        'unbestimmt:3 d.findMany',
+        'unbestimmt:4 tx[name].findFirst',
+        'findfirst:5 tx.risiko.findFirst',
+        'eindeutig:6 tx.risiko.findFirst.orderBy',
+        'findfirst:9 tx.risiko.findFirst',
+        'unbestimmt:11 tx.risiko.findFirstOrThrow.where',
       ]);
     });
   });

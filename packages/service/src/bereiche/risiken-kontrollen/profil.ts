@@ -105,7 +105,7 @@ async function programmUnterSperre(tx: Tx, mandantId: string, ohneVersion1: stri
 async function offenerProfilStand(tx: Tx, programmId: string) {
   const s = await tx.profilStand.findFirst({
     where: { programmId, gueltigBis: null },
-    orderBy: { gueltigAb: 'desc' },
+    orderBy: [{ gueltigAb: 'desc' }, { id: 'desc' }],
   });
   if (!s) throw konflikt('Kein offener Profilstand vorhanden.');
   return s;
@@ -458,7 +458,7 @@ export async function vorgeschlagenesRisikoAufnehmen(
       // Nur deterministische Vorschläge des offenen Profilstands (mit Grund).
       const profilStand = await tx.profilStand.findFirst({
         where: { programmId: programm.id, gueltigBis: null },
-        orderBy: { gueltigAb: 'desc' },
+        orderBy: [{ gueltigAb: 'desc' }, { id: 'desc' }],
       });
       if (!profilStand) throw konflikt('Kein Profilstand vorhanden.');
       const vorschlag = schlageRisikenVor(

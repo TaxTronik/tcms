@@ -10,7 +10,8 @@
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEMO_IDS, DEMO_TENANT_ID } from '@tcms/db/demo';
-import { mitTenant, pruefeAuditKette } from '@tcms/db';
+import { mitTenant } from '@tcms/db';
+import { pruefeAuditKette } from '@tcms/db/testhilfe';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 

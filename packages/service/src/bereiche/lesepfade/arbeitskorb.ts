@@ -2,8 +2,10 @@
 // Arbeitskorb (`POST /v1/arbeitskorb`): eigene Aufgaben der Person über die
 // von der kanzleikonsole bestätigten Mandanten. Quelle sind die aktuellen
 // Kontexte (blockweise, `jeAktuellerKontext`) plus wenige Zusatzfelder
-// (Antragsteller von Frequenzabweichungen und Verwerfen-Anträgen), beide nur
-// für Programme der geladenen Mandanten. Zuständigkeit: eigene Zuweisung an
+// (Antragsteller von Frequenzabweichungen und Verwerfen-Anträgen, Beteiligte
+// eingereichter Durchführungen), alle nur für Programme der geladenen
+// Mandanten. Rechte wie die Operationen: Gegenzeichnung über
+// `durchfuehrungsRechte`, Frequenzabweichung über `antragDerAbweichung`. Zuständigkeit: eigene Zuweisung an
 // Objekten oder `bt`/`hb` aus der Liste. Keine Leistungsvergleiche – nur die
 // eigenen Aufgaben; Personen nur als IDs.
 // =============================================================================
@@ -20,7 +22,9 @@ import {
   KLASSE_LABEL,
   tageZwischen,
   type AnzeigeStatus,
+  type DurchfuehrungStatus,
 } from '@tcms/domain';
+import { antragDerAbweichung } from '../../kern/abweichung';
 import {
   jeAktuellerKontext,
   type FeststellungView,
@@ -32,11 +36,12 @@ import {
   gleicheId,
   istBerufstraeger,
   kannBearbeiten,
-  kannGegenzeichnen,
   kannWuerdigen,
   liestAlleVertraulichen,
   zweitePerson,
 } from '../../rechte';
+import { ladeBeteiligteJe } from '../durchfuehrung/lage';
+import { durchfuehrungsRechte } from '../durchfuehrung/rechte';
 import { alsJson, antwortNach } from './hilfen';
 import { zugaengeAusListe } from './zugang';
 
@@ -65,44 +70,6 @@ const OFFEN_ODER_FAELLIG: readonly AnzeigeStatus[] = [
   'UEBERFAELLIG',
 ];
 
-interface AbweichungsStand {
-  kontrolleId: string;
-  gueltigAb: Date;
-  erstelltVon: string | null;
-  abweichungTurnus: string | null;
-  abweichungAnlass: boolean | null;
-  abweichungBegruendung: string | null;
-  abweichungFreigegebenVon: string | null;
-}
-
-function gleicheAbweichung(a: AbweichungsStand, b: AbweichungsStand): boolean {
-  return (
-    a.abweichungTurnus === b.abweichungTurnus &&
-    (a.abweichungAnlass ?? false) === (b.abweichungAnlass ?? false) &&
-    a.abweichungBegruendung === b.abweichungBegruendung &&
-    a.abweichungFreigegebenVon === b.abweichungFreigegebenVon
-  );
-}
-
-/**
- * Wer die offene Frequenzabweichung beantragt hat: der früheste Stand der
- * ununterbrochenen Folge mit derselben offenen Abweichung (spätere Stände
- * können durch Design- oder Personenänderungen entstanden sein). Gleiche
- * Regel wie die Kontrollhistorie der Demo (`antragDerAbweichung`).
- */
-function abweichungsAntrag(aufsteigend: readonly AbweichungsStand[]): {
-  von: string | null;
-  am: Date | null;
-} {
-  const letzter = aufsteigend[aufsteigend.length - 1];
-  if (!letzter || letzter.abweichungTurnus == null || letzter.abweichungFreigegebenVon) {
-    return { von: null, am: null };
-  }
-  let i = aufsteigend.length - 1;
-  while (i > 0 && gleicheAbweichung(aufsteigend[i - 1]!, letzter)) i--;
-  return { von: aufsteigend[i]!.erstelltVon, am: aufsteigend[i]!.gueltigAb };
-}
-
 /** Arbeitskorb über die bestätigten Mandanten (nur Kanzleipersonen). */
 export async function ladeArbeitskorb(
   ctx: DienstKontext,
@@ -120,12 +87,14 @@ export async function ladeArbeitskorb(
   const abweichungsKontrollIds = kontexte.flatMap((c) =>
     c.k.kontrollen.filter((x) => x.abweichung && !x.abweichung.freigegebenVon).map((x) => x.id),
   );
-  const abweichungsStaende: AbweichungsStand[] = abweichungsKontrollIds.length
+  const abweichungsStaende = abweichungsKontrollIds.length
     ? await ctx.tx.kontrolleStand.findMany({
         where: { kontrolleId: { in: abweichungsKontrollIds } },
-        orderBy: [{ gueltigAb: 'asc' }, { id: 'asc' }],
+        orderBy: [{ version: 'asc' }, { id: 'asc' }],
         select: {
+          id: true,
           kontrolleId: true,
+          version: true,
           gueltigAb: true,
           erstelltVon: true,
           abweichungTurnus: true,
@@ -155,7 +124,12 @@ export async function ladeArbeitskorb(
         orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
       })
     : [];
-  const staendeJe = new Map<string, AbweichungsStand[]>();
+  // Beteiligte der eingereichten Durchführungen (Vier-Augen), eine Abfrage für alle Mandanten.
+  const beteiligteJe = await ladeBeteiligteJe(
+    ctx.tx,
+    kontexte.flatMap((c) => c.k.durchfuehrungen.filter((d) => d.anzeige === 'ZUR_GEGENZEICHNUNG')),
+  );
+  const staendeJe = new Map<string, (typeof abweichungsStaende)[number][]>();
   for (const st of abweichungsStaende) {
     staendeJe.set(st.kontrolleId, [...(staendeJe.get(st.kontrolleId) ?? []), st]);
   }
@@ -207,18 +181,35 @@ export async function ladeArbeitskorb(
     }
 
     // ---- Gegenzeichnungen, die die Person leisten darf ----
+    // Recht wie die Operation (`durchfuehrungsRechte`, auch Vier-Augen gegen alle
+    // Beteiligten); gelistet nur, wo die Person zugewiesen oder zuständige BT ist.
     for (const d of c.durchfuehrungen) {
       if (d.anzeige !== 'ZUR_GEGENZEICHNUNG') continue;
       const kontrolle = kontrolleJe.get(d.kontrolleId);
       if (!kontrolle) continue;
-      const recht = kannGegenzeichnen(
-        nutzer,
-        kontrolle,
-        m.id,
-        d.durchgefuehrtVon,
-        !!d.mandantBestaetigtVon,
-      );
-      if (!recht.erlaubt) continue;
+      const rechte = durchfuehrungsRechte({
+        akteur: nutzer,
+        rollen: [],
+        mandantId: m.id,
+        historisch: false,
+        status: d.status as DurchfuehrungStatus,
+        anzeige: d.anzeige,
+        periodeBis: d.periodeBis,
+        zustaendigkeit: {
+          partei: kontrolle.partei,
+          durchfuehrendId: kontrolle.durchfuehrendId,
+          vertretungId: kontrolle.vertretungId,
+          gegenzeichnerId: kontrolle.gegenzeichnerId,
+          gegenzeichnungMandant: kontrolle.gegenzeichnungMandant,
+        },
+        durchgefuehrtVon: d.durchgefuehrtVon,
+        mandantBestaetigtVon: d.mandantBestaetigtVon,
+        // Entfallen-Anträge bestimmen nur die Entfallen-Rechte, nicht die Gegenzeichnung.
+        entfallenBegruendung: null,
+        entfallenVon: null,
+        beteiligte: beteiligteJe.get(d.id) ?? [],
+      });
+      if (!rechte.gegenzeichnen.erlaubt) continue;
       if (
         !gleicheId(kontrolle.gegenzeichnerId, nutzer.id) &&
         !(istBerufstraeger(nutzer) && zustaendig)
@@ -261,7 +252,8 @@ export async function ladeArbeitskorb(
       }
       for (const x of c.kontrollen) {
         if (!x.abweichung || x.abweichung.freigegebenVon) continue;
-        const info = abweichungsAntrag(staendeJe.get(x.id) ?? []);
+        // Dieselbe Regel wie die Operation: Stände bis zum offenen Stand, nach Version.
+        const info = antragDerAbweichung(staendeJe.get(x.id) ?? [], x);
         if (!zweitePerson(nutzer, info.von)) continue;
         korb.vierAugen.push({
           mandant,

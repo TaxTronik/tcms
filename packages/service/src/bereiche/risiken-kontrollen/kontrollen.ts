@@ -267,11 +267,12 @@ export async function frequenzAbweichungEntscheiden(
         zeitpunkt,
       );
       if (!abweichungOffen(alt)) throw konflikt('Es ist keine Frequenzabweichung beantragt.');
+      // Stände bis zum gesperrten Stand nach Version, nicht nach `gueltigAb` (kern/abweichung.ts).
       const staende = await tx.kontrolleStand.findMany({
-        where: { kontrolleId: k.id, gueltigAb: { lte: alt.gueltigAb } },
+        where: { kontrolleId: k.id, version: { lte: alt.version } },
         orderBy: [{ version: 'asc' }, { id: 'asc' }],
       });
-      const antrag = antragDerAbweichung(staende);
+      const antrag = antragDerAbweichung(staende, alt);
       if (!zweitePerson(ctx.akteur, antrag.von)) {
         throw nichtBerechtigt('VIER_AUGEN', ZWEITE_PERSON);
       }

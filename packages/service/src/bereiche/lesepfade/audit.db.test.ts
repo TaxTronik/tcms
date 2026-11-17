@@ -17,7 +17,8 @@ import {
 } from '@tcms/contract';
 import { mitTenant, schreibeAudit, type Tx } from '@tcms/db';
 import { auditHash, pruefeKette } from '@tcms/domain/audit';
-import { ladeAudit, pruefeAudit } from './audit';
+import type { DienstKontext } from '../../kontext';
+import { ladeAudit, leseAuditSeite, pruefeAudit } from './audit';
 import { fehlerVon, im, kanzlei, kontakt } from './testhilfen';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
@@ -89,6 +90,106 @@ describe.skipIf(!AKTIV)('Audit gegen PostgreSQL', () => {
         'tcms.test.b6',
       ]);
       expect((await lade({ mandantId: randomUUID() })).eintraege).toEqual([]);
+    });
+
+    it('Filter Mandant: auch Einträge ohne Programm (Anker, Kontaktrollen, Nachrichten)', async () => {
+      // Eigener Tenant: Mandant noch ohne Programm.
+      const t = randomUUID();
+      const m = randomUUID();
+      const anderer = randomUUID();
+      const a = kanzlei(randomUUID(), null, { tenantId: t, admin: true });
+      await mitTenant(t, async (tx) => {
+        for (const id of [m, anderer]) {
+          await tx.mandant.create({ data: { id, name: 'Ohne Programm GmbH', rechtsform: 'KapG' } });
+        }
+        const nachricht = (mandantId: string) =>
+          tx.nachricht.create({
+            data: {
+              mandantId,
+              empfaengerId: randomUUID(),
+              empfaengerArt: 'KANZLEI',
+              zweck: 'EREIGNIS_GEMELDET',
+              betreff: 'Neues Ereignis',
+              text: 'Text',
+              daten: {},
+            },
+          });
+        const eigene = await nachricht(m);
+        const fremde = await nachricht(anderer);
+        const eintrag = (
+          aktion: string,
+          objektTyp: string,
+          objektId: string,
+          detail: Record<string, unknown> = {},
+        ) =>
+          schreibeAudit(tx, {
+            actorId: a.id,
+            actorName: 'Admin',
+            aktion,
+            objektTyp,
+            objektId,
+            programmId: null,
+            detail,
+          });
+        await eintrag('tcms.mandant.angelegt', 'Mandant', m);
+        await eintrag('tcms.mandant.angelegt', 'Mandant', anderer);
+        await eintrag('tcms.kontakt.rollen_gesetzt', 'MandantKontaktRolle', randomUUID(), {
+          mandantId: m,
+        });
+        await eintrag('tcms.kontakt.rollen_gesetzt', 'MandantKontaktRolle', randomUUID(), {
+          mandantId: anderer,
+        });
+        await eintrag('tcms.nachricht.zugestellt', 'Nachricht', eigene.id);
+        await eintrag('tcms.nachricht.zugestellt', 'Nachricht', fremde.id);
+        // Sammeleintrag über Nachrichten mehrerer Mandanten: zu keinem Mandanten.
+        await eintrag('tcms.nachricht.abgerufen', 'Nachricht', eigene.id, {
+          anzahl: 2,
+          ids: [eigene.id, fremde.id],
+        });
+      });
+      const gefiltert = await lade({ mandantId: m }, a);
+      expect(gefiltert.eintraege.map((e) => `${e.aktion} ${e.objektTyp}`)).toEqual([
+        'tcms.mandant.angelegt Mandant',
+        'tcms.kontakt.rollen_gesetzt MandantKontaktRolle',
+        'tcms.nachricht.zugestellt Nachricht',
+      ]);
+      // Großschreibung der ID im Filter ändert nichts.
+      expect((await lade({ mandantId: m.toUpperCase() }, a)).eintraege).toHaveLength(3);
+      // Ungefiltert tragen dieselben Einträge den Mandanten, der Sammeleintrag keinen.
+      const alle = await lade({}, a);
+      expect(alle.eintraege.map((e) => e.mandantId)).toEqual([
+        m,
+        anderer,
+        m,
+        anderer,
+        m,
+        anderer,
+        null,
+      ]);
+    });
+
+    it('Kanzleileitung: keine Abfrage vertraulicher Feststellungen je Seite (Kosten je Seite)', async () => {
+      let abfragen = 0;
+      const zaehlend = (ctx: DienstKontext): DienstKontext => ({
+        ...ctx,
+        tx: new Proxy(ctx.tx, {
+          get(ziel, name, empfaenger) {
+            if (name === 'feststellung') abfragen++;
+            return Reflect.get(ziel, name, empfaenger) as unknown;
+          },
+        }),
+      });
+      const s = await im(admin, (ctx) => ladeAudit(zaehlend(ctx), { limit: 1 }));
+      expect(s.eintraege).toHaveLength(1);
+      expect(abfragen).toBe(0);
+      // Gegenprobe: Ohne Verwaltungsrecht (künftiger Lesepfad, Maskierung) wird gelesen.
+      const leser = kanzlei(randomUUID(), mandant, {
+        tenantId: tenant,
+        bt: true,
+        zustaendig: true,
+      });
+      await im(leser, (ctx) => leseAuditSeite(zaehlend(ctx), { limit: 1 }));
+      expect(abfragen).toBeGreaterThan(0);
     });
 
     it('nur Admins; andere Tenants sehen nichts davon', async () => {

@@ -32,7 +32,11 @@ für KI-Werkzeuge.
   Kern aller Bereiche in `src/kern/` (Export über `bereiche/lesepfade.ts`):
   `ladeKontext(ctx, { mandantId, stand? })` lädt den Tax-CMS-Kontext eines
   Mandanten zu einem Stichtag (prüft `kannLesen`, maskiert vertrauliche
-  Feststellungen), Nummernkreise je Tenant, reine Stichtag-Helfer, das Lesen
+  Feststellungen), Nummernkreise je Tenant, reine Stichtag-Helfer, die
+  Rückrechnung historischer Stände (`kern/rueckrechnung.ts`: Maßnahmen,
+  Feststellungsstatus, Ereignisse und Folgen zum Stichtag für Kontext, Listen
+  und Details), der Antrag einer Frequenzabweichung (`kern/abweichung.ts`,
+  Stände nach Version), das Lesen
   des Geschäftsprofils (`kern/profil.ts`, Profilregeln in `@tcms/domain`) und
   die Kontrollvorlagen für neue Kontrollen aus dem Katalog
   (`kern/kontroll-vorlage.ts`: Vorbelegung der Zuständigkeit, erster Stand,
@@ -45,7 +49,8 @@ für KI-Werkzeuge.
   Zustand unter der Sperre lesen, versionierte Änderungen nur auf dem
   gesehenen Stand (`standId`/`profilStandId`, sonst `KONFLIKT`), bedingte
   Updates; Neuplanung löscht nur unberührte geplante Durchführungen.
-  Reihenfolge: Jede Listenabfrage (`findMany`) und jede Listenrelation in
+  Reihenfolge: Jede Listenabfrage (`findMany`), jedes `findFirst` ohne
+  eindeutiges `where` (Schlüssel mit festen Werten) und jede Listenrelation in
   `include`/`select` trägt ein `orderBy` (fachlich, z. B. Code, Version,
   Nummer, Zeitpunkt) mit der `id` als letzter Stufe (Verknüpfungstabellen: ihr
   Schlüssel), damit Antworten, Vergleiche und eingefrorene Snapshots nicht vom

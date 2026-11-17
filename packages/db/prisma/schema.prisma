@@ -47,6 +47,9 @@ model Mandant {
   name              String
   rechtsform        String
   datevNr           String?
+  /// Stammdatenfeld ohne Wirkung auf Zugriff, Listen oder Operationen: Ob ein Mandat
+  /// besteht und wer es betreut, entscheidet die kanzleikonsole (`cli`, Mandantenliste,
+  /// Kontaktrollen; ADR 0001 §5). Kein Endpunkt setzt es.
   aktiv             Boolean                   @default(true)
   createdAt         DateTime                  @default(now())
   updatedAt         DateTime                  @default(now()) @updatedAt
