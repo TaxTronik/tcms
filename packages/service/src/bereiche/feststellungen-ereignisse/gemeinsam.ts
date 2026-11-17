@@ -7,6 +7,7 @@
 
 import { DienstFehler } from '@tcms/contract';
 import type { Tx } from '@tcms/db';
+import { kalenderjahr, kalendertagVon } from '@tcms/domain';
 import { mitAudit, type Protokoll } from '../../audit';
 import type { DienstKontext } from '../../kontext';
 import { naechsteFeststellungsnummer } from '../../kern/nummern';
@@ -290,7 +291,7 @@ export async function legeFeststellungAn(
   }
   const auswirkung = auswirkungBeimAnlegen(ctx.akteur, f.mandantId, f.auswirkung);
   const herabgestuft = auswirkung !== f.auswirkung;
-  const nummer = await naechsteFeststellungsnummer(tx, f.programmId, zeitpunkt.getUTCFullYear());
+  const nummer = await naechsteFeststellungsnummer(tx, f.programmId, kalenderjahr(zeitpunkt));
   const neu = await tx.feststellung.create({
     data: {
       programmId: f.programmId,
@@ -335,10 +336,6 @@ export async function legeFeststellungAn(
 // Außerplanmäßige Durchführung (Nachkontrolle, Folge „Kontrolle einplanen")
 // ---------------------------------------------------------------------------
 
-function utcTag(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-}
-
 /**
  * Legt eine außerplanmäßige Durchführung mit dem zum Zeitpunkt gültigen
  * Kontrollstand an (Muster: Seed `baueProgramm`). Periode = Tag der Anlage,
@@ -372,7 +369,8 @@ export async function legeAusserplanmaessigeDurchfuehrungAn(
     )
     .sort((x, y) => y.gueltigAb.getTime() - x.gueltigAb.getTime())[0];
   if (!stand) throw new DienstFehler('UNGUELTIG', 'Die Kontrolle hat keinen gültigen Stand.');
-  const tag = utcTag(a.zeitpunkt);
+  // Tag der Anlage nach Berliner Kalendertag (wie „heute").
+  const tag = kalendertagVon(a.zeitpunkt);
   const d = await tx.durchfuehrung.create({
     data: {
       kontrolleId: k.id,

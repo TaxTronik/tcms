@@ -41,6 +41,49 @@ describe('Abgeleiteter Status einer Durchführung', () => {
   });
 });
 
+describe('Abgeleiteter Status: Zeitpunkte nach Berliner Kalendertag', () => {
+  // 2026-11-17T23:30Z ist der 18.11. um 00:30 Uhr (MEZ), 2026-07-17T22:30Z der 18.07. um 00:30 Uhr (MESZ).
+  const nov = {
+    periodeVon: utc(2026, 10, 1),
+    periodeBis: utc(2026, 10, 31),
+    faelligAm: utc(2026, 11, 30),
+    zurueckgewiesenAm: null,
+  };
+  it('eine Gegenzeichnung um 00:30 Uhr zählt zum neuen Tag (Winter)', () => {
+    const d = {
+      ...nov,
+      status: 'OHNE_BEFUND' as const,
+      begonnenAm: utc(2026, 11, 2),
+      eingereichtAm: utc(2026, 11, 5),
+      abgeschlossenAm: new Date('2026-11-17T23:30:00Z'),
+    };
+    expect(statusAm(d, utc(2026, 11, 17))).toBe('ZUR_GEGENZEICHNUNG');
+    expect(statusAm(d, utc(2026, 11, 18))).toBe('OHNE_BEFUND');
+  });
+  it('eine Gegenzeichnung um 00:30 Uhr zählt zum neuen Tag (Sommer)', () => {
+    const d = {
+      periodeVon: utc(2026, 6, 1),
+      periodeBis: utc(2026, 6, 30),
+      faelligAm: utc(2026, 7, 31),
+      zurueckgewiesenAm: null,
+      status: 'MIT_BEFUND' as const,
+      eingereichtAm: utc(2026, 7, 5),
+      abgeschlossenAm: new Date('2026-07-17T22:30:00Z'),
+    };
+    expect(statusAm(d, utc(2026, 7, 17))).toBe('ZUR_GEGENZEICHNUNG');
+    expect(statusAm(d, utc(2026, 7, 18))).toBe('MIT_BEFUND');
+  });
+  it('23:59 Uhr Berliner Zeit bleibt am selben Tag', () => {
+    const d = {
+      ...nov,
+      status: 'OHNE_BEFUND' as const,
+      eingereichtAm: utc(2026, 11, 5),
+      abgeschlossenAm: new Date('2026-11-17T22:59:59.999Z'),
+    };
+    expect(statusAm(d, utc(2026, 11, 17))).toBe('OHNE_BEFUND');
+  });
+});
+
 describe('Betriebsstand einer Kontrolle', () => {
   it('nimmt die jüngste abgeschlossene oder überfällige Durchführung', () => {
     const aug = {

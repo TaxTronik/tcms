@@ -2,13 +2,17 @@
 // Reine Zeit-Helfer für Stichtage (bisher apps/web/src/server/zeit.ts). „Heute"
 // kommt immer von außen (Uhr des Dienstkontexts bzw. Demo-Uhr), nie aus
 // `new Date()` hier (ADR 0001 §7: TCMS_DEMO_TODAY wirkt nur in der Demo).
-// Stichtage sind Kalendertage als Date auf UTC-Mitternacht.
+// Stichtage sind Kalendertage (Europe/Berlin) als Date auf UTC-Mitternacht;
+// Tagesgrenzen und die Einordnung von Zeitpunkten rechnen nach dem Berliner
+// Kalendertag (`@tcms/domain`, kalender.ts).
 // =============================================================================
 
+import { tagesende } from '@tcms/domain';
 import type { Uhr } from '../kontext';
 
+export { tagesende };
+
 const TAG = /^\d{4}-\d{2}-\d{2}$/;
-const TAG_MS = 86_400_000;
 
 /** Kalendertag `YYYY-MM-DD` als Date (UTC-Mitternacht). */
 export function tagAlsDatum(iso: string): Date {
@@ -20,16 +24,12 @@ export function heuteDatum(uhr: Uhr): Date {
   return tagAlsDatum(uhr.heute());
 }
 
-/** Ende des Kalendertags (UTC) für Stichtagsvergleiche. */
-export function tagesende(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) + TAG_MS - 1);
-}
-
 /**
  * Obergrenze für Audit-Zeitstempel bei Stichtagsauswertungen. Audit-Zeitstempel
  * sind immer echte Zeit, fachliche Zeit folgt der Uhr: Im aktuellen Stand
  * zählen daher alle Einträge, in historischen Ständen (vor „heute") nur die bis
- * zum Ende des Stichtags. Mit echter Uhr ist das dasselbe wie `tagesende`.
+ * zum Ende des Stichtags (Europe/Berlin). Mit echter Uhr ist das dasselbe wie
+ * `tagesende`.
  */
 export function auditGrenze(stand: Date, heute: Date): Date {
   return stand.getTime() < heute.getTime() ? tagesende(stand) : new Date(8_640_000_000_000_000);

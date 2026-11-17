@@ -5,6 +5,7 @@
 // =============================================================================
 
 import type { BetriebsStand } from './bewertung';
+import { nachTag } from './kalender';
 
 /** Gespeicherter Status einer Kontrolldurchführung. */
 export type DurchfuehrungStatus =
@@ -64,21 +65,13 @@ export interface DurchfuehrungZeit {
 
 const OFFEN: readonly DurchfuehrungStatus[] = ['GEPLANT', 'IN_DURCHFUEHRUNG', 'ZURUECKGEWIESEN'];
 
-function tag(d: Date): number {
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-}
-
-/** true, wenn `a` (Tag) nach `b` (Tag) liegt. */
-export function nachTag(a: Date, b: Date): boolean {
-  return tag(a) > tag(b);
-}
-
 /**
  * Status, wie er zum Stichtag `stand` galt. Für den aktuellen Stand ist
- * `stand` = heute. Abgeschlossene Zustände gelten ab ihrem Zeitstempel.
+ * `stand` = heute. Zustände gelten ab dem Kalendertag (Europe/Berlin) ihres
+ * Zeitstempels (`kalendertagVon`).
  */
 export function statusAm(d: DurchfuehrungZeit, stand: Date): AnzeigeStatus {
-  const vor = (x: Date | null | undefined) => x != null && tag(x) <= tag(stand);
+  const vor = (x: Date | null | undefined) => x != null && !nachTag(x, stand);
   if ((d.status === 'OHNE_BEFUND' || d.status === 'MIT_BEFUND') && vor(d.abgeschlossenAm)) {
     return d.status;
   }
@@ -93,7 +86,7 @@ export function statusAm(d: DurchfuehrungZeit, stand: Date): AnzeigeStatus {
   if (nachTag(stand, d.faelligAm)) return 'UEBERFAELLIG';
   const begonnen = vor(d.begonnenAm) && d.status !== 'GEPLANT';
   if (begonnen) return 'IN_DURCHFUEHRUNG';
-  return tag(stand) >= tag(d.periodeBis) ? 'FAELLIG' : 'GEPLANT';
+  return nachTag(d.periodeBis, stand) ? 'GEPLANT' : 'FAELLIG';
 }
 
 export function istOffen(s: AnzeigeStatus): boolean {
@@ -104,11 +97,6 @@ export function istOffen(s: AnzeigeStatus): boolean {
 
 export function istAbgeschlossen(s: AnzeigeStatus): boolean {
   return s === 'OHNE_BEFUND' || s === 'MIT_BEFUND';
-}
-
-/** Tage zwischen zwei Daten (Kalendertage, b − a). */
-export function tageZwischen(a: Date, b: Date): number {
-  return Math.round((tag(b) - tag(a)) / 86_400_000);
 }
 
 /**

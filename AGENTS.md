@@ -8,7 +8,9 @@ für KI-Werkzeuge.
 - `packages/domain` – reine Fachlogik ohne I/O: Katalog E-Commerce (Risiken,
   Kontrollen, Ereignistypen, Profilregeln), Bewertung Brutto/Netto,
   Häufigkeitsmatrix Governance-Typ × Bruttoklasse, Statusmodelle, Phasen,
-  Grundelemente, Prüflast, Formatierung. Änderungen hier brauchen Tests
+  Grundelemente, Prüflast, Formatierung, Kalendertage (`kalender.ts`: „heute",
+  Stichtagsgrenzen und Einordnung von Zeitpunkten einheitlich nach
+  Europe/Berlin, auch für Dienst und Demo). Änderungen hier brauchen Tests
   (`pnpm --filter @tcms/domain test`).
 - `packages/db` – Prisma-Schema, Migrationen (Init mit RLS je Tabelle, danach
   Nachträge von Hand im Prisma-Format; ohne jeden Backslash – auch nicht in

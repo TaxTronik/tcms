@@ -350,6 +350,11 @@ Routentabelle weisen mehrdeutige Muster ab).
 - Datumswerte als ISO-8601-Strings, keine `Map`/`Set`/`Date` im JSON.
 - Lesen zu einem Stichtag: `?stand=YYYY-MM-DD`. Schreibende Endpunkte nehmen
   **keinen** Stichtag an und arbeiten immer auf dem aktuellen Stand.
+  Stichtage, „heute“ und die Einordnung von Zeitpunkten (Einreichung,
+  Abschluss, Erfassung, Audit, Jahr der Nummernkreise) folgen einheitlich dem
+  Kalendertag in Europe/Berlin (`@tcms/domain`, `kalender.ts`): Ein Zeitpunkt
+  um 00:30 Uhr gehört zum neuen Tag, das Ende eines Stichtags ist 24:00 Uhr
+  Berliner Zeit.
 - Personen-IDs der kanzleikonsole für Vorbelegung und Anzeige (nie für
   Rechte): Schreibende Endpunkte nehmen sie im Body, lesende als Query –
   `GET …/einrichtung?berufstraegerId=&bearbeitungId=&vertretungId=`

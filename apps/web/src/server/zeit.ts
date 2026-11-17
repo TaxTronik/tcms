@@ -1,4 +1,5 @@
 import 'server-only';
+import { tagesbeginn } from '@tcms/domain';
 import {
   auditGrenze as auditGrenzeAm,
   echteUhr,
@@ -36,10 +37,12 @@ export function jetzt(): Date {
   const demo = demoTag();
   const n = new Date();
   if (!demo) return n;
-  const msImTag =
-    ((n.getUTCHours() * 60 + n.getUTCMinutes()) * 60 + n.getUTCSeconds()) * 1000 +
-    n.getUTCMilliseconds();
-  return new Date(demo.getTime() + msImTag);
+  // Berliner Uhrzeit auf den Demo-Tag legen: Der Zeitstempel liegt am Demo-Tag
+  // nach deutschem Kalendertag (wie „heute"), auch zwischen 00:00 und 02:00 Uhr.
+  const beginn = tagesbeginn(demo).getTime();
+  const laenge = tagesende(demo).getTime() + 1 - beginn;
+  const msImTag = Math.min(n.getTime() - tagesbeginn(n).getTime(), laenge - 1);
+  return new Date(beginn + msImTag);
 }
 
 export function istDemo(): boolean {
