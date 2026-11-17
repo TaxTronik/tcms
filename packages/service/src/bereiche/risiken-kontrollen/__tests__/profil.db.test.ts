@@ -8,13 +8,14 @@
 
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { erzeugeClient, mitTenant, type PrismaClient } from '@tcms/db';
-import { schlageRisikenVor } from '@tcms/domain';
+import { erzeugeClient, mitTenant, type Prisma, type PrismaClient } from '@tcms/db';
+import { kontrollenFuerRisiko, schlageRisikenVor } from '@tcms/domain';
 import type { DienstKontext } from '../../../kontext';
-import { ladeProfil } from '../lesen';
+import { ladeKontrolle, ladeProfil } from '../lesen';
 import { profilAendern, vorgeschlagenesRisikoAufnehmen } from '../profil';
 import {
   akteureVon,
+  BEGRUENDUNG,
   fehlerVon,
   gleichzeitig,
   HEUTE,
@@ -268,6 +269,120 @@ describe.skipIf(!AKTIV)('Geschäftsprofil: Fachoperationen', () => {
         ),
       );
       expect(f.code).toBe('KONFLIKT');
+    }, 60_000);
+
+    /**
+     * Legt die Katalogkontrolle des offenen Vorschlags schon vorher an (verknüpft mit
+     * einem bestehenden Risiko, Brutto gering, Vorlage „ohne Turnus, bei Auslösung“)
+     * und gibt ihr eine Frequenzabweichung – offen oder freigegeben.
+     */
+    async function mitBestehenderKontrolle(freigegeben: boolean) {
+      const x = await legeProgrammAn(tenant);
+      const code = kontrollenFuerRisiko(x.offenerVorschlag)[0]!.code;
+      expect(x.kontrollen.has(code)).toBe(false);
+      const risikoId = [...x.risiken.values()][0]!;
+      const kontrolleId = await mitTenant(tenant, async (tx) => {
+        await tx.risikoStand.updateMany({
+          where: { risikoId, gueltigBis: null },
+          data: { s: 'N', w: 'SELTEN', r: 1 },
+        });
+        const muster = await tx.kontrolle.findFirstOrThrow({
+          where: { programmId: x.programmId },
+          include: { staende: { where: { gueltigBis: null }, orderBy: { id: 'asc' } } },
+          orderBy: { id: 'asc' },
+        });
+        const {
+          id: _i,
+          tenantId: _t,
+          kontrolleId: _k,
+          gueltigBis: _g,
+          schritte,
+          kennzahlen,
+          ...stand
+        } = muster.staende[0]!;
+        const k = await tx.kontrolle.create({
+          data: {
+            programmId: x.programmId,
+            code,
+            aktivAb: muster.aktivAb,
+            createdAt: muster.createdAt,
+            staende: {
+              create: {
+                ...stand,
+                schritte: schritte as Prisma.InputJsonValue,
+                kennzahlen: kennzahlen as Prisma.InputJsonValue,
+                version: 1,
+                vorlageTurnus: 'KEIN',
+                vorlageAnlass: true,
+                abweichungTurnus: freigegeben ? 'KEIN' : 'JAEHRLICH',
+                abweichungAnlass: true,
+                abweichungBegruendung: BEGRUENDUNG,
+                abweichungFreigegebenVon: freigegeben ? x.personen.bt : null,
+              },
+            },
+            risiken: { create: [{ risikoId }] },
+          },
+        });
+        return k.id;
+      });
+      const r = await rufe(akteureVon(x).hb, (ctx) =>
+        vorgeschlagenesRisikoAufnehmen(ctx, {
+          mandantId: x.mandantId,
+          code: x.offenerVorschlag,
+          verantwortliche: verantwortliche(x),
+        }),
+      );
+      const ev = (aktion: string) =>
+        mitTenant(tenant, (tx) =>
+          tx.auditEvent.findMany({ where: { objektId: kontrolleId, aktion } }),
+        );
+      const stand = await mitTenant(tenant, (tx) =>
+        tx.kontrolleStand.findFirstOrThrow({ where: { kontrolleId, gueltigBis: null } }),
+      );
+      const geplant = await mitTenant(tenant, (tx) =>
+        tx.durchfuehrung.count({ where: { kontrolleId, status: 'GEPLANT' } }),
+      );
+      return { x, r, code, kontrolleId, ev, stand, geplant };
+    }
+
+    it('bestehende Kontrolle mit freigegebener Abweichung unter der neuen Mindestfrequenz: aufgehoben, neu geplant, protokolliert (Befunde 3, 35)', async () => {
+      const { x, r, code, kontrolleId, ev, stand, geplant } = await mitBestehenderKontrolle(true);
+      expect(r.verknuepft).toContain(code);
+      expect(r.neuGeplant).toContainEqual(
+        expect.objectContaining({ code, vorher: 'KEIN', nachher: 'MONATLICH' }),
+      );
+      expect([stand.abweichungTurnus, stand.abweichungFreigegebenVon]).toEqual([null, null]);
+      expect(geplant).toBeGreaterThan(0);
+      for (const aktion of [
+        'tcms.kontrolle.abweichung_aufgehoben',
+        'tcms.kontrolle.risiko_verknuepft',
+        'tcms.kontrolle.frequenz_geaendert',
+        'tcms.kontrolle.neu_geplant',
+      ])
+        expect(await ev(aktion), aktion).toHaveLength(1);
+      const aufgenommen = await mitTenant(tenant, (tx) =>
+        tx.auditEvent.findFirstOrThrow({
+          where: { objektId: r.risikoId, aktion: 'tcms.risiko.aufgenommen' },
+        }),
+      );
+      expect(aufgenommen.detail).toMatchObject({ verknuepft: [code], neueKontrollen: [] });
+      // Die Kontrollspur zeigt das neue Risiko.
+      const d = await rufe(akteureVon(x).hb, (ctx) =>
+        ladeKontrolle(ctx, { mandantId: x.mandantId, kontrolleId }),
+      );
+      expect(d.kontrolle.risikoIds).toContain(r.risikoId);
+      expect(d.audit.map((z) => z.aktion)).toContain('tcms.kontrolle.risiko_verknuepft');
+    }, 60_000);
+
+    it('bestehende Kontrolle mit offener Abweichung: Planung folgt der abgeleiteten Frequenz, Antrag bleibt (Befund 3)', async () => {
+      const { r, code, ev, stand, geplant } = await mitBestehenderKontrolle(false);
+      expect(r.neuGeplant).toContainEqual(
+        expect.objectContaining({ code, vorher: 'KEIN', nachher: 'MONATLICH' }),
+      );
+      expect([stand.abweichungTurnus, stand.abweichungFreigegebenVon]).toEqual(['JAEHRLICH', null]);
+      expect(geplant).toBeGreaterThan(0);
+      expect(await ev('tcms.kontrolle.abweichung_aufgehoben')).toHaveLength(0);
+      expect(await ev('tcms.kontrolle.frequenz_geaendert')).toHaveLength(1);
     }, 60_000);
 
     it('TS-05: zwei gleichzeitige Aufnahmen → genau eine', async () => {
