@@ -45,8 +45,10 @@ import {
   monatSchluessel,
   pruflast,
   statusAm,
+  summeEur,
   ueber,
   type Abschnitt,
+  type DurchfuehrungImBetrieb,
   type AnzeigeStatus,
   type BetriebsStand,
   type Design,
@@ -716,7 +718,7 @@ function berechne(
 
   const alleDurchf: (DurchfuehrungView & {
     periodeVonRaw: Date;
-    zeit: Parameters<typeof statusAm>[0];
+    zeit: DurchfuehrungImBetrieb;
   })[] = [];
   for (const k of programm.kontrollen) {
     const ks = kontrollStandJe.get(k.id);
@@ -726,12 +728,17 @@ function berechne(
         ausgeblendet++;
         continue;
       }
-      const zeit = {
+      const zeit: DurchfuehrungImBetrieb = {
+        id: d.id,
+        nachtragZuId: d.nachtragZuId,
+        angelegtAm: d.createdAt,
+        periodeVon: d.periodeVon,
         status: d.status,
         periodeBis: d.periodeBis,
         faelligAm: d.faelligAm,
         begonnenAm: d.begonnenAm,
         eingereichtAm: d.eingereichtAm,
+        zurueckgewiesenAm: d.zurueckgewiesenAm,
         abgeschlossenAm: d.abgeschlossenAm,
         entfallenAm: d.entfallenAm,
       };
@@ -823,8 +830,9 @@ function berechne(
     const frequenz = abweichung?.freigegebenVon ? abweichung.frequenz : ableitung.effektiv;
     const eigene = alleDurchf.filter((d) => d.kontrolleId === k.id);
     for (const d of eigene) d.gt = ableitung.gt;
+    // Reihenfolge legt die Domain fest (Periode, Nachtrag vor Original, Anlage, ID).
     const betrieb = betriebsStand(
-      eigene.map((d) => ({ ...d.zeit, periodeVon: d.periodeVonRaw })),
+      eigene.map((d) => d.zeit),
       stand,
     );
     const sortiert = [...eigene].sort((a, b) => a.faelligAm.getTime() - b.faelligAm.getTime());
@@ -1120,8 +1128,9 @@ function berechne(
     }))
     .sort((a, b) => b.fernverkaeufeLfdEur - a.fernverkaeufeLfdEur);
   const euLaender = laender.filter((l) => istEuAusland(l.land));
-  const fernverkaeufeLfd = euLaender.reduce((s, l) => s + l.fernverkaeufeLfdEur, 0);
-  const fernverkaeufeVorjahr = euLaender.reduce((s, l) => s + l.fernverkaeufeVorjahrEur, 0);
+  // Auf den Cent genau summiert: Gleitkommasummen lägen an der Schwelle knapp daneben.
+  const fernverkaeufeLfd = summeEur(euLaender.map((l) => l.fernverkaeufeLfdEur));
+  const fernverkaeufeVorjahr = summeEur(euLaender.map((l) => l.fernverkaeufeVorjahrEur));
   const laenderStand = laender.reduce<Date | null>(
     (m, l) => (!m || l.stand > m ? l.stand : m),
     null,

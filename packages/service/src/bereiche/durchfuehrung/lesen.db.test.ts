@@ -27,7 +27,7 @@ import {
   weiseDurchfuehrungZurueck,
 } from './operationen';
 import { akteure, baueFall, fehlerVon, PORTS, verweis, type Fall } from './testfall';
-import { imDienst } from '../../kontext';
+import { imDienst, kalendertag } from '../../kontext';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 const BEGRUENDUNG = 'Begründung mit ausreichend vielen Zeichen für die Prüfung.';
@@ -153,6 +153,66 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
       });
       expect(alsPruefer.rechte.zurueckweisen.erlaubt).toBe(true);
       expect(alsPruefer.rechte.bearbeiten.erlaubt).toBe(false);
+    });
+
+    it('historischer Status nach Zurückweisung: Zeitpunkt gespeichert, Tage nach Berliner Kalender (Befunde 84, 85)', async () => {
+      // Jede Handlung mit eigener fachlicher Uhr; „heute" ist ihr Berliner Kalendertag.
+      const am = <T>(iso: string, wer: Akteur, fn: (ctx: DienstKontext) => Promise<T>) =>
+        imDienst(
+          wer,
+          {
+            ...PORTS,
+            uhr: { jetzt: () => new Date(iso), heute: () => kalendertag(new Date(iso)) },
+          },
+          fn,
+        );
+      const did = await f.durchfuehrung('k1'); // fällig 30.10.
+      await am('2026-10-03T08:00:00Z', a.bearbeiter, (ctx) =>
+        speichereDurchfuehrung(ctx, { ...ziel(did), ...SPEICHERN }),
+      );
+      await am('2026-10-03T08:05:00Z', a.bearbeiter, (ctx) =>
+        haengeNachweisAn(ctx, { ...ziel(did), verweis: verweis() }),
+      );
+      await am('2026-10-05T08:00:00Z', a.bearbeiter, (ctx) =>
+        reicheDurchfuehrungEin(ctx, ziel(did)),
+      );
+      // 12.10.2026, 00:30 Uhr MESZ
+      const zurueckAm = '2026-10-11T22:30:00.000Z';
+      await am(zurueckAm, a.pruefer, (ctx) =>
+        weiseDurchfuehrungZurueck(ctx, { ...ziel(did), begruendung: BEGRUENDUNG }),
+      );
+      const zeile = async () =>
+        f.tx((tx) =>
+          tx.durchfuehrung.findFirstOrThrow({
+            where: { id: did },
+            select: { zurueckgewiesenAm: true, status: true },
+          }),
+        );
+      expect((await zeile()).zurueckgewiesenAm?.toISOString()).toBe(zurueckAm);
+      const anzeige = async (stand: string) =>
+        (await f.dienst(a.bt, (ctx) => ladeDurchfuehrung(ctx, { ...ziel(did), stand }))).anzeige;
+      expect(await anzeige('2026-10-04')).toBe('IN_DURCHFUEHRUNG');
+      expect(await anzeige('2026-10-07')).toBe('ZUR_GEGENZEICHNUNG');
+      // 00:30 Uhr Berliner Zeit gehört zum 12.10., nicht zum UTC-Tag 11.10.
+      expect(await anzeige('2026-10-11')).toBe('ZUR_GEGENZEICHNUNG');
+      expect(await anzeige('2026-10-12')).toBe('ZURUECKGEWIESEN');
+      const historisch = await f.dienst(a.bt, (ctx) =>
+        ladeDurchfuehrung(ctx, { ...ziel(did), stand: '2026-10-11' }),
+      );
+      expect(historisch.zurueckgewiesenAm).toBeNull();
+
+      // Erneute Einreichung lässt den Zeitpunkt der Zurückweisung stehen.
+      await am('2026-10-14T08:00:00Z', a.bearbeiter, (ctx) =>
+        reicheDurchfuehrungEin(ctx, ziel(did)),
+      );
+      expect(await zeile()).toEqual({
+        zurueckgewiesenAm: new Date(zurueckAm),
+        status: 'ZUR_GEGENZEICHNUNG',
+      });
+      expect(await anzeige('2026-10-13')).toBe('ZURUECKGEWIESEN');
+      expect(await anzeige('2026-10-14')).toBe('ZUR_GEGENZEICHNUNG');
+      const aktuell = await f.dienst(a.bt, (ctx) => ladeDurchfuehrung(ctx, ziel(did)));
+      expect(aktuell.zurueckgewiesenAm).toBe(zurueckAm);
     });
 
     it('Namen über das Personenverzeichnis des Kontexts (Demo), im Dienst leer', async () => {

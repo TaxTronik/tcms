@@ -8,6 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { LaenderSchema, type Akteur, type LandEingabe } from '@tcms/contract';
+import { ladeKontext } from '../../kern/tcms-kontext';
 import { fuegeLandHinzu, ladeLaender, speichereLandStaende } from './laender';
 import {
   akteure,
@@ -144,6 +145,43 @@ describe.skipIf(!AKTIV)('Länder-Monitor gegen PostgreSQL', () => {
       tx.ereignis.findMany({ where: { nummer: { in: r.ereignisse } }, select: { typ: true } }),
     );
     expect(typen.map((t) => t.typ)).toContain('T-04');
+  });
+
+  it('Lieferschwelle genau 10.000,00 €: auf den Cent summiert, nicht überschritten (Befund 83)', async () => {
+    // Eigene Welt: nur diese drei EU-Länder. Als Gleitkommasumme 10000.000000000002.
+    const v = await baueWelt();
+    const B = akteure(v);
+    for (const code of ['AT', 'FR', 'PL'])
+      await im(B.hb, (ctx) =>
+        fuegeLandHinzu(ctx, {
+          mandantId: v.mandant,
+          datenstand: '2026-10-01',
+          land: land(code, { fernverkaeufeLfdEur: 100, fernverkaeufeVorjahrEur: 0 }),
+        }),
+      );
+    const r = await im(B.hb, (ctx) =>
+      speichereLandStaende(ctx, {
+        mandantId: v.mandant,
+        datenstand: '2026-10-10',
+        laender: [
+          land('AT', { fernverkaeufeLfdEur: 4_885.13, fernverkaeufeVorjahrEur: 0 }),
+          land('FR', { fernverkaeufeLfdEur: 3_513.34, fernverkaeufeVorjahrEur: 0 }),
+          land('PL', { fernverkaeufeLfdEur: 1_601.53, fernverkaeufeVorjahrEur: 0 }),
+        ],
+      }),
+    );
+    const t04 = await inTenant(v, (tx) =>
+      tx.ereignis.findMany({
+        where: { nummer: { in: r.ereignisse }, typ: 'T-04' },
+        select: { titel: true },
+      }),
+    );
+    expect(t04.map((e) => e.titel)).toEqual([
+      expect.stringMatching(/^Lieferschwelle 100 % erreicht/),
+    ]);
+    const k = await im(B.hb, (ctx) => ladeKontext(ctx, { mandantId: v.mandant }));
+    expect(k?.fernverkaeufeLfd).toBe(10_000);
+    expect(k?.schwelle.status).toBe('WARNUNG');
   });
 
   it('Lesen: Historie zum Stichtag, keine vertraulichen Feststellungen; vertragskonform', async () => {

@@ -16,7 +16,7 @@ import {
   type AnlageVerweis,
 } from '@tcms/contract';
 import { schreibeAudit } from '@tcms/db';
-import type { DienstKontext } from '../../kontext';
+import { imDienst, kalendertag, type DienstKontext } from '../../kontext';
 import {
   beantrageEreignisVerwerfen,
   bestaetigeEreignisVerwerfen,
@@ -43,6 +43,7 @@ import {
   gleichzeitig,
   im,
   inTenant,
+  PORTS,
   type Welt,
 } from './testwelt';
 
@@ -856,6 +857,23 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
     }
     for (const a of [A.gv, A.ohneBezug, A.fremdBezug, A.leerTenant])
       expect((await fehlerVon(erfasse(a))).code).toBe('NICHT_GEFUNDEN');
+  });
+
+  it('Ereignisnummer: Jahr nach Berliner Kalendertag (31.12. 23:30 UTC ist schon der 01.01.)', async () => {
+    const jetzt = new Date('2026-12-31T23:30:00Z');
+    const uhr = { jetzt: () => jetzt, heute: () => kalendertag(jetzt) };
+    expect(uhr.heute()).toBe('2027-01-01');
+    const r = await imDienst(A.hb, { ...PORTS, uhr }, (ctx) =>
+      erfasseEreignis(ctx, {
+        mandantId: w.mandant,
+        typ: 'T-05',
+        quelle: 'MANUELL',
+        titel: 'USt-Sonderprüfung angekündigt',
+        beschreibung: 'Prüfungsanordnung für Q4 2026 liegt vor.',
+        datum: '2026-12-31',
+      }),
+    );
+    expect(r.nummer.startsWith('2027-T-')).toBe(true);
   });
 
   // ---------------------------------------------------------------------------

@@ -87,6 +87,64 @@ describe('Profilregeln', () => {
     expect(ereignisseFuerAenderung(alt, profil())).toEqual([]);
   });
 
+  it('Änderung unter 1 € über die Lieferschwelle ist eine Änderung (Werte, nicht Anzeigezeilen)', () => {
+    for (const [vorher, nachher] of [
+      [9_999.6, 10_000.4],
+      [10_000, 10_000.49],
+      [7_999.6, 8_000.4],
+    ] as const) {
+      const alt = profil();
+      const neu = profil();
+      alt.p10.euFernverkaeufeLfdEur = vorher;
+      neu.p10.euFernverkaeufeLfdEur = nachher;
+      expect(gleichesProfil(alt, neu)).toBe(false);
+      // Die Anzeige nennt den Unterschied auf den Cent.
+      expect(profilDiff(alt, neu).map((d) => d.nr)).toEqual(['P10']);
+    }
+    const alt = profil();
+    const neu = profil();
+    alt.p10 = { ...alt.p10, euFernverkaeufeVorjahrEur: 0, euFernverkaeufeLfdEur: 9_999.6 };
+    neu.p10 = { ...neu.p10, euFernverkaeufeVorjahrEur: 0, euFernverkaeufeLfdEur: 10_000.4 };
+    expect(ereignisseFuerAenderung(alt, neu)).toEqual([{ typ: 'T-04', frage: 'p10' }]);
+    const [zeile] = profilDiff(alt, neu)[0]!.neu;
+    expect(zeile).toMatch(/^EU-Fernverkäufe laufendes Jahr: 10\.000,40\s€$/);
+    // Unterhalb eines Cents: kein Unterschied.
+    neu.p10.euFernverkaeufeLfdEur = 9_999.601;
+    expect(gleichesProfil(alt, neu)).toBe(true);
+  });
+
+  it('gleichesProfil: Reihenfolge, Duplikate und Angaben ohne Wirkung sind keine Änderung', () => {
+    const alt = profil();
+    const neu = profil();
+    neu.p1.marktplaetze = ['Amazon', 'Amazon'];
+    neu.p2.lager = [...alt.p2.lager].reverse();
+    neu.p3.laender = ['PL', 'FR', 'AT', 'DE'];
+    neu.p6.zahlungswege = ['Klarna', 'PayPal'];
+    expect(gleichesProfil(alt, neu)).toBe(true);
+    expect(ereignisseFuerAenderung(alt, neu)).toEqual([]);
+
+    // Zollabwicklung ohne Drittlandimport hat keine Wirkung …
+    alt.p5 = { drittlandImport: false, laender: [], zollabwicklung: 'Spediteur' };
+    neu.p5 = { drittlandImport: false, laender: [], zollabwicklung: 'selbst' };
+    expect(gleichesProfil(alt, neu)).toBe(true);
+    // … mit Drittlandimport ist sie eine Änderung (T-10).
+    alt.p5 = { drittlandImport: true, laender: ['CN'], zollabwicklung: 'Spediteur' };
+    neu.p5 = { drittlandImport: true, laender: ['CN'], zollabwicklung: 'selbst' };
+    expect(gleichesProfil(alt, neu)).toBe(false);
+    expect(ereignisseFuerAenderung(alt, neu).map((e) => e.typ)).toEqual(['T-10']);
+  });
+
+  it('gleichesProfil: Platzhalter der Systeme (P8) wie in der Anzeige', () => {
+    const alt = profil();
+    const neu = profil();
+    alt.p8.systeme = [{ art: '', name: 'Shopware', version: '' }];
+    neu.p8.systeme = [{ art: 'System', name: 'Shopware', version: '—' }];
+    expect(gleichesProfil(alt, neu)).toBe(true);
+    neu.p8.systeme = [{ art: 'System', name: 'Shopware', version: '6.5' }];
+    expect(gleichesProfil(alt, neu)).toBe(false);
+    expect(profilDiff(alt, neu).map((d) => d.nr)).toEqual(['P8']);
+  });
+
   it('Inhaltsgleichheit unabhängig von der Schlüsselreihenfolge', () => {
     expect(inhaltGleich({ a: 1, b: [1, { c: 2, d: 3 }] }, { b: [1, { d: 3, c: 2 }], a: 1 })).toBe(
       true,

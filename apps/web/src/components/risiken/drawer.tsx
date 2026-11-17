@@ -18,6 +18,7 @@ import {
   NORMSTUFE_LABEL,
   REICHWEITE_LABEL,
   SCHADEN_LABEL,
+  tagesende,
   WAHRSCHEINLICHKEIT_LABEL,
   type FolgeArt,
   type Klasse,
@@ -147,7 +148,7 @@ export function RisikoDrawer({
     standId: r.standId,
   };
 
-  const ende = ctx.stand.getTime() + 86_400_000 - 1;
+  const ende = tagesende(ctx.stand).getTime();
   // Status zum Stichtag: später entschiedene Übersteuerungen galten dort noch als beantragt.
   const uebersteuerungen = r.uebersteuerungen.map((u) =>
     u.entschiedenAm && u.entschiedenAm.getTime() > ende

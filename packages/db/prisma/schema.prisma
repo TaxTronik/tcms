@@ -460,6 +460,9 @@ model Durchfuehrung {
   gegengezeichnetVon   String?
   abgeschlossenAm      DateTime?
   zurueckgewiesenVon   String?
+  /// Letzte Zurückweisung (fachliche Zeit); bleibt nach erneuter Einreichung
+  /// stehen, damit historische Stichtage den damaligen Status zeigen.
+  zurueckgewiesenAm    DateTime?
   zurueckweisungsgrund String?
   entfallenBegruendung String?
   entfallenVon         String?

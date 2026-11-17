@@ -400,6 +400,7 @@ export async function ladeFeststellung(
             faelligAm: nk.faelligAm,
             begonnenAm: nk.begonnenAm,
             eingereichtAm: nk.eingereichtAm,
+            zurueckgewiesenAm: nk.zurueckgewiesenAm,
             abgeschlossenAm: nk.abgeschlossenAm,
             entfallenAm: nk.entfallenAm,
           },

@@ -4,6 +4,7 @@
 // =============================================================================
 
 import type { Turnus } from './frequenz';
+import { kalendertagVon } from './kalender';
 
 export const MONATE = [
   'Januar',
@@ -77,10 +78,13 @@ export function perioden(turnus: Turnus, von: Date, bis: Date): Periode[] {
   return out;
 }
 
+/** Monat des Kalendertags (Europe/Berlin) als `YYYY-MM`. */
 export function monatSchluessel(d: Date): string {
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  const t = kalendertagVon(d);
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
 export function monatLabel(d: Date): string {
-  return `${MONATE[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  const t = kalendertagVon(d);
+  return `${MONATE[t.getUTCMonth()]} ${t.getUTCFullYear()}`;
 }

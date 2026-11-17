@@ -1,6 +1,7 @@
 export * from './types';
 export * from './frequenz';
 export * from './bewertung';
+export * from './kalender';
 export * from './status';
 export * from './phasen';
 export * from './grundelemente';

@@ -446,7 +446,7 @@ export async function weiseDurchfuehrungZurueck(
   eingabe: DurchfuehrungBegruendungEingabe,
 ): Promise<DurchfuehrungUebergang> {
   const e = pruefeEingabe(DurchfuehrungBegruendungEingabeSchema, eingabe);
-  return ausfuehren(ctx, async (tx) => {
+  return ausfuehren(ctx, async (tx, zeitpunkt) => {
     const lage = await ladeLage(ctx, e, { sperren: true });
     verlange(lage.rechte.zurueckweisen);
     await uebergang(
@@ -456,6 +456,8 @@ export async function weiseDurchfuehrungZurueck(
       {
         status: 'ZURUECKGEWIESEN',
         zurueckgewiesenVon: ctx.akteur.id,
+        // Stichtage zwischen Einreichung und Zurückweisung zeigen „zur Gegenzeichnung" (statusAm).
+        zurueckgewiesenAm: zeitpunkt,
         zurueckweisungsgrund: e.begruendung,
         mandantBestaetigtVon: null,
       },

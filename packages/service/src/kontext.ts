@@ -32,20 +32,11 @@ export interface Uhr {
   heute(): string;
 }
 
-/** Zeitzone für „heute": Fristen und Stichtage gelten nach deutschem Kalendertag. */
-export const ZEITZONE = 'Europe/Berlin';
-
-const tagFormat = new Intl.DateTimeFormat('en-CA', {
-  timeZone: ZEITZONE,
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-});
-
-/** Kalendertag (Europe/Berlin) eines Zeitpunkts als `YYYY-MM-DD`. */
-export function kalendertag(zeitpunkt: Date): string {
-  return tagFormat.format(zeitpunkt);
-}
+// Zeitzone und Kalendertag (Europe/Berlin): eine Implementierung in
+// `@tcms/domain` (kalender.ts) für „heute", Stichtagsgrenzen und die Einordnung
+// von Zeitpunkten.
+import { kalendertag } from '@tcms/domain';
+export { kalendertag, ZEITZONE } from '@tcms/domain';
 
 /** Echte Uhr des Dienstes. `TCMS_DEMO_TODAY` wirkt hier nie (ADR 0001 §7). */
 export const echteUhr: Uhr = {

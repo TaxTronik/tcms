@@ -38,6 +38,7 @@ import {
   EREIGNISTYPEN,
   ereignistyp,
   ereignisErledigt,
+  kalenderjahr,
   FOLGE_LABEL,
   type FolgeArt,
 } from '@tcms/domain';
@@ -84,7 +85,7 @@ export async function legeEreignisAn(
     zeitpunkt: Date;
   },
 ): Promise<{ id: string; nummer: string; folgen: number }> {
-  const nummer = await naechsteEreignisnummer(tx, a.zeitpunkt.getUTCFullYear());
+  const nummer = await naechsteEreignisnummer(tx, kalenderjahr(a.zeitpunkt));
   const kat = ereignistyp(a.typ);
   const folgen: { art: FolgeArt; ziel: string | null; text: string }[] = kat
     ? kat.folgen.map((f) => ({ art: f.art, ziel: f.ziel ?? null, text: f.text }))
