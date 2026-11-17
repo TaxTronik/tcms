@@ -406,15 +406,23 @@ export async function vorgeschlagenesRisikoAufnehmen(
           ? [{ id: e.verantwortliche.vertretung.id, feld: 'verantwortliche.vertretung' }]
           : []),
       ]);
-      // Nur deterministische Vorschläge des offenen Profilstands (mit Grund).
-      const profilStand = await tx.profilStand.findFirst({
-        where: { programmId: programm.id, gueltigBis: null },
-        orderBy: { gueltigAb: 'desc' },
+      // Nur deterministische Vorschläge (mit Grund): des offenen Profilstands (auch
+      // eines im Voraus erfassten, wie die Profilseite der Demo) oder des heute
+      // gültigen Stands, den der Lesepfad `ladeProfil.vorschlaege` nennt (Befund 14).
+      const staende = await tx.profilStand.findMany({
+        where: { programmId: programm.id },
+        orderBy: [{ gueltigAb: 'desc' }, { id: 'asc' }],
       });
-      if (!profilStand) throw konflikt('Kein Profilstand vorhanden.');
-      const vorschlag = schlageRisikenVor(
-        profilStand.antworten as unknown as Geschaeftsprofil,
-      ).find((v) => v.code === e.code);
+      const offen = staende.find((s) => s.gueltigBis == null);
+      if (!offen) throw konflikt('Kein Profilstand vorhanden.');
+      const heuteGueltig = gueltigerStand(staende, zeitpunkt);
+      const vorschlagAus = (s: (typeof staende)[number] | undefined) =>
+        s
+          ? schlageRisikenVor(s.antworten as unknown as Geschaeftsprofil).find(
+              (v) => v.code === e.code,
+            )
+          : undefined;
+      const vorschlag = vorschlagAus(offen) ?? vorschlagAus(heuteGueltig);
       if (!vorschlag) {
         throw new DienstFehler(
           'UNGUELTIG',

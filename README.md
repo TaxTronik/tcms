@@ -435,7 +435,9 @@ antwortet der Dienst mit `409 KONFLIKT`; gleichzeitige Entscheidungen wirken gen
 Frequenzabweichung) zurück; freigeben darf sie nicht. Eine Übersteuerung gilt nur für den
 berechneten Wert, gegen den sie freigegeben wurde: Ändert er sich (Neubewertung, Designbeurteilung,
 Betrieb der Kontrollen), ist sie `ueberholt` und es gilt der berechnete Wert; die Freigabe eines
-Antrags mit inzwischen anderem berechneten Wert ergibt `409`.
+Antrags mit inzwischen anderem berechneten Wert ergibt `409`. Die Inventarfreigabe nennt je Risiko
+den gesehenen Stand (`risiken: [{ risikoId, standId }]`); ein inzwischen neu bewertetes Risiko wird
+übersprungen. Eine Neubewertung mit geänderten Werten zieht eine offene Risikoakzeptanz zurück.
 Kontrollen (Kontrollmatrix, Kontrolldetail und Kontext) tragen neben `pflichtattributeOk` die Liste
 `pflichtattributeLuecken` (feste Texte `PFLICHTATTRIBUT_LUECKEN`: Ziel, Schritte, Nachweisanforderung,
 durchführende Person, verschiedene Vertretung, Gegenzeichnung bei Schlüsselkontrollen); beide Felder

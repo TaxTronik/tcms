@@ -385,6 +385,38 @@ describe.skipIf(!AKTIV)('Geschäftsprofil: Fachoperationen', () => {
       expect(await ev('tcms.kontrolle.frequenz_geaendert')).toHaveLength(1);
     }, 60_000);
 
+    it('Vorab-Stand: ein heute gültiger Vorschlag (Lesepfad) lässt sich weiter aufnehmen (Befund 14)', async () => {
+      const x = await legeProgrammAn(tenant);
+      const ax = akteureVon(x);
+      const st = await offenerStand(x);
+      // Ab in 30 Tagen nur noch Inland: der offene Vorschlag entfällt erst dann.
+      const kuenftig = structuredClone(x.profil);
+      kuenftig.p3 = { ...kuenftig.p3, laender: ['DE'] };
+      expect(schlageRisikenVor(kuenftig).some((v) => v.code === x.offenerVorschlag)).toBe(false);
+      const spaeter = new Date(Date.parse(`${HEUTE}T00:00:00.000Z`) + 30 * 86_400_000)
+        .toISOString()
+        .slice(0, 10);
+      await rufe(ax.hb, (ctx) =>
+        profilAendern(ctx, {
+          mandantId: x.mandantId,
+          profilStandId: st.id,
+          profil: kuenftig,
+          gueltigAb: spaeter,
+          ereignisseAnlegen: false,
+        }),
+      );
+      const p = await rufe(ax.hb, (ctx) => ladeProfil(ctx, { mandantId: x.mandantId }));
+      expect(p.vorschlaege.map((v) => v.code)).toContain(x.offenerVorschlag);
+      const r = await rufe(ax.hb, (ctx) =>
+        vorgeschlagenesRisikoAufnehmen(ctx, {
+          mandantId: x.mandantId,
+          code: x.offenerVorschlag,
+          verantwortliche: verantwortliche(x),
+        }),
+      );
+      expect(r.code).toBe(x.offenerVorschlag);
+    }, 60_000);
+
     it('TS-05: zwei gleichzeitige Aufnahmen → genau eine', async () => {
       const x = await legeProgrammAn(tenant);
       const ax = akteureVon(x);
