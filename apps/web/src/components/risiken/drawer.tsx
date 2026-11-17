@@ -140,7 +140,12 @@ export function RisikoDrawer({
     !!ctx.programm?.wirksamAb && ctx.programm.wirksamAb.getTime() <= ctx.stand.getTime();
   const turnus = ctx.programm?.erklaerungsTurnus ?? 'MONATLICH';
   // Mandant und gesehener Risikostand (TS-05) gehen mit jeder Aktion mit.
-  const felder = { id: r.id, stand: seite.standIso, mandantId: ctx.mandant.id, standId: r.standId };
+  const felder = {
+    id: r.id,
+    stand: seite.standFeld,
+    mandantId: ctx.mandant.id,
+    standId: r.standId,
+  };
 
   const ende = ctx.stand.getTime() + 86_400_000 - 1;
   // Status zum Stichtag: später entschiedene Übersteuerungen galten dort noch als beantragt.
@@ -537,8 +542,8 @@ export function RisikoDrawer({
             </div>
           )}
           <p className="text-11 text-muted">
-            Netto (Design): −1 bei mindestens einer angemessen beurteilten Kontrolle, −2 bei
-            präventiver und detektiver oder präventiver Schlüsselkontrolle. Netto (Betrieb):
+            Netto (Design): −1 bei mindestens einer Kontrolle mit Designbeurteilung „angemessen“, −2
+            bei präventiver und detektiver oder präventiver Schlüsselkontrolle. Netto (Betrieb):
             Abschlag zählt nur bei letzter fälliger Durchführung ohne Befund und gegengezeichnet.{' '}
             {betriebAktiv
               ? 'Für den Risikoappetit gilt Netto (Betrieb).'
@@ -660,7 +665,7 @@ export function RisikoDrawer({
             </p>
           ) : null}
           {uebersteuerungen.map((u) => {
-            const wirksam = wirksamU(u.sicht)?.id === u.id;
+            const geltend = wirksamU(u.sicht)?.id === u.id;
             const darf = zweitePerson(nutzer, u.beantragtVon);
             const grund =
               sperre ??
@@ -682,8 +687,8 @@ export function RisikoDrawer({
                       {UEBERSTEUERUNG_STATUS_LABEL[u.status]}
                     </span>
                     {u.status === 'FREIGEGEBEN' ? (
-                      <span className={wirksam ? 'badge-brand' : 'badge-gray'}>
-                        {wirksam ? 'gilt' : 'abgelöst'}
+                      <span className={geltend ? 'badge-brand' : 'badge-gray'}>
+                        {geltend ? 'gilt' : 'abgelöst'}
                       </span>
                     ) : null}
                   </span>
@@ -701,7 +706,7 @@ export function RisikoDrawer({
                       <input type="hidden" name="id" value={u.id} />
                       <input type="hidden" name="mandantId" value={ctx.mandant.id} />
                       <input type="hidden" name="entscheidung" value="freigeben" />
-                      <input type="hidden" name="stand" value={seite.standIso} />
+                      <input type="hidden" name="stand" value={seite.standFeld} />
                       <SubmitButton
                         className="btn-primary btn-tiny"
                         disabled={!!grund}
@@ -717,7 +722,7 @@ export function RisikoDrawer({
                       felder={{
                         id: u.id,
                         entscheidung: 'ablehnen',
-                        stand: seite.standIso,
+                        stand: seite.standFeld,
                         mandantId: ctx.mandant.id,
                       }}
                       bestaetigen="Ablehnen"
@@ -784,7 +789,7 @@ export function RisikoDrawer({
               <input type="hidden" name="ids" value={r.id} />
               <input type="hidden" name="mandantId" value={ctx.mandant.id} />
               <input type="hidden" name="aktion" value="einreichen" />
-              <input type="hidden" name="stand" value={seite.standIso} />
+              <input type="hidden" name="stand" value={seite.standFeld} />
               <SubmitButton
                 className="btn-primary btn-tiny"
                 disabled={!!sperre}
@@ -800,7 +805,7 @@ export function RisikoDrawer({
                 <input type="hidden" name="ids" value={r.id} />
                 <input type="hidden" name="mandantId" value={ctx.mandant.id} />
                 <input type="hidden" name="aktion" value="freigeben" />
-                <input type="hidden" name="stand" value={seite.standIso} />
+                <input type="hidden" name="stand" value={seite.standFeld} />
                 <SubmitButton
                   className="btn-primary btn-tiny"
                   disabled={!!sperre || !istZweite}

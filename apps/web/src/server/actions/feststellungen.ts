@@ -18,6 +18,7 @@ import {
 import { demoPerson } from '../demo';
 import type { Ergebnis } from '../ergebnis';
 import { dienstAktion, eingabe, feld, optional } from '../feststellungen-daten';
+import { betrag } from '../formular';
 import { brauchtKanzleiFuer } from '../sitzung';
 
 // =============================================================================
@@ -92,18 +93,15 @@ export async function aktualisiereWuerdigung(_prev: Ergebnis, fd: FormData): Pro
   );
 }
 
-/** Betrag aus deutscher Schreibweise; leer → null, keine Zahl → undefined. */
-function betrag(roh: string): number | null | undefined {
-  const s = roh.trim();
-  if (!s) return null;
-  const zahl = Number(s.replace(/\./g, '').replace(',', '.'));
-  return Number.isFinite(zahl) ? zahl : undefined;
-}
-
 export async function fuegeErklaerungHinzu(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
   const { mandantId, akteur } = await kanzlei(fd);
-  const auswirkungEur = betrag(feld(fd, 'auswirkungEur'));
-  if (auswirkungEur === undefined) return { fehler: 'Die geschätzte Auswirkung ist keine Zahl.' };
+  // Ein Parser für alle Beträge (deutsche Schreibweise, mehrdeutige Eingaben abgewiesen).
+  const auswirkungEur = betrag(fd.get('auswirkungEur'));
+  if (auswirkungEur === 'fehler')
+    return {
+      fehler:
+        'Die geschätzte Auswirkung ist kein Betrag in deutscher Schreibweise (z. B. 1.234,56).',
+    };
   return dienstAktion(
     akteur,
     mandantId,

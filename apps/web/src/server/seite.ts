@@ -15,6 +15,11 @@ export interface StaffSeite {
   darfBearbeiten: boolean;
   darfWuerdigen: boolean;
   standIso: string;
+  /**
+   * Wert des versteckten Formularfelds `stand`: der Stichtag nur im
+   * historischen Stand, sonst leer (`ausHistorischemStand` in formular.ts).
+   */
+  standFeld: string;
   heuteIso: string;
   /** Basis-URL des Mandanten-TCMS, z. B. /staff/clients/abc/tcms */
   basis: string;
@@ -47,6 +52,7 @@ export async function ladeStaffSeite(
     darfBearbeiten: rechte.bearbeiten,
     darfWuerdigen: rechte.wuerdigen,
     standIso,
+    standFeld: ctx.historisch ? standIso : '',
     heuteIso: isoDatum(ctx.heute),
     basis: `/staff/clients/${id}/tcms`,
     mitStand,

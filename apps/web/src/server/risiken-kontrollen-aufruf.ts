@@ -3,7 +3,6 @@ import { DienstFehler } from '@tcms/contract';
 import { imDienst, type DienstKontext } from '@tcms/service';
 import { DEMO_PORTS } from './demo';
 import { brauchtKanzleiFuer, demoAkteur } from './sitzung';
-import { leseStand } from './zeit';
 
 // =============================================================================
 // Aufrufe des Bereichs „risiken-kontrollen" aus der Demo (Server Actions und
@@ -18,12 +17,6 @@ import { leseStand } from './zeit';
 export function feld(fd: FormData, name: string): string {
   const v = fd.get(name);
   return typeof v === 'string' ? v : '';
-}
-
-/** Formular aus einem historischen Stichtag (Mutationen dort deaktiviert, AGENTS.md Regel 6). */
-export function historisch(fd: FormData): boolean {
-  const s = feld(fd, 'stand');
-  return s !== '' && leseStand(s).historisch;
 }
 
 export interface Meldungen {
@@ -63,7 +56,7 @@ export async function fuehreAus<T>(
 }
 
 /** Lesen im Dienstkontext der angemeldeten Person; ohne Sitzung oder Leserecht: null. */
-export async function lies<T>(
+export async function liesImDienst<T>(
   mandantId: string,
   fn: (ctx: DienstKontext) => Promise<T>,
 ): Promise<T | null> {

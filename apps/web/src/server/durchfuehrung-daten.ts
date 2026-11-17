@@ -1,12 +1,6 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
-import {
-  DF_MIN_BEGRUENDUNG,
-  DienstFehler,
-  gueltigerNachweisDateiname,
-  UNZULAESSIGE_ZEICHEN,
-  type PersonAkteur,
-} from '@tcms/contract';
+import { DF_MIN_BEGRUENDUNG, DienstFehler, type PersonAkteur } from '@tcms/contract';
 import { leseDatei } from '@tcms/db/demo-ablage';
 import type { AnzeigeStatus, Klasse } from '@tcms/domain';
 import {
@@ -34,7 +28,8 @@ import { aktualisiereMandant } from './aktion';
 import { DEMO_PORTS, demoAblage, demoPersonen, zustaendigkeit } from './demo';
 import type { Ergebnis } from './ergebnis';
 import { brauchtKanzleiFuer, brauchtPortal } from './sitzung';
-import { leseStand } from './zeit';
+import { dateinameBereinigt, mimeBereinigt } from './dateien';
+import { ausHistorischemStand } from './formular';
 
 // =============================================================================
 // Kontrolldurchführung (S8, P2) in der Demo: dünne Hülle um @tcms/service.
@@ -439,12 +434,6 @@ export function text(fd: FormData, key: string): string {
   return typeof v === 'string' ? v : '';
 }
 
-/** true, wenn das Formular aus einem historischen Stand gesendet wurde (Bedienung; der Service nimmt keinen Stichtag an). */
-export function ausHistorischemStand(fd: FormData): boolean {
-  const s = text(fd, 'stand');
-  return !!s && leseStand(s).historisch;
-}
-
 /**
  * Fehler des Service als Meldung der Action. Nicht sichtbare Objekte ergeben
  * immer dieselbe Meldung; andere Fehler werden weitergeworfen.
@@ -470,22 +459,6 @@ export function alsErgebnis(e: unknown, nichtGefunden: string): Ergebnis {
 /** Ports der Demo für das Anhängen: Der Service erhält nur Verweise (ADR 0001 §6). */
 export const VERWEIS_PORTS: DienstPorts = { ...DEMO_PORTS, ablage: verweisAblage };
 
-// Dieselben unzulässigen Zeichen wie der Vertrag (Steuer-, Richtungs-, Nullbreiten-,
-// Füllzeichen), dazu Anführungszeichen; Pfadanteile entfernt `split` unten.
-const RICHTUNG_UND_STEUER = new RegExp(UNZULAESSIGE_ZEICHEN, 'gu');
-const MIME = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/;
-
-function dateinameBereinigt(name: string): string {
-  const basis = name.split(/[\\/]/).pop() ?? '';
-  const sauber = basis.replace(RICHTUNG_UND_STEUER, '').replace(/"/g, '').trim().slice(0, 180);
-  return sauber && gueltigerNachweisDateiname(sauber) ? sauber : 'Nachweis';
-}
-
-function mimeBereinigt(typ: string): string {
-  const t = typ.toLowerCase();
-  return t.length <= 127 && MIME.test(t) ? t : 'application/octet-stream';
-}
-
 /**
  * Demo-Ablage (Stellvertreterin der Dokumentenpipeline der kanzleikonsole):
  * legt die Datei inhaltsadressiert ab und vergibt eine Dokument-ID (UUID).
@@ -498,7 +471,7 @@ export async function legeNachweisdateiAb(
 ): Promise<NachweisVerweis> {
   const v = await demoAblage.annehmen({
     art: 'DATEI',
-    dateiname: dateinameBereinigt(dateiname),
+    dateiname: dateinameBereinigt(dateiname, 'Nachweis'),
     mime: mimeBereinigt(mime),
     inhalt,
   });
