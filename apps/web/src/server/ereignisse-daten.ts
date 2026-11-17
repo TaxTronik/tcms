@@ -1,6 +1,9 @@
 import 'server-only';
+import { createHash } from 'node:crypto';
 import {
   DienstFehler,
+  PORTAL_MAX_ANLAGE_BYTES,
+  PORTAL_MAX_ANLAGEN,
   type AnlageVerweis,
   type EreignisDetail as DienstDetail,
 } from '@tcms/contract';
@@ -22,6 +25,8 @@ import {
   type EreignisStatus,
   type FolgeArt,
 } from '@tcms/domain';
+import { MAX_DATEI_BYTES } from '@/components/durchfuehrung/werte';
+import { dateinameBereinigt, mimeBereinigt } from './dateien';
 import { DEMO_PORTS, demoAblage } from './demo';
 import { demoAkteur } from './sitzung';
 
@@ -230,13 +235,59 @@ export async function ladeEreignisDetail(
 // Anlagen (Demo-Ablage; im Zielbild nimmt die kanzleikonsole Dateien an)
 // ----------------------------------------------------------------------------
 
-/** Demo: legt eine Anlage über den Ablage-Port ab und liefert den Verweis. */
-export function legeAnlageAb(
+/**
+ * Grenzen der Anlagen einer Portal-Meldung: Anzahl und Einzelgröße aus dem
+ * Vertrag, die Summe begrenzt das Body-Limit der Server Actions (eine Meldung
+ * ist eine Anfrage; next.config.mjs, geprüft in konfiguration.test.ts).
+ */
+export const ANLAGEN_GRENZEN = {
+  anzahl: PORTAL_MAX_ANLAGEN,
+  jeDateiBytes: PORTAL_MAX_ANLAGE_BYTES,
+  zusammenBytes: MAX_DATEI_BYTES,
+} as const;
+
+/** Anlage einer Portal-Meldung: Verweis und Inhalt, vor der Ablage. */
+export interface VorbereiteteAnlage {
+  verweis: NachweisVerweis;
+  inhalt: Buffer;
+}
+
+/**
+ * Bereitet eine Anlage vor, ohne sie abzulegen: bereinigter Dateiname (eine
+ * Regel mit den Nachweisen, `dateinameBereinigt`) und der Verweis, den die
+ * inhaltsadressierte Demo-Ablage vergibt (Dokument-ID = Ablagepfad
+ * `<2 Hex>/<SHA-256>`). So prüft die Action die Meldung, bevor etwas auf die
+ * Platte geschrieben wird; `legeAnlageAb` prüft, dass die Ablage denselben
+ * Verweis vergibt.
+ */
+export function bereiteAnlageVor(
   inhalt: Buffer,
   dateiname: string,
   mime: string,
-): Promise<NachweisVerweis> {
-  return demoAblage.annehmen({ art: 'DATEI', dateiname, mime, inhalt });
+): VorbereiteteAnlage {
+  const sha256 = createHash('sha256').update(inhalt).digest('hex');
+  return {
+    inhalt,
+    verweis: {
+      dokumentId: `${sha256.slice(0, 2)}/${sha256}`,
+      dateiname: dateinameBereinigt(dateiname, 'Anlage'),
+      mime: mimeBereinigt(mime),
+      groesse: inhalt.length,
+      sha256,
+    },
+  };
+}
+
+/** Demo: legt eine vorbereitete Anlage über den Ablage-Port ab. */
+export async function legeAnlageAb(a: VorbereiteteAnlage): Promise<void> {
+  const v = await demoAblage.annehmen({
+    art: 'DATEI',
+    dateiname: a.verweis.dateiname,
+    mime: a.verweis.mime,
+    inhalt: a.inhalt,
+  });
+  if (v.dokumentId !== a.verweis.dokumentId || v.sha256 !== a.verweis.sha256)
+    throw new Error('[demo] Die Ablage vergibt einen anderen Verweis als vorbereitet.');
 }
 
 /**

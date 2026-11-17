@@ -1,5 +1,6 @@
 import { DienstFehler } from '@tcms/contract';
 import { ladeNachweis } from '@tcms/service';
+import { downloadAntwort, downloadMeldung } from '@/server/dateien';
 import { imDemoDienst, leseNachweisdatei } from '@/server/durchfuehrung-daten';
 import { demoAkteur } from '@/server/sitzung';
 
@@ -11,28 +12,20 @@ import { demoAkteur } from '@/server/sitzung';
 // kommt aus der Anfrage (`?mandant=`, wie `cli` der kanzleikonsole); der
 // Nachweis muss zu diesem Mandanten gehören. Nicht sichtbar → 404 ohne
 // Hinweis auf die Existenz. Vor der Auslieferung prüft die Ablage den
-// SHA-256 des Inhalts (TS-09).
+// SHA-256 des Inhalts (TS-09). Kopfzeilen (Sandbox-CSP, nosniff, attachment)
+// wie bei Ereignis-Anlagen aus `@/server/dateien`.
 // =============================================================================
 
 export const dynamic = 'force-dynamic';
-
-function dispositionsname(name: string): string {
-  const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
-}
-
-const AKTIVE_TYPEN =
-  /^(text\/html|application\/xhtml\+xml|image\/svg\+xml|text\/xml|application\/xml|application\/javascript|text\/javascript)$/i;
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  const kopf = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' };
-  const nichtGefunden = () => new Response('Nicht gefunden.', { status: 404, headers: kopf });
+  const nichtGefunden = () => downloadMeldung(404, 'Nicht gefunden.');
   const mandantId = new URL(req.url).searchParams.get('mandant') ?? '';
   const akteur = await demoAkteur(mandantId);
-  if (!akteur) return new Response('Nicht angemeldet.', { status: 401, headers: kopf });
+  if (!akteur) return downloadMeldung(401, 'Nicht angemeldet.');
   const { id } = await params;
 
   let n;
@@ -51,22 +44,8 @@ export async function GET(
     // Prüft Ablagepfad, SHA-256 des Inhalts und den Hash des Nachweises.
     inhalt = await leseNachweisdatei(n);
   } catch {
-    return new Response('Datei nicht verfügbar oder Integritätsprüfung fehlgeschlagen.', {
-      status: 410,
-      headers: kopf,
-    });
+    return downloadMeldung(410, 'Datei nicht verfügbar oder Integritätsprüfung fehlgeschlagen.');
   }
 
-  return new Response(new Uint8Array(inhalt), {
-    status: 200,
-    headers: {
-      ...kopf,
-      'Content-Type': AKTIVE_TYPEN.test(n.mime)
-        ? 'application/octet-stream'
-        : n.mime || 'application/octet-stream',
-      'Content-Length': String(inhalt.length),
-      'Content-Disposition': dispositionsname(n.dateiname),
-      'X-Nachweis-SHA256': n.sha256,
-    },
-  });
+  return downloadAntwort(inhalt, n, 'X-Nachweis-SHA256');
 }

@@ -146,7 +146,7 @@ export function KontrolleDrawer({
   // Mandant, gesehener Kontrollstand (TS-05) und Code für die Meldung gehen mit jeder Aktion mit.
   const felder = {
     id: k.id,
-    stand: seite.standIso,
+    stand: seite.standFeld,
     mandantId: ctx.mandant.id,
     standId: k.standId,
     code: k.code,
@@ -310,7 +310,7 @@ export function KontrolleDrawer({
                 {KLASSE_LABEL[quelle.brutto]}): Matrixzeile {quelle.gt} – „
                 {MATRIX_ZEILEN.find((m) => m.gt === quelle.gt)?.zyklus}“. Die Bruttoklasse bestimmt
                 die Dichte, weil die Nettoklasse selbst von den Kontrollen abhängt. Hängt eine
-                Kontrolle an mehreren Risiken, gilt die strengste Frequenz; wirksam ist die
+                Kontrolle an mehreren Risiken, gilt die strengste Frequenz; maßgeblich ist die
                 strengere aus Vorlage und Matrix
                 {freigegeben ? ', hier ersetzt durch die freigegebene Abweichung' : ''}.
                 {anlassAus.length

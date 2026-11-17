@@ -27,7 +27,7 @@ type Sicht = 'brutto' | 'design' | 'betrieb';
 
 const NOTIZ: Record<Sicht, string> = {
   brutto: 'Bruttobewertung nach S × W; Reichweite 3 hebt um eine Klasse.',
-  design: 'Netto (Design): Abschlag 1–2 durch angemessen beurteilte Kontrollen.',
+  design: 'Netto (Design): Abschlag 1–2 durch Kontrollen mit Designbeurteilung „angemessen“.',
   betrieb: 'Netto (Betrieb): Abschlag entfällt bei überfälliger oder beanstandeter Durchführung.',
 };
 

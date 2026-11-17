@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  beendeCookie,
   DAUER_MS,
   demoLoginErlaubt,
   erzeugeCookie,
@@ -66,17 +67,48 @@ describe('Sitzungs-Cookie', () => {
     vi.stubEnv('SESSION_SECRET', GEHEIM);
     const jetzt = Date.now();
     const gut = erzeugeCookie(PERSON, jetzt);
-    const [id, ablauf, sig] = gut.split('.') as [string, string, string];
+    const [id, ablauf, sid, sig] = gut.split('.') as [string, string, string, string];
     const andere = 'b1000000-0000-4000-8000-000000000002';
-    expect(pruefeCookie(`${andere}.${ablauf}.${sig}`)).toBeNull();
-    expect(pruefeCookie(`${id}.${Number(ablauf) + 1}.${sig}`)).toBeNull();
+    expect(pruefeCookie(gut, jetzt)).toBe(PERSON);
+    expect(pruefeCookie(`${andere}.${ablauf}.${sid}.${sig}`)).toBeNull();
+    expect(pruefeCookie(`${id}.${Number(ablauf) + 1}.${sid}.${sig}`)).toBeNull();
+    const fremdeSid = erzeugeCookie(PERSON, jetzt).split('.')[2]!;
+    expect(pruefeCookie(`${id}.${ablauf}.${fremdeSid}.${sig}`)).toBeNull();
     const anderesZeichen = sig.endsWith('A') ? 'B' : 'A';
-    expect(pruefeCookie(`${id}.${ablauf}.${sig.slice(0, -1)}${anderesZeichen}`)).toBeNull();
+    expect(pruefeCookie(`${id}.${ablauf}.${sid}.${sig.slice(0, -1)}${anderesZeichen}`)).toBeNull();
     expect(pruefeCookie(gut, jetzt + DAUER_MS + 1)).toBeNull();
-    expect(pruefeCookie(`${id}.${ablauf}`)).toBeNull();
-    expect(pruefeCookie(`${id}.abc.${sig}`)).toBeNull();
+    expect(pruefeCookie(`${id}.${ablauf}.${sid}`)).toBeNull();
+    expect(pruefeCookie(`${id}.abc.${sid}.${sig}`)).toBeNull();
     expect(pruefeCookie('x'.repeat(600))).toBeNull();
     vi.stubEnv('SESSION_SECRET', randomBytes(32).toString('hex'));
     expect(pruefeCookie(gut)).toBeNull();
+  });
+
+  it('Abmelden beendet die Sitzung serverseitig: derselbe Cookie-Wert gilt danach nicht mehr', () => {
+    vi.stubEnv('SESSION_SECRET', GEHEIM);
+    const eins = erzeugeCookie(PERSON);
+    const zwei = erzeugeCookie(PERSON);
+    beendeCookie(eins);
+    expect(pruefeCookie(eins)).toBeNull();
+    // Andere Sitzungen derselben Person bleiben bestehen.
+    expect(pruefeCookie(zwei)).toBe(PERSON);
+  });
+
+  it('ein korrekt signierter Wert ohne Eintrag im Register gilt nicht (z. B. nach Neustart)', () => {
+    vi.stubEnv('SESSION_SECRET', GEHEIM);
+    const wert = erzeugeCookie(PERSON);
+    const register = (globalThis as Record<symbol, Map<string, number>>)[
+      Symbol.for('tcms.demo.sitzungen')
+    ]!;
+    register.clear();
+    expect(pruefeCookie(wert)).toBeNull();
+  });
+
+  it('Abmelden mit manipuliertem Wert beendet keine fremde Sitzung', () => {
+    vi.stubEnv('SESSION_SECRET', GEHEIM);
+    const wert = erzeugeCookie(PERSON);
+    const [id, ablauf, sid] = wert.split('.') as [string, string, string, string];
+    beendeCookie(`${id}.${ablauf}.${sid}.${'A'.repeat(43)}`);
+    expect(pruefeCookie(wert)).toBe(PERSON);
   });
 });

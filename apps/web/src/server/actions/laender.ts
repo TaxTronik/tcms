@@ -6,6 +6,7 @@ import { fuegeLandHinzu, speichereLandStaende } from '@tcms/service';
 import { aktualisiereMandant } from '../aktion';
 import type { Ergebnis } from '../ergebnis';
 import { dienstAufruf, eingabe, feld } from '../feststellungen-daten';
+import { betragAbNull, FormularFehler } from '../formular';
 import { brauchtKanzleiFuer } from '../sitzung';
 
 // =============================================================================
@@ -16,18 +17,11 @@ import { brauchtKanzleiFuer } from '../sitzung';
 // (deutsche Betragsschreibweise, Kontrollkästchen).
 // =============================================================================
 
-class Abbruch extends Error {}
-
 const MAX_EUR = 100_000_000_000;
 
+/** Betrag ab 0 € (leer → 0) über den gemeinsamen Parser der Demo. */
 function betrag(roh: FormDataEntryValue | null, feldName: string): number {
-  const s = String(roh ?? '').replace(/\s|€/g, '');
-  if (!s) return 0;
-  const norm = s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : s;
-  const n = Number(norm);
-  if (!Number.isFinite(n) || n < 0 || n > MAX_EUR)
-    throw new Abbruch(`${feldName}: bitte einen Betrag ab 0 € angeben.`);
-  return n;
+  return betragAbNull(roh, feldName, MAX_EUR);
 }
 
 /** Liest die Felder eines Landes; Präfix z. B. „CZ." bei der Sammelerfassung. */
@@ -72,7 +66,7 @@ export async function speichereLandStand(_prev: Ergebnis, fd: FormData): Promise
   try {
     laender = [leseLand(fd, land, '')];
   } catch (e) {
-    if (e instanceof Abbruch) return { fehler: e.message };
+    if (e instanceof FormularFehler) return { fehler: e.message };
     throw e;
   }
   const r = await dienstAufruf(
@@ -101,7 +95,7 @@ export async function speichereLaender(_prev: Ergebnis, fd: FormData): Promise<E
   try {
     laender = codes.map((l) => leseLand(fd, l, `${l}.`));
   } catch (e) {
-    if (e instanceof Abbruch) return { fehler: e.message };
+    if (e instanceof FormularFehler) return { fehler: e.message };
     throw e;
   }
   const r = await dienstAufruf(
@@ -128,7 +122,7 @@ export async function landHinzufuegen(_prev: Ergebnis, fd: FormData): Promise<Er
   try {
     eingabeLand = leseLand(fd, land, '');
   } catch (e) {
-    if (e instanceof Abbruch) return { fehler: e.message };
+    if (e instanceof FormularFehler) return { fehler: e.message };
     throw e;
   }
   const r = await dienstAufruf(

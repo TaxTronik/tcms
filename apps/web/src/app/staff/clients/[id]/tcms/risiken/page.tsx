@@ -44,7 +44,7 @@ function NettoZelle({
   notiz?: string | null;
 }) {
   const b = r.bewertung;
-  const wirksam = sicht === 'DESIGN' ? b.wirksamDesign : b.wirksamBetrieb;
+  const geltend = sicht === 'DESIGN' ? b.wirksamDesign : b.wirksamBetrieb;
   const berechnet = sicht === 'DESIGN' ? b.nettoDesign : b.nettoBetrieb;
   const uebersteuert = sicht === 'DESIGN' ? b.uebersteuertDesign : b.uebersteuertBetrieb;
   const u = r.uebersteuerungen.find((x) => x.sicht === sicht && x.status === 'FREIGEGEBEN');
@@ -52,7 +52,7 @@ function NettoZelle({
   return (
     <div className="col-s" style={{ gap: 3 }}>
       <span className="row-s" style={{ flexWrap: 'wrap' }}>
-        <KlasseBadge klasse={wirksam} title={berechnet.erklaerung} />
+        <KlasseBadge klasse={geltend} title={berechnet.erklaerung} />
         {uebersteuert ? (
           <span
             className="badge-yellow"
@@ -452,7 +452,7 @@ export default async function Risikoinventar({
             </Leerzustand>
           ) : mitAuswahl ? (
             <AktionsForm action={risikenFreigabeSchritt}>
-              <input type="hidden" name="stand" value={seite.standIso} />
+              <input type="hidden" name="stand" value={seite.standFeld} />
               <input type="hidden" name="mandantId" value={ctx.mandant.id} />
               <div className="tbl-scroll">{tabelle}</div>
               {fuss}

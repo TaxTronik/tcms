@@ -8,13 +8,20 @@ import {
   akteurFuer,
   demoPerson,
   handelnde,
-  lies,
+  liesDemo,
   type DemoPerson,
   type Handelnde,
   type KanzleiAkteur,
   type MandantAkteur,
 } from './demo';
-import { COOKIE, DAUER_MS, demoLoginErlaubt, erzeugeCookie, pruefeCookie } from './sitzung-regeln';
+import {
+  beendeCookie,
+  COOKIE,
+  DAUER_MS,
+  demoLoginErlaubt,
+  erzeugeCookie,
+  pruefeCookie,
+} from './sitzung-regeln';
 
 export { demoLoginErlaubt, pruefeSessionSecret } from './sitzung-regeln';
 
@@ -26,9 +33,16 @@ export { demoLoginErlaubt, pruefeSessionSecret } from './sitzung-regeln';
 //
 // TS-01: Mit NODE_ENV=production ist die Demo-Anmeldung immer verweigert –
 //        unabhängig von jedem Schalter –, und bestehende Cookies gelten nicht.
+//        Die Demo lauscht nur auf 127.0.0.1 (Skripte `dev`/`start`).
 // TS-02: Bekannte Platzhalter für SESSION_SECRET werden abgewiesen.
+// Abmelden beendet die Sitzung serverseitig (Sitzungsregister, sitzung-regeln.ts).
 // =============================================================================
 
+/**
+ * Setzt das Sitzungs-Cookie. Ohne `secure`: Die Demo läuft nur über
+ * http://127.0.0.1 (Skripte `dev`/`start`), in Produktion wirft die Funktion
+ * vorher (TS-01) – ein Zweig mit `secure: true` wäre nie erreichbar.
+ */
 export async function setzeSitzung(personId: string): Promise<void> {
   if (!demoLoginErlaubt())
     throw new Error('Die Demo-Anmeldung ist in dieser Umgebung deaktiviert.');
@@ -36,14 +50,15 @@ export async function setzeSitzung(personId: string): Promise<void> {
   jar.set(COOKIE, erzeugeCookie(personId), {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env['NODE_ENV'] === 'production',
     path: '/',
     maxAge: DAUER_MS / 1000,
   });
 }
 
+/** Abmelden: Sitzung im Register beenden (auch kopierte Cookie-Werte gelten nicht mehr) und Cookie löschen. */
 export async function beendeSitzung(): Promise<void> {
   const jar = await cookies();
+  beendeCookie(jar.get(COOKIE)?.value);
   jar.delete(COOKIE);
 }
 
@@ -86,7 +101,7 @@ const rollenVon = cache(async (personId: string): Promise<KontaktRolle[]> => {
   const p = demoPerson(personId);
   if (!p || p.art !== 'MANDANT') return [];
   const akteur = akteurFuer(p, null);
-  return lies((tx) => ladeKontaktRollen(tx, akteur));
+  return liesDemo((tx) => ladeKontaktRollen(tx, akteur));
 });
 
 export interface PortalAkteur {

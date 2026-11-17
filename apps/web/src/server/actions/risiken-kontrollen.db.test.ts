@@ -130,7 +130,7 @@ describe.skipIf(!AKTIV)('Demo risiken-kontrollen gegen PostgreSQL', () => {
       null,
       form({ mandantId: T, id: r.id, sicht: 'BETRIEB', klasse: 'KRITISCH', begruendung: B }),
     );
-    if (antrag?.fehler) expect(antrag.fehler).toMatch(/berechneten|wirksam/);
+    if (antrag?.fehler) expect(antrag.fehler).toMatch(/berechneten|gilt bereits/);
     else {
       expect(antrag?.ok).toContain('Übersteuerung beantragt');
       const u = await imDemo((tx) =>

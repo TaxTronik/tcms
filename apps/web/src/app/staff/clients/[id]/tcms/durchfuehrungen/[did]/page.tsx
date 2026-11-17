@@ -103,7 +103,7 @@ export default async function Kontrolldurchfuehrung({
   const r = d.rechte;
   const pruefung = pruefungAus(d);
   const kv = ctx.kontrollen.find((k) => k.id === d.kontrolle.id) ?? null;
-  const felder = { id: d.id, mandant: d.mandantId, stand: ctx.historisch ? seite.standIso : '' };
+  const felder = { id: d.id, mandant: d.mandantId, stand: seite.standFeld };
   const istPruefer =
     d.status === 'ZUR_GEGENZEICHNUNG' && (r.gegenzeichnen.erlaubt || r.zurueckweisen.erlaubt);
   const istDurchfuehrend = d.beteiligte.includes(nutzer.id);

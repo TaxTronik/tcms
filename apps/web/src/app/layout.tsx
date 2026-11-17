@@ -6,7 +6,7 @@ import './app.css';
 
 export const metadata: Metadata = {
   title: { default: 'Tax-CMS', template: '%s · Tax-CMS' },
-  description: 'Tax Compliance Management System nach IDW PS 980 – Branchenpaket E-Commerce',
+  description: 'Tax Compliance Management System – Branchenpaket E-Commerce',
 };
 
 // Setzt die gespeicherte Darstellung vor dem ersten Paint (kein Flackern).

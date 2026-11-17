@@ -3,7 +3,7 @@ import type { KontrollDurchfuehrung } from '@tcms/contract';
 import { isoDatum } from '@tcms/domain';
 import { ladeKontrolle, ladeKontrollen } from '@tcms/service';
 import type { TcmsKontext } from './kontext';
-import { lies } from './risiken-kontrollen-aufruf';
+import { liesImDienst } from './risiken-kontrollen-aufruf';
 
 // =============================================================================
 // Zusatzdaten für die Kontrollmatrix (S6) aus @tcms/service (Bereich
@@ -86,7 +86,7 @@ export async function ladeKontrollenZusatz(
   if (!ctx.programm) return leer;
   const mandantId = ctx.mandant.id;
   const stand = isoDatum(ctx.stand);
-  const geladen = await lies(mandantId, async (c) => ({
+  const geladen = await liesImDienst(mandantId, async (c) => ({
     liste: await ladeKontrollen(c, { mandantId, stand }),
     detail: auswahlId ? await ladeKontrolle(c, { mandantId, kontrolleId: auswahlId, stand }) : null,
   }));

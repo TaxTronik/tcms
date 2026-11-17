@@ -201,6 +201,11 @@ export const regel = {
   }),
   /** `RAISE EXCEPTION` eines Triggers, genau dieser Text. */
   trigger: (meldung: string): DbErwartung => ({ sqlstate: 'P0001', meldung }),
+  /** Änderung (`INSERT`, `UPDATE`, `DELETE` …) in einer READ-ONLY-Transaktion. */
+  nurLesend: (befehl: string): DbErwartung => ({
+    sqlstate: '25006',
+    meldung: `cannot execute ${befehl} in a read-only transaction`,
+  }),
   /** Wert passt nicht zum Typ (UUID, Enum …), genau diese Meldung. */
   eingabe: (meldung: string): DbErwartung => ({ sqlstate: '22P02', meldung }),
 } as const;

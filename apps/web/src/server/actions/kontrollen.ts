@@ -11,7 +11,8 @@ import {
 } from '@tcms/service';
 import { aktualisiereMandant } from '../aktion';
 import type { Ergebnis } from '../ergebnis';
-import { feld, fuehreAus, historisch } from '../risiken-kontrollen-aufruf';
+import { ausHistorischemStand } from '../formular';
+import { feld, fuehreAus } from '../risiken-kontrollen-aufruf';
 import { NUR_AKTUELL } from '../seite';
 
 // =============================================================================
@@ -36,7 +37,7 @@ function neuGeplant(n: { angelegt: string[]; entfernt: string[] } | null): strin
 }
 
 export async function designBeurteilen(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  if (historisch(fd)) return { fehler: NUR_AKTUELL };
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
   const mandantId = feld(fd, 'mandantId');
   const design = feld(fd, 'design') as DesignBeurteilen['design'];
   const r = await fuehreAus(
@@ -69,7 +70,7 @@ export async function frequenzAbweichungBeantragen(
   _prev: Ergebnis,
   fd: FormData,
 ): Promise<Ergebnis> {
-  if (historisch(fd)) return { fehler: NUR_AKTUELL };
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
   const mandantId = feld(fd, 'mandantId');
   const ziel = {
     turnus: feld(fd, 'turnus') as AbweichungBeantragen['turnus'],
@@ -98,7 +99,7 @@ export async function frequenzAbweichungEntscheiden(
   _prev: Ergebnis,
   fd: FormData,
 ): Promise<Ergebnis> {
-  if (historisch(fd)) return { fehler: NUR_AKTUELL };
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
   const mandantId = feld(fd, 'mandantId');
   const freigeben = feld(fd, 'entscheidung') === 'freigeben';
   const begruendung = feld(fd, 'begruendung').trim();
@@ -125,7 +126,7 @@ export async function frequenzAbweichungEntscheiden(
 
 /** Hebt eine freigegebene Abweichung auf; es gilt wieder die berechnete Frequenz. */
 export async function frequenzAbweichungAufheben(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  if (historisch(fd)) return { fehler: NUR_AKTUELL };
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
   const mandantId = feld(fd, 'mandantId');
   const r = await fuehreAus(
     mandantId,
@@ -146,7 +147,7 @@ export async function frequenzAbweichungAufheben(_prev: Ergebnis, fd: FormData):
 }
 
 export async function verantwortlicheAendern(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  if (historisch(fd)) return { fehler: NUR_AKTUELL };
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
   const mandantId = feld(fd, 'mandantId');
   // Nur bei Kontrollen des Mandanten angeboten; der Service weist es sonst ab.
   const gegenzeichnungMandant = ja(fd, 'gegenzeichnungMandant');

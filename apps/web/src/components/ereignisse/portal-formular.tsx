@@ -14,28 +14,52 @@ export interface Kachel {
   ton: 'brand' | 'violet' | 'amber' | 'red' | 'green';
 }
 
+/** Grenzen der Anlagen einer Meldung (vom Server, dieselben wie in der Action). */
+export interface AnlagenGrenzen {
+  anzahl: number;
+  jeDateiBytes: number;
+  /** Summe je Meldung, abgestimmt auf das Body-Limit der Server Actions. */
+  zusammenBytes: number;
+}
+
+const MB = (bytes: number) => Math.round(bytes / 1024 / 1024);
+
+/** Hinweis, wenn die Auswahl eine Grenze verletzt; sonst null. */
+function anlagenHinweis(dateien: readonly File[], g: AnlagenGrenzen): string | null {
+  if (dateien.length > g.anzahl) return `Bitte wählen Sie höchstens ${g.anzahl} Dateien.`;
+  const zuGross = dateien.filter((f) => f.size > g.jeDateiBytes);
+  if (zuGross.length)
+    return `Größer als ${MB(g.jeDateiBytes)} MB: ${zuGross.map((f) => f.name).join(', ')}.`;
+  if (dateien.reduce((s, f) => s + f.size, 0) > g.zusammenBytes)
+    return `Die Anlagen sind zusammen größer als ${MB(g.zusammenBytes)} MB.`;
+  return null;
+}
+
 /** P3: Kacheln je Ereignistyp, kurzes Formular, Absenden (Sie-Form). */
 export function PortalEreignisFormular({
   kacheln,
   heuteIso,
   darf,
   sperrHinweis,
+  grenzen,
 }: {
   kacheln: Kachel[];
   heuteIso: string;
   darf: boolean;
   sperrHinweis: string | null;
+  grenzen: AnlagenGrenzen;
 }) {
   const [state, action, pending] = useActionState(meldeEreignis, null);
   const [typ, setTyp] = useState<string | null>(null);
   const [titel, setTitel] = useState('');
   const [beschreibung, setBeschreibung] = useState('');
   const [datum, setDatum] = useState(heuteIso);
-  const [dateien, setDateien] = useState<string[]>([]);
+  const [dateien, setDateien] = useState<File[]>([]);
 
   const artOk = !!typ;
   const detailsOk = titel.trim().length >= 5 && beschreibung.trim().length >= 10 && !!datum;
-  const bereit = artOk && detailsOk;
+  const anlagenProblem = anlagenHinweis(dateien, grenzen);
+  const bereit = artOk && detailsOk && !anlagenProblem;
   const gewaehlt = kacheln.find((k) => k.code === typ);
 
   return (
@@ -175,18 +199,28 @@ export function PortalEreignisFormular({
                   multiple
                   className="sr-only"
                   accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.csv,.txt,.xlsx,.xls,.docx,.doc"
-                  onChange={(e) => setDateien(Array.from(e.target.files ?? []).map((f) => f.name))}
+                  onChange={(e) => setDateien(Array.from(e.target.files ?? []))}
                 />
                 <span className="row-s" style={{ justifyContent: 'center' }}>
                   <Upload className="tx-icon-xs" aria-hidden /> Dateien hier ablegen oder{' '}
                   <span style={{ textDecoration: 'underline' }}>Datei auswählen</span>
                 </span>
                 <span className="hint" style={{ display: 'block' }}>
-                  höchstens 5 Dateien, je bis 10 MB (PDF, Bild, CSV, Excel, Word)
+                  höchstens {grenzen.anzahl} Dateien, je bis {MB(grenzen.jeDateiBytes)} MB, zusammen
+                  bis {MB(grenzen.zusammenBytes)} MB (PDF, Bild, CSV, Excel, Word)
                 </span>
                 {dateien.length ? (
                   <span className="text-xs text-secondary mt-2" style={{ display: 'block' }}>
-                    {dateien.join(' · ')}
+                    {dateien.map((f) => f.name).join(' · ')}
+                  </span>
+                ) : null}
+                {anlagenProblem ? (
+                  <span
+                    className="alert-error text-sm mt-2"
+                    role="alert"
+                    style={{ display: 'block' }}
+                  >
+                    {anlagenProblem}
                   </span>
                 ) : null}
               </label>
@@ -240,9 +274,11 @@ export function PortalEreignisFormular({
                 grund={
                   !darf
                     ? sperrHinweis
-                    : !bereit
-                      ? 'Bitte wählen Sie die Art und füllen Sie die Details aus.'
-                      : null
+                    : anlagenProblem
+                      ? anlagenProblem
+                      : !bereit
+                        ? 'Bitte wählen Sie die Art und füllen Sie die Details aus.'
+                        : null
                 }
               >
                 <button

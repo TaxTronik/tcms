@@ -120,42 +120,12 @@ export function zustaendigkeit(mandantId: string): {
   return { berufstraegerId: m?.berufstraegerId ?? null, bearbeitungId: m?.bearbeitungId ?? null };
 }
 
-export interface PersonImMandat {
-  id: string;
-  name: string;
-  art: 'KANZLEI' | 'MANDANT';
-  /** Aktive Rollen beim Mandanten (nur Mandantenkontakte, aus MandantKontaktRolle). */
-  rollen: MandantRolle[];
-}
-
-/**
- * Person, die für diesen Mandanten eingesetzt werden darf: Kanzleiperson der
- * Demo oder Mandantenkontakt mit aktiver Rolle bei genau diesem Mandanten
- * (ADR 0001 §5). Sonst null. Ersetzt die frühere Abfrage der Tabelle Person.
- */
-export async function personImMandat(
-  id: string | null | undefined,
-  mandantId: string,
-): Promise<PersonImMandat | null> {
-  const p = demoPerson(id);
-  if (!p) return null;
-  if (p.art === 'KANZLEI') return { id: p.id, name: p.name, art: 'KANZLEI', rollen: [] };
-  const rollen = await lies((tx) =>
-    tx.mandantKontaktRolle.findMany({
-      where: { mandantId, kontaktId: p.id, aktiv: true },
-      select: { rolle: true },
-    }),
-  );
-  if (rollen.length === 0) return null;
-  return { id: p.id, name: p.name, art: 'MANDANT', rollen: rollen.map((r) => r.rolle) };
-}
-
 /** Mandantenkontakte mit aktiver Rolle beim Mandanten, nach Name sortiert. */
 export async function kontakteMitRolle(
   mandantId: string,
   rolle?: MandantRolle,
 ): Promise<{ id: string; name: string; rolle: MandantRolle }[]> {
-  const zeilen = await lies((tx) =>
+  const zeilen = await liesDemo((tx) =>
     tx.mandantKontaktRolle.findMany({
       where: { mandantId, aktiv: true, ...(rolle ? { rolle } : {}) },
       select: { kontaktId: true, rolle: true },
@@ -211,12 +181,17 @@ export const DEMO_PORTS: DienstPorts = {
 };
 
 /**
- * Lesender Zugriff der Demo im Demo-Tenant (eine Transaktion je Aufruf). Die
- * Demo kennt nur diesen Tenant; Schreibzugriffe laufen nur über die
- * Operationen aus @tcms/service im Tenant des Akteurs.
+ * Lesender Zugriff der Demo im Demo-Tenant (eine Transaktion je Aufruf, RLS).
+ * Die Transaktion ist READ ONLY: Die Datenbank weist jede Änderung ab.
+ * Schreibzugriffe laufen nur über die Operationen aus @tcms/service im Tenant
+ * des Akteurs (`imDienst`). Lesen im Dienstkontext einer Person:
+ * `liesImDienst` (risiken-kontrollen-aufruf.ts).
  */
-export function lies<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
-  return mitTenant(DEMO_TENANT_ID, fn);
+export function liesDemo<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+  return mitTenant(DEMO_TENANT_ID, async (tx) => {
+    await tx.$executeRaw`SET TRANSACTION READ ONLY`;
+    return fn(tx);
+  });
 }
 
 const LESEND = new Set([
@@ -232,7 +207,7 @@ const LESEND = new Set([
 
 /**
  * Lesezugriff der Demo-Lader wie früher über `prisma.<modell>.<methode>(…)`:
- * Jeder Aufruf läuft in `lies` (eigene Transaktion im Demo-Tenant, RLS).
+ * Jeder Aufruf läuft in `liesDemo` (eigene Transaktion im Demo-Tenant, RLS).
  * Schreibende Methoden und Rohzugriffe (`$…`) sind gesperrt – Änderungen nur
  * über die Operationen aus @tcms/service (AGENTS.md Regel 1).
  */
@@ -251,7 +226,7 @@ export const db: Tx = new Proxy({} as Tx, {
             );
           }
           return (...args: unknown[]) =>
-            lies((tx) => {
+            liesDemo((tx) => {
               const delegat = (tx as unknown as Record<string, Record<string, unknown>>)[modell];
               const f = delegat?.[methode];
               if (typeof f !== 'function') throw new Error(`[demo] Unbekanntes Modell ${modell}.`);

@@ -14,7 +14,8 @@ import {
 import { aktualisiereMandant } from '../aktion';
 import type { Ergebnis } from '../ergebnis';
 import { demoPersonen } from '../demo';
-import { feld, fuehreAus, historisch } from '../risiken-kontrollen-aufruf';
+import { ausHistorischemStand } from '../formular';
+import { feld, fuehreAus } from '../risiken-kontrollen-aufruf';
 import { NUR_AKTUELL } from '../seite';
 
 // =============================================================================
@@ -27,7 +28,7 @@ import { NUR_AKTUELL } from '../seite';
 const BEGRUENDUNG_30 = 'eine Begründung (mindestens 30 Zeichen)';
 
 export async function risikoNeuBewerten(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  if (historisch(fd)) return { fehler: NUR_AKTUELL };
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
   const mandantId = feld(fd, 'mandantId');
   const r = await fuehreAus(
     mandantId,
@@ -66,7 +67,7 @@ export async function risikoNeuBewerten(_prev: Ergebnis, fd: FormData): Promise<
 }
 
 export async function uebersteuerungBeantragen(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  if (historisch(fd)) return { fehler: NUR_AKTUELL };
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
   const mandantId = feld(fd, 'mandantId');
   const r = await fuehreAus(
     mandantId,
@@ -92,7 +93,7 @@ export async function uebersteuerungBeantragen(_prev: Ergebnis, fd: FormData): P
 }
 
 export async function uebersteuerungEntscheiden(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  if (historisch(fd)) return { fehler: NUR_AKTUELL };
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
   const mandantId = feld(fd, 'mandantId');
   const entscheidung = feld(fd, 'entscheidung') === 'freigeben' ? 'FREIGEBEN' : 'ABLEHNEN';
   const begruendung = feld(fd, 'begruendung').trim();
@@ -122,7 +123,7 @@ export async function uebersteuerungEntscheiden(_prev: Ergebnis, fd: FormData): 
 
 /** Inventarfreigabe: „einreichen" bzw. „freigeben" für die ausgewählten Risiken. */
 export async function risikenFreigabeSchritt(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  if (historisch(fd)) return { fehler: NUR_AKTUELL };
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
   const mandantId = feld(fd, 'mandantId');
   const risikoIds = [
     ...new Set(fd.getAll('ids').filter((x): x is string => typeof x === 'string' && x.length > 0)),
@@ -151,7 +152,7 @@ export async function risikoFreigabeZurueckweisen(
   _prev: Ergebnis,
   fd: FormData,
 ): Promise<Ergebnis> {
-  if (historisch(fd)) return { fehler: NUR_AKTUELL };
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
   const mandantId = feld(fd, 'mandantId');
   const r = await fuehreAus(
     mandantId,
@@ -172,7 +173,7 @@ export async function risikoFreigabeZurueckweisen(
 }
 
 export async function risikoakzeptanzAnfordern(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  if (historisch(fd)) return { fehler: NUR_AKTUELL };
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
   const mandantId = feld(fd, 'mandantId');
   const empfaengerId = feld(fd, 'empfaengerId');
   const r = await fuehreAus(

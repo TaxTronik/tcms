@@ -6,6 +6,7 @@ import { Icon } from '@/components/icon';
 import { Leerzustand } from '@/components/ui/leer';
 import { PortalEreignisFormular } from '@/components/ereignisse/portal-formular';
 import {
+  ANLAGEN_GRENZEN,
   darfPortalMelden,
   PORTAL_KACHELN,
   PORTAL_STATUS_LABEL,
@@ -151,6 +152,7 @@ export default async function PortalEreignisSeite({ searchParams }: { searchPara
                   heuteIso={isoDatum(heute())}
                   darf={darf}
                   sperrHinweis={sperrHinweis}
+                  grenzen={ANLAGEN_GRENZEN}
                 />
               </>
             )}
@@ -199,8 +201,8 @@ export default async function PortalEreignisSeite({ searchParams }: { searchPara
                   <Icon name="ShieldCheck" />
                 </span>
                 <span className="text-sm text-secondary grow">
-                  Jede Meldung wird dokumentiert und auditgesichert. Rückfragen kommen von der
-                  Kanzlei
+                  Jede Meldung wird dokumentiert und im Audit protokolliert. Rückfragen kommen von
+                  der Kanzlei
                   {bearbeitung ? ` (Ansprechpartner: ${bearbeitung.name})` : ''}.
                 </span>
               </span>
