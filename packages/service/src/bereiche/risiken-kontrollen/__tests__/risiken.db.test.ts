@@ -1011,6 +1011,76 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
       expect(JSON.stringify(ev[0]!.detail)).not.toContain('Person ');
     });
 
+    it('Neubewertung zieht eine offene Akzeptanz zurück, eine erteilte gilt danach als überholt (Befund 61)', async () => {
+      const id = await ueberAppetit();
+      const anf = await rufe(akt.hb, (ctx) =>
+        risikoakzeptanzAnfordern(ctx, {
+          mandantId: a.mandantId,
+          risikoId: id,
+          empfaengerId: a.personen.gv,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      // Unveränderte Bestätigung: Der eingefrorene Text stimmt weiter, die Anforderung bleibt offen.
+      const st = await offenerStand(id);
+      await rufe(akt.hb, (ctx) =>
+        risikoBewertungBestaetigen(ctx, {
+          mandantId: a.mandantId,
+          risikoId: id,
+          standId: st.id,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      const freigabe = () =>
+        lies((tx) => tx.freigabe.findUniqueOrThrow({ where: { id: anf.freigabeId } }));
+      expect((await freigabe()).status).toBe('OFFEN');
+      // Geänderte Bewertung: Die Anforderung ist überholt und wird zurückgezogen.
+      const st2 = await offenerStand(id);
+      await rufe(akt.hb, (ctx) =>
+        risikoNeuBewerten(ctx, {
+          mandantId: a.mandantId,
+          risikoId: id,
+          standId: st2.id,
+          s: 'H',
+          w: st2.w === 'HAEUFIG' ? 'WAHRSCHEINLICH' : 'HAEUFIG',
+          r: 3,
+          gt: st2.gt,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      const f = await freigabe();
+      expect([f.status, f.codeHash, f.codeAblauf]).toEqual(['ABGELEHNT', null, null]);
+      expect(f.anmerkung).toContain('neu bewertet');
+      expect(await audit(id, 'tcms.risiko.akzeptanz_zurueckgezogen')).toHaveLength(1);
+      expect(
+        await lies((tx) =>
+          tx.freigabe.count({ where: { art: 'RISIKOAKZEPTANZ', refId: id, status: 'OFFEN' } }),
+        ),
+      ).toBe(0);
+      // Erteilt (hier direkt gesetzt) und danach neu bewertet → „überholt“ im Lesepfad.
+      await lies((tx) =>
+        tx.freigabe.update({
+          where: { id: anf.freigabeId },
+          data: { status: 'FREIGEGEBEN', erledigtAm: UHR.jetzt(), anmerkung: null },
+        }),
+      );
+      const akzeptanz = async () =>
+        (
+          await rufe(akt.bt, (ctx) => ladeRisiko(ctx, { mandantId: a.mandantId, risikoId: id }))
+        ).risiko.akzeptanzen.find((x) => x.id === anf.freigabeId)!;
+      expect(await akzeptanz()).toMatchObject({ status: 'FREIGEGEBEN', ueberholt: false });
+      const st3 = await offenerStand(id);
+      await rufe(akt.hb, (ctx) =>
+        risikoBewertungBestaetigen(ctx, {
+          mandantId: a.mandantId,
+          risikoId: id,
+          standId: st3.id,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      expect(await akzeptanz()).toMatchObject({ status: 'FREIGEGEBEN', ueberholt: true });
+    });
+
     it('Empfänger unter der Sperre der Rollenpflege geprüft: eben entzogene GV → UNGUELTIG (RT4-T-06)', async () => {
       const x = await legeProgrammAn(tenant);
       const ax = akteureVon(x);

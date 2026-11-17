@@ -618,6 +618,11 @@ export const RisikoakzeptanzEintragSchema = z
     empfaengerId: z.string(),
     anmerkung: z.string().nullable(),
     erledigtAm: zeitpunkt.nullable(),
+    /**
+     * Erteilt vor der heute gültigen Bewertung des Risikos: Die Akzeptanz galt
+     * laut Text nur bis zur nächsten Neubewertung (Befund 61).
+     */
+    ueberholt: z.boolean(),
     /** Zustellung der jüngsten Nachricht an den aktuellen Empfänger (historisch: null). */
     zustellung: FreigabeZustellungSchema.nullable(),
   })

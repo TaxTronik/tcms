@@ -181,6 +181,20 @@ async function sperreBetroffeneEreignisse(
 }
 
 /**
+ * Sperrt offene Risikoakzeptanzen des Risikos (Freigabe vor Risiko, Kopf von
+ * `gemeinsam.ts`), damit die Neubewertung eine überholte Anforderung
+ * zurückziehen kann, ohne gegen ein gleichzeitiges Erteilen zu laufen.
+ */
+async function sperreOffeneAkzeptanzen(tx: Tx, mandantId: string, risikoId: string) {
+  const programm = await programmDes(tx, mandantId);
+  await tx.$queryRaw`
+    SELECT "id" FROM "Freigabe"
+    WHERE "programmId" = ${programm.id} AND "art" = 'RISIKOAKZEPTANZ'
+      AND "refId" = ${risikoId} AND "status" = 'OFFEN'
+    ORDER BY "id" FOR NO KEY UPDATE`;
+}
+
+/**
  * Ereignisfolgen „Risiko neu bewerten" (in der Triage angelegt) mit der
  * Neubewertung erledigen – nur an den vorher gesperrten Ereignissen. Ein
  * Ereignis in der Triage, dessen Folgen danach alle erledigt oder verworfen
@@ -265,8 +279,10 @@ async function bewerte(
   begruendung: string,
 ): Promise<NeuBewertungErgebnis> {
   return mitAudit(ctx, async (tx, zeitpunkt) => {
-    // Sperrordnung: betroffene Ereignisse → Risiko → Kontrollen → Durchführungen.
+    // Sperrordnung: betroffene Ereignisse → offene Risikoakzeptanz (Freigabe) →
+    // Risiko → Kontrollen → Durchführungen.
     const ereignisIds = await sperreBetroffeneEreignisse(tx, mandantId, risikoId);
+    await sperreOffeneAkzeptanzen(tx, mandantId, risikoId);
     const risiko = await risikoUnterSperre(tx, mandantId, risikoId);
     pruefeAktiv(risiko, zeitpunkt);
     const alt = risiko.staende[0];
@@ -382,6 +398,50 @@ async function bewerte(
         ereignisIds,
       )),
     );
+    // Befund 61: Eine offene Risikoakzeptanz nennt die bisherige Bewertung im
+    // eingefrorenen Text („in der genannten Höhe bis zur nächsten Neubewertung“).
+    // Ändert sich die Bewertung, ist sie überholt und wird wie eine abgelöste
+    // Beschreibungsfreigabe zurückgezogen (Code gelöscht); eine neue Anforderung
+    // mit den aktuellen Werten ist danach möglich.
+    if (geaendert) {
+      const offen = await tx.freigabe.findMany({
+        where: {
+          programmId: programm.id,
+          art: 'RISIKOAKZEPTANZ',
+          refId: risikoId,
+          status: 'OFFEN',
+        },
+        select: { id: true, empfaengerId: true },
+        orderBy: { id: 'asc' },
+      });
+      for (const f of offen) {
+        const z = await tx.freigabe.updateMany({
+          where: { id: f.id, status: 'OFFEN' },
+          data: {
+            status: 'ABGELEHNT',
+            anmerkung: `Zurückgezogen: Risiko am ${fmtDatum(zeitpunkt)} neu bewertet (Version ${neu.version})`,
+            erledigtAm: zeitpunkt,
+            codeHash: null,
+            codeSchluesselId: null,
+            codeAblauf: null,
+          },
+        });
+        if (z.count === 1)
+          protokolle.push({
+            aktion: 'tcms.risiko.akzeptanz_zurueckgezogen',
+            objektTyp: 'Risiko',
+            objektId: risikoId,
+            programmId: programm.id,
+            detail: {
+              code: risiko.code,
+              freigabeId: f.id,
+              empfaengerId: f.empfaengerId,
+              grund: 'Neubewertung',
+              standId: neu.id,
+            },
+          });
+      }
+    }
 
     // Folgen für die Kontrollhäufigkeit (GT × Bruttoklasse).
     const neuplanungen: KontrollNeuplanung[] = [];

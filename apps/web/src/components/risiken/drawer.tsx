@@ -600,8 +600,18 @@ export function RisikoDrawer({
                     {a.erledigtAm ? ` · entschieden ${fmtDatumZeit(a.erledigtAm)}` : ''}
                     {a.anmerkung ? ` · „${a.anmerkung}"` : ''}
                   </span>
-                  <span className={AKZEPTANZ_STATUS_BADGE[a.status]}>
-                    {AKZEPTANZ_STATUS_LABEL[a.status]}
+                  <span className="row-s">
+                    <span className={AKZEPTANZ_STATUS_BADGE[a.status]}>
+                      {AKZEPTANZ_STATUS_LABEL[a.status]}
+                    </span>
+                    {a.ueberholt ? (
+                      <span
+                        className="badge-gray"
+                        title="Erteilt vor der heute gültigen Bewertung – gilt nur bis zur nächsten Neubewertung"
+                      >
+                        vor Neubewertung
+                      </span>
+                    ) : null}
                   </span>
                 </div>
               ))}
