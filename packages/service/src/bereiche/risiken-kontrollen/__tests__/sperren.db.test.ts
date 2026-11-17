@@ -16,7 +16,10 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { erzeugeClient, mitTenant, type PrismaClient, type Tx } from '@tcms/db';
 import { bisWartend } from '../../../__tests__/sperr-hilfen';
-import { sperreEreignis } from '../../feststellungen-ereignisse/gemeinsam';
+import {
+  sperreEreignis,
+  sperreProgramm as sperreProgrammLaender,
+} from '../../feststellungen-ereignisse/gemeinsam';
 import { sperreKontrollen, sperreProgramm, sperreRisiken } from '../gemeinsam';
 import { profilAendern } from '../profil';
 import { risikoNeuBewerten } from '../risiken';
@@ -123,6 +126,16 @@ describe.skipIf(!AKTIV)('Sperrordnung (TS-05)', () => {
     expect(
       await waehrendGesperrt(
         (tx) => sperreProgramm(tx, a.mandantId),
+        () => lies((tx) => sperreProgramm(tx, a.mandantId)),
+      ),
+    ).toBe('wartet');
+    // Länder-Monitor (eigene Programmsperre des Bereichs feststellungen-ereignisse).
+    expect(
+      await waehrendGesperrt((tx) => sperreProgrammLaender(tx, a.mandantId), ereignisAnlegen),
+    ).toBe('fertig');
+    expect(
+      await waehrendGesperrt(
+        (tx) => sperreProgrammLaender(tx, a.mandantId),
         () => lies((tx) => sperreProgramm(tx, a.mandantId)),
       ),
     ).toBe('wartet');
