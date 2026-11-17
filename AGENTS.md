@@ -34,8 +34,10 @@ für KI-Werkzeuge.
   des Geschäftsprofils (`kern/profil.ts`, Profilregeln in `@tcms/domain`) und
   die Kontrollvorlagen für neue Kontrollen aus dem Katalog
   (`kern/kontroll-vorlage.ts`: Vorbelegung der Zuständigkeit, erster Stand,
-  geplante Durchführungen) und der Zustellstatus der Nachrichten zu Freigaben
-  (`kern/zustellung.ts`). Regeln, die mehrere Bereiche brauchen, gibt es nur
+  geplante Durchführungen), die Zuständigkeitsregel für Kontrollstände
+  (`kern/zustaendigkeit.ts`: Personen je Partei, Kanzleipersonen fail closed,
+  Gegenzeichnung beim Mandanten nur bei Kontrollen des Mandanten) und der
+  Zustellstatus der Nachrichten zu Freigaben (`kern/zustellung.ts`). Regeln, die mehrere Bereiche brauchen, gibt es nur
   einmal. Änderungen hier brauchen Tests (`pnpm --filter @tcms/service test`).
   Bereiche unter `src/bereiche/<bereich>` (z. B. `risiken-kontrollen`: Risiken,
   Kontrollen, Geschäftsprofil). TS-05 dort: Zeile in der Transaktion sperren
