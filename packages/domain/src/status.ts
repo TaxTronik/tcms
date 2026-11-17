@@ -217,6 +217,36 @@ export function p153Erforderlich(a: Auswirkung): boolean {
   return a === 'JA' || a === 'UNKLAR';
 }
 
+/** Eine Entscheidung „weitere Klärung" ist nicht abschließend und erlaubt eine Folgeentscheidung. */
+export function p153Abschliessend(e: string | null | undefined): boolean {
+  return e != null && e !== 'WEITERE_KLAERUNG';
+}
+
+/**
+ * §-153-Würdigung offen zum Stichtag `ende`: Steuerwirkung nicht
+ * ausgeschlossen, nicht verworfen und bis zum Stichtag keine abschließende
+ * Entscheidung („weitere Klärung" lässt sie offen). Eine abschließende
+ * Entscheidung ist endgültig; liegt sie nach dem Stichtag, war die Würdigung
+ * zum Stichtag offen. Einzige Regel für Listen, Kontext, Länder-Monitor und
+ * Arbeitskorb (wie `naechsterFeststellungsschritt`).
+ */
+export function p153Offen(
+  f: {
+    auswirkung: Auswirkung;
+    status: FeststellungStatus;
+    p153Entscheidung: string | null;
+    p153EntschiedenAm: Date | null;
+  },
+  ende: Date,
+): boolean {
+  if (!p153Erforderlich(f.auswirkung) || f.status === 'VERWORFEN') return false;
+  const abschliessend =
+    p153Abschliessend(f.p153Entscheidung) &&
+    f.p153EntschiedenAm != null &&
+    f.p153EntschiedenAm.getTime() <= ende.getTime();
+  return !abschliessend;
+}
+
 export interface FeststellungFakten {
   status: FeststellungStatus;
   auswirkung: Auswirkung;

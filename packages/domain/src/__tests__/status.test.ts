@@ -3,6 +3,8 @@ import {
   betriebsStand,
   ereignisErledigt,
   naechsterFeststellungsschritt,
+  p153Abschliessend,
+  p153Offen,
   statusAm,
   utc,
 } from '../index';
@@ -90,5 +92,44 @@ describe('Ereignis', () => {
     expect(ereignisErledigt([])).toBe(false);
     expect(ereignisErledigt([{ status: 'ERLEDIGT' }, { status: 'ANGELEGT' }])).toBe(false);
     expect(ereignisErledigt([{ status: 'ERLEDIGT' }, { status: 'VERWORFEN' }])).toBe(true);
+  });
+});
+
+describe('§-153-Würdigung offen (eine Regel für alle Lesepfade)', () => {
+  const ende = utc(2026, 10, 31);
+  const f = {
+    auswirkung: 'JA' as const,
+    status: 'IN_WUERDIGUNG' as const,
+    p153Entscheidung: null as string | null,
+    p153EntschiedenAm: null as Date | null,
+  };
+
+  it('„weitere Klärung" ist nicht abschließend: die Würdigung bleibt offen', () => {
+    expect(p153Abschliessend('WEITERE_KLAERUNG')).toBe(false);
+    expect(p153Abschliessend(null)).toBe(false);
+    expect(p153Abschliessend('KEINE_PFLICHT')).toBe(true);
+    const klaerung = {
+      ...f,
+      p153Entscheidung: 'WEITERE_KLAERUNG',
+      p153EntschiedenAm: utc(2026, 10, 1),
+    };
+    expect(p153Offen(klaerung, ende)).toBe(true);
+  });
+
+  it('abschließende Entscheidung bis zum Stichtag schließt, danach nicht', () => {
+    const entschieden = {
+      ...f,
+      p153Entscheidung: 'BERICHTIGUNG',
+      p153EntschiedenAm: utc(2026, 10, 1),
+    };
+    expect(p153Offen(entschieden, ende)).toBe(false);
+    expect(p153Offen(entschieden, utc(2026, 9, 30))).toBe(true);
+  });
+
+  it('ohne Steuerwirkung oder verworfen nie offen', () => {
+    expect(p153Offen(f, ende)).toBe(true);
+    expect(p153Offen({ ...f, auswirkung: 'NEIN' }, ende)).toBe(false);
+    expect(p153Offen({ ...f, auswirkung: 'UNKLAR' }, ende)).toBe(true);
+    expect(p153Offen({ ...f, status: 'VERWORFEN' }, ende)).toBe(false);
   });
 });
