@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { PORTAL_MAX_ANLAGE_BYTES, PORTAL_MAX_ANLAGEN } from '@tcms/contract';
-import nextConfig, { BODY_LIMIT, csp } from '../next.config.mjs';
+import nextConfig, { BODY_LIMIT, csp, DOWNLOAD_CSP } from '../next.config.mjs';
 import { MAX_DATEI_BYTES } from './components/durchfuehrung/werte';
+import { DOWNLOAD_KOPF } from './server/dateien';
 import { ANLAGEN_GRENZEN } from './server/ereignisse-daten';
 
 // Konfiguration der Demo: Bindung nur an 127.0.0.1 (passwortlose Anmeldung,
@@ -25,7 +26,6 @@ describe('Bindung der Demo', () => {
 describe('Sicherheitskopfzeilen', () => {
   it('gelten für jeden Pfad', async () => {
     const regeln = await nextConfig.headers!();
-    expect(regeln).toHaveLength(1);
     const [regel] = regeln;
     expect(regel!.source).toBe('/:pfad*');
     const kopf = Object.fromEntries(regel!.headers.map((h) => [h.key.toLowerCase(), h.value]));
@@ -36,6 +36,26 @@ describe('Sicherheitskopfzeilen', () => {
       'cross-origin-opener-policy': 'same-origin',
     });
     expect(kopf['content-security-policy']).toBe(csp(true));
+  });
+
+  it('Download-Routen: die Sandbox-CSP überschreibt die Seiten-CSP (letzte Regel gilt)', async () => {
+    const regeln = await nextConfig.headers!();
+    const downloads = regeln.slice(1);
+    expect(downloads.map((r) => r.source).sort()).toEqual([
+      '/api/nachweise/:id',
+      '/staff/clients/:id/tcms/ereignisse/anlage',
+    ]);
+    for (const r of downloads)
+      expect(r.headers).toEqual([{ key: 'Content-Security-Policy', value: DOWNLOAD_CSP }]);
+    expect(DOWNLOAD_CSP).toBe(DOWNLOAD_KOPF['Content-Security-Policy']);
+    // Die Routen gibt es unter genau diesen Pfaden.
+    for (const datei of [
+      'api/nachweise/[id]/route.ts',
+      'staff/clients/[id]/tcms/ereignisse/anlage/route.ts',
+    ])
+      expect(readFileSync(new URL(`./app/${datei}`, import.meta.url), 'utf8')).toMatch(
+        /downloadAntwort/,
+      );
   });
 
   it.each([true, false])(

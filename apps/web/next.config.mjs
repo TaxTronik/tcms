@@ -48,6 +48,15 @@ export const SICHERHEITS_KOPFZEILEN = [
   { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
 ];
 
+/**
+ * Download-Routen liefern fremde Dateien aus: dort gilt statt der Seiten-CSP eine
+ * Sandbox-CSP (wie `DOWNLOAD_KOPF` in src/server/dateien.ts). Kopfzeilen aus
+ * `headers()` überschreiben die der Route; bei mehreren passenden Regeln gilt
+ * die letzte.
+ */
+export const DOWNLOAD_CSP = "default-src 'none'; sandbox";
+export const DOWNLOAD_PFADE = ['/api/nachweise/:id', '/staff/clients/:id/tcms/ereignisse/anlage'];
+
 /** Body-Limit der Server Actions; Dateien je Upload höchstens 20 MiB (`MAX_DATEI_BYTES`). */
 export const BODY_LIMIT = '21mb';
 
@@ -68,7 +77,13 @@ const nextConfig = {
   },
   poweredByHeader: false,
   async headers() {
-    return [{ source: '/:pfad*', headers: SICHERHEITS_KOPFZEILEN }];
+    return [
+      { source: '/:pfad*', headers: SICHERHEITS_KOPFZEILEN },
+      ...DOWNLOAD_PFADE.map((source) => ({
+        source,
+        headers: [{ key: 'Content-Security-Policy', value: DOWNLOAD_CSP }],
+      })),
+    ];
   },
   // Projektregeln stehen in der AGENTS.md im Repo-Root.
   agentRules: false,
