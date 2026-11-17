@@ -47,7 +47,8 @@ für KI-Werkzeuge.
   Zustand unter der Sperre lesen, versionierte Änderungen nur auf dem
   gesehenen Stand (`standId`/`profilStandId`, sonst `KONFLIKT`), bedingte
   Updates; Neuplanung löscht nur unberührte geplante Durchführungen.
-  Reihenfolge: Jede Listenabfrage (`findMany`) und jede Listenrelation in
+  Reihenfolge: Jede Listenabfrage (`findMany`), jedes `findFirst` ohne
+  eindeutiges `where` (Schlüssel mit festen Werten) und jede Listenrelation in
   `include`/`select` trägt ein `orderBy` (fachlich, z. B. Code, Version,
   Nummer, Zeitpunkt) mit der `id` als letzter Stufe (Verknüpfungstabellen: ihr
   Schlüssel), damit Antworten, Vergleiche und eingefrorene Snapshots nicht vom

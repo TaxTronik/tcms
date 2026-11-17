@@ -161,7 +161,10 @@ export async function offenerKontrollStand(
   tx: Tx,
   kontrolleId: string,
 ): Promise<KontrolleStandRoh> {
-  const s = await tx.kontrolleStand.findFirst({ where: { kontrolleId, gueltigBis: null } });
+  const s = await tx.kontrolleStand.findFirst({
+    where: { kontrolleId, gueltigBis: null },
+    orderBy: [{ version: 'desc' }, { id: 'desc' }],
+  });
   if (!s) throw konflikt('Kein gültiger Kontrollstand vorhanden.');
   return s;
 }
