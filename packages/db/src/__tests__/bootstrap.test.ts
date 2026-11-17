@@ -63,17 +63,49 @@ describe('Rollen-Bootstrap', () => {
       );
     }
     const ersteVerwendung = Math.min(...verwendung.map((v) => v.i));
+    const begin = zeilen.indexOf('BEGIN;');
+    expect(begin).toBeGreaterThan(-1);
+    expect(zeilen.filter((z) => z === 'BEGIN;')).toHaveLength(1);
+    // Die Stichprobe je Transaktion zieht der Server beim BEGIN: vorher abschalten.
+    const stichprobe = zeilen.indexOf('SET log_transaction_sample_rate = 0;');
+    expect(stichprobe).toBeGreaterThan(-1);
+    expect(stichprobe).toBeLessThan(begin);
     for (const pflicht of [
       "SET LOCAL log_statement = 'none';",
+      'SET LOCAL log_min_duration_statement = -1;',
+      'SET LOCAL log_min_duration_sample = -1;',
+      'SET LOCAL log_statement_sample_rate = 0;',
       "SET LOCAL log_min_error_statement = 'panic';",
+      'SET LOCAL log_duration = off;',
+      'SET LOCAL track_activities = off;',
+      'SET LOCAL auto_explain.log_min_duration = -1;',
       "SET LOCAL pg_stat_statements.track = 'none';",
       'SET LOCAL pg_stat_statements.track_utility = off;',
     ]) {
       const i = zeilen.indexOf(pflicht);
-      expect(i, pflicht).toBeGreaterThan(-1);
+      expect(i, pflicht).toBeGreaterThan(begin);
       expect(i, pflicht).toBeLessThan(ersteVerwendung);
     }
     expect(zeilen).toContain('\\set VERBOSITY terse');
+  });
+
+  it('gleichzeitige Bootstraps sperren clusterweit (pg_authid), nicht je Datenbank', () => {
+    const rollen = anweisungen(ROLLEN);
+    const zeilen = rollen.split('\n');
+    // Advisory-Locks gelten nur in einer Datenbank, die Rollen im ganzen Cluster.
+    expect(rollen).not.toMatch(/pg_advisory/);
+    const sperre = zeilen.indexOf(
+      'LOCK TABLE pg_catalog.pg_authid IN SHARE UPDATE EXCLUSIVE MODE;',
+    );
+    expect(sperre).toBeGreaterThan(zeilen.indexOf('BEGIN;'));
+    const ersteRollenAnweisung = zeilen.findIndex((z) => /\b(CREATE|ALTER) ROLE\b/.test(z));
+    expect(sperre).toBeLessThan(ersteRollenAnweisung);
+  });
+
+  it('PUBLIC verliert CONNECT und TEMPORARY auf der Datenbank, nur die Rollen verbinden sich', () => {
+    const rollen = anweisungen(ROLLEN);
+    expect(rollen).toMatch(/'REVOKE TEMPORARY, CONNECT ON DATABASE %I FROM PUBLIC'/);
+    expect(rollen).toMatch(/'GRANT CONNECT ON DATABASE %I TO tcms_owner, tcms_app'/);
   });
 
   it('der Läufer ruft psql nur ohne Verbindungsangaben in der Kommandozeile auf', () => {

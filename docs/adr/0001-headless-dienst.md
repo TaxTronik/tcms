@@ -478,8 +478,15 @@ Stufe 2). Ein `Dockerfile` mit zwei Zielen, Basisimages per Digest gepinnt
   `prisma/init/rollen.psql` – derselben Datei, die `01_bootstrap.sql` in der
   Entwicklung einbindet; psql liest `TCMS_DB_OWNER_PASSWORD` und
   `TCMS_DB_APP_PASSWORD` selbst (`\getenv`) und setzt sie mit `format('%L')`,
-  nachdem die Transaktion Anweisungsprotokoll und `pg_stat_statements`
-  abgeschaltet hat. (2) Migrationen als `tcms_owner` (`TCMS_DB_OWNER_URL`) in
+  nachdem die Transaktion Anweisungsprotokoll (auch die Stichproben je
+  Anweisung und je Transaktion), Aktivitätsanzeige, `auto_explain` und
+  `pg_stat_statements` abgeschaltet hat. Gleichzeitige Bootstraps laufen
+  nacheinander, auch gegen verschiedene Datenbanken desselben Clusters (Sperre
+  auf dem gemeinsamen Katalog `pg_authid`). Mit der Datenbank verbinden dürfen
+  sich nur `tcms_owner`, `tcms_app` und Superuser (`REVOKE CONNECT … FROM
+PUBLIC`); ob `tcms_app` andere Datenbanken desselben Clusters erreicht, regelt
+  der Clusterbetrieb (pg_hba.conf bzw. CONNECT in den Nachbardatenbanken), nicht
+  der Bootstrap. (2) Migrationen als `tcms_owner` (`TCMS_DB_OWNER_URL`) in
   einer psql-Sitzung unter Advisory-Lock, Ledger `_prisma_migrations` mit den
   Spalten von Prisma und SHA-256 der `migration.sql`; abweichende Prüfsumme,
   unvollständige oder dem Image unbekannte Migration → Abbruch; jede Migration
@@ -492,7 +499,8 @@ Stufe 2). Ein `Dockerfile` mit zwei Zielen, Basisimages per Digest gepinnt
   Superuser-URL noch fremde Passwörter. (3) Prüfung
   (`betrieb/pruefung.sql`): `tcms_app` kein Superuser, NOBYPASSRLS, keine
   Mitgliedschaft, besitzt nichts, kein TRUNCATE/REFERENCES/TRIGGER, Audit nur
-  anhängen; ENABLE+FORCE RLS mit Policy auf allen Tabellen außer Ledger und
+  anhängen (Rechte je Spalte eingeschlossen: `has_any_column_privilege`), PUBLIC
+  ohne CONNECT; ENABLE+FORCE RLS mit Policy auf allen Tabellen außer Ledger und
   `akteur_jti`. Kein Passwort steht je in einer Kommandozeile (URLs werden in der
   Shell zerlegt und als `PG*`-Umgebung übergeben) oder in der Ausgabe. Kein Seed.
 

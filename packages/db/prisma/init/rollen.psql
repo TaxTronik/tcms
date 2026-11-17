@@ -18,11 +18,15 @@
 --
 -- Passwörter gelangen nur als psql-Variable in die Anweisung (`format('%L')`,
 -- `\gexec`), nie in eine Kommandozeile. Vorher schaltet die Transaktion das
--- Anweisungsprotokoll des Servers und pg_stat_statements ab (SET LOCAL, nur
--- als Superuser möglich), und psql meldet Fehler knapp (ohne Anweisungstext),
--- damit kein Passwort im Server-Log, in der Statistik oder in der Ausgabe
--- landet. Die Datei ist bewusst kein `.sql`: Das Init-Verzeichnis des
--- Postgres-Images führt nur `*.sql`/`*.sh` aus; eingebunden wird sie mit `\ir`.
+-- Anweisungsprotokoll des Servers ab – auch die Stichproben
+-- (log_min_duration_sample, log_transaction_sample_rate; die Transaktions-
+-- stichprobe zieht der Server beim BEGIN, daher steht sie davor), die
+-- Aktivitätsanzeige (track_activities), auto_explain und pg_stat_statements
+-- (SET LOCAL, nur als Superuser möglich) –, und psql meldet Fehler knapp (ohne
+-- Anweisungstext), damit kein Passwort im Server-Log, in der Statistik oder in
+-- der Ausgabe landet. Die Datei ist bewusst kein `.sql`: Das Init-Verzeichnis
+-- des Postgres-Images führt nur `*.sql`/`*.sh` aus; eingebunden wird sie mit
+-- `\ir`.
 -- =============================================================================
 
 \set ON_ERROR_STOP on
@@ -40,19 +44,29 @@
   DO $fehlt$ BEGIN RAISE EXCEPTION 'Passwort für tcms_app fehlt'; END $fehlt$;
 \endif
 
+-- Die Stichprobe je Transaktion entscheidet der Server beim BEGIN; ein SET
+-- LOCAL danach käme zu spät. Gilt für den Rest dieser psql-Sitzung.
+SET log_transaction_sample_rate = 0;
 BEGIN;
 -- Kein Anweisungstext mit Passwort in Server-Log oder Statistik (gilt bis COMMIT).
 SET LOCAL log_statement = 'none';
 SET LOCAL log_min_duration_statement = -1;
+SET LOCAL log_min_duration_sample = -1;
+SET LOCAL log_statement_sample_rate = 0;
 SET LOCAL log_min_error_statement = 'panic';
 SET LOCAL log_duration = off;
+SET LOCAL track_activities = off;
+SET LOCAL auto_explain.log_min_duration = -1;
 SET LOCAL pg_stat_statements.track = 'none';
 SET LOCAL pg_stat_statements.track_utility = off;
 SET LOCAL password_encryption = 'scram-sha-256';
 SET LOCAL client_min_messages = warning;
--- Gleichzeitige Bootstraps nacheinander (Rollen sind clusterweit).
--- Schlüssel = 'tcmsrole' als int8.
-SELECT pg_catalog.pg_advisory_xact_lock(8386667273702567013) AS tcms_rollen_sperre \gset
+-- Gleichzeitige Bootstraps nacheinander, auch gegen verschiedene Datenbanken
+-- desselben Clusters: Rollen sind clusterweit, Advisory-Locks gelten nur in
+-- einer Datenbank. Die Sperre auf dem gemeinsamen Katalog pg_authid gilt im
+-- ganzen Cluster; SHARE UPDATE EXCLUSIVE schließt nur sich selbst (und VACUUM)
+-- aus, nicht das Anmelden oder Rollenänderungen anderer Werkzeuge.
+LOCK TABLE pg_catalog.pg_authid IN SHARE UPDATE EXCLUSIVE MODE;
 
 SELECT 'CREATE ROLE tcms_owner'
 WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'tcms_owner') \gexec
@@ -81,9 +95,14 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT USAGE, CREATE ON SCHEMA public TO tcms_owner;
 GRANT USAGE ON SCHEMA public TO tcms_app;
 
--- Temporäre Objekte braucht keine der Rollen; Verbindung nur in diese Datenbank.
-SELECT pg_catalog.format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC',
+-- Temporäre Objekte braucht keine der Rollen. Verbinden dürfen sich mit dieser
+-- Datenbank nur die beiden Rollen (und Superuser), nicht PUBLIC. Ob sich
+-- tcms_app mit anderen Datenbanken des Clusters verbinden kann, regelt diese
+-- Datei nicht (läuft nur in der Zieldatenbank): Sache des Clusterbetriebs
+-- (pg_hba.conf, REVOKE CONNECT in den Nachbardatenbanken; ADR 0001 §8).
+SELECT pg_catalog.format('REVOKE TEMPORARY, CONNECT ON DATABASE %I FROM PUBLIC',
   pg_catalog.current_database()) \gexec
 SELECT pg_catalog.format('GRANT CONNECT ON DATABASE %I TO tcms_owner, tcms_app',
   pg_catalog.current_database()) \gexec
 COMMIT;
+RESET log_transaction_sample_rate;
