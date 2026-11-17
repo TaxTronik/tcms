@@ -639,8 +639,10 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
     it('INSERT mit fremder tenant_id scheitert in jeder Tabelle (RLS WITH CHECK)', async () => {
       for (const t of tenantTabellen) {
         const { rows } = await roh.query<{ spalten: string[] }>(
+          // Generierte Spalten (z. B. AuditEvent.detailDurchfuehrungId) nimmt kein INSERT an.
           `SELECT array_agg(quote_ident(column_name) ORDER BY ordinal_position) AS spalten
-           FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`,
+           FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = $1 AND is_generated = 'NEVER'`,
           [t],
         );
         const spalten = rows[0]!.spalten;
