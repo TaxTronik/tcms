@@ -146,7 +146,9 @@ auf ein Objekt eines anderen Tenants scheitert also schon in der Datenbank.
   kein Klartext danach. `20261020100000_portal_meldung_idempotenz` legt `PortalMeldungIdempotenz` an
   (Idempotenzschlüssel der Portal-Meldung, tcms-s10): `tenant_id`, RLS mit Policy `tcms_tenant`,
   eindeutig je Tenant, Mandant, Person und Schlüssel sowie je Ereignis, `tcms_app` nur SELECT, INSERT,
-  DELETE.
+  DELETE. `20261117030000_verwerfen_antrag_ereignisnummer_je_programm` ergänzt `verwerfenAntragId`
+  (UUID, Standardwert füllt auch bestehende Zeilen) an Feststellung und Ereignis und macht
+  Ereignisnummern je Programm eindeutig (`(tenant_id, programmId, nummer)`; bestehende Nummern bleiben).
 
 DB-Tests (RLS je Tabelle aus dem Katalog, Rechte, Tenantgrenzen, Audit-Kette bei parallelen
 Schreibern) laufen gegen eine migrierte Datenbank:
@@ -474,7 +476,25 @@ neu gesetzt): Mit demselben Schlüssel meldet dieselbe Person beim selben Mandan
 genau ein Ereignis – eine Wiederholung (auch gleichzeitig) liefert `201` mit derselben Antwort, ohne
 neues Ereignis, Nachricht oder Audit; ein anderer Inhalt ergibt `409` mit `konflikt:
 IDEMPOTENZ_ABWEICHUNG`. So lässt sich eine Meldung mit unklarem Ausgang gefahrlos wiederholen und die
-Anlagen-Bindung abschließen. Nach 24 h gilt der Schlüssel als verbraucht.
+Anlagen-Bindung abschließen. Nach 24 h gilt der Schlüssel als verbraucht. Je Person und Mandant gelten
+höchstens 20 Meldungen in einer Stunde (echte Zeit; darüber `409` mit `konflikt: ZU_VIELE_MELDUNGEN`,
+Wiederholungen zählen nicht). `benachrichtigen.name` ist ohne Wirkung (adressiert wird nur über die ID).
+
+Ereignisnummern (`<Jahr>-T-<nnnn>`) laufen wie Feststellungsnummern je Programm (Mandant), nicht je
+Kanzlei: Kontakte sehen sie im Portal, eine kanzleiweite Folge verriete das Meldeaufkommen anderer
+Mandanten. Wiedervorlage-Nummern bleiben kanzleiweit.
+
+`…/verwerfen/bestaetigen` nimmt den gesehenen Antrag mit: bei Ereignissen `{ antragId }`
+(`verwerfenAntrag.antragId` im Detail), bei Feststellungen `{ antragId, auswirkung }`
+(`verwerfen.antragId` und die gesehene steuerliche Auswirkung). Wurde der Antrag zurückgezogen und neu
+gestellt oder die Auswirkung geändert, antwortet der Dienst `409`. Solange das Verwerfen eines
+Ereignisses beantragt ist, werden keine Folgen angelegt oder vorgeschlagen; Folgen mit verknüpftem Objekt
+(Risiko, Durchführung, Feststellung) schließen Antrag und Bestätigung aus. Abschließen ohne zweite Person
+verlangt eine erledigte Folge mit Objekt, sobald eine Folge verworfen ist (Hinweis-Folgen allein ersetzen
+die zweite Person nicht). Eine Feststellung mit offenen Maßnahmen wird nicht verworfen, eine mit offenem
+Antrag nicht geschlossen; das Schließen folgt dem jüngsten Nachtrag der Nachkontrolle. Fristen und
+Fälligkeiten liegen höchstens fünf Jahre nach heute, das Datum eines Ereignisses höchstens zwei Jahre
+vor oder nach heute.
 
 `GET ereignis-anlagen?dokumentId=` (tcms-s11) ist das Gegenstück zu `nachweise?dokumentId=` für Anlagen
 von Ereignis-Meldungen: je Anlage einer Meldung dieses Mandanten mit der Dokument-ID `ereignisId`, `nummer`,
@@ -499,9 +519,11 @@ Zustand entgegensteht (`409`); im historischen Stand nie erlaubt. `GET portal/er
 `GET laender` liefert je Land im Monitor `bezuege` (jüngster Stand bis zum Stichtag, deterministisch
 aus seinen Merkmalen): aktive Risiken mit Länderbezug (Code und Grund: Fernverkäufe, Steuersätze, OSS,
 Lager, ZM), Codes der aktiven Kontrollen an diesen Risiken und IDs der Ereignisse bis zum Stichtag, die
-das Land (Code oder Name) in Titel oder Beschreibung nennen. Feststellungen gehen in die Bezüge nicht
-ein; `feststellungen` enthält vertrauliche nur für die Kanzleileitung, für alle anderen nie (RT-01,
-tcms-s12).
+den Namen des Landes in Titel oder Beschreibung nennen (der Code allein nicht: „IT“, „HR“, „NL“ sind
+gängige Abkürzungen). Feststellungen gehen in die Bezüge nicht ein; `feststellungen` ordnet sie über das
+Land betroffener Erklärungen zu und enthält vertrauliche nur für die Kanzleileitung, für alle anderen
+nie (RT-01, tcms-s12). `POST laender/staende` nennt je Land `gesehenerStandId` (jüngster Stand der
+Historie); ist inzwischen ein anderer Stand der jüngste, antwortet der Dienst `409`.
 
 **Endpunkte Programm, Beschreibung, Freigaben, Postausgang** (`…` = `/v1/mandanten/:mandantId`;
 Rechte prüft `packages/service`, Eingaben und Antworten in
