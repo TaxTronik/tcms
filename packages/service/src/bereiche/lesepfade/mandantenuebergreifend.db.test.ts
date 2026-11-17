@@ -15,6 +15,7 @@ import {
 import { mitTenant } from '@tcms/db';
 import { DEMO_IDS, DEMO_MANDANTEN, DEMO_TENANT_ID } from '@tcms/db/demo';
 import { DEMODATEN_FRIST_MS, sperreDemodaten } from '../../__tests__/demodaten-sperre';
+import { ladeDurchfuehrung } from '../durchfuehrung/lesen';
 import { ladeArbeitskorb } from './arbeitskorb';
 import { ladePortfolio } from './portfolio';
 import { fehlerVon, im, kanzlei, kontakt } from './testhilfen';
@@ -119,6 +120,56 @@ describe.skipIf(!AKTIV)('Portfolio und Arbeitskorb gegen PostgreSQL', () => {
   });
 
   describe('Arbeitskorb', () => {
+    it('Gegenzeichnungen mit dem Recht der Operation: Beteiligte sehen sie nicht (Vier-Augen)', async () => {
+      // K-EC-08 (Talwind): eingereicht von Leon, zugewiesene Gegenzeichnung Anna.
+      const d = await mitTenant(DEMO_TENANT_ID, (tx) =>
+        tx.durchfuehrung.findFirstOrThrow({
+          where: {
+            kontrolle: { code: 'K-EC-08', programm: { mandantId: DEMO_IDS.talwind } },
+            status: 'ZUR_GEGENZEICHNUNG',
+          },
+          orderBy: [{ faelligAm: 'asc' }, { id: 'asc' }],
+        }),
+      );
+      const korb = async () =>
+        (await im(anna, (ctx) => ladeArbeitskorb(ctx, liste(DEMO_IDS.anna)))).gegenzeichnungen.map(
+          (x) => x.id,
+        );
+      const recht = async () =>
+        (
+          await im(kanzlei(DEMO_IDS.anna, DEMO_IDS.talwind, { admin: true, bt: true }), (ctx) =>
+            ladeDurchfuehrung(ctx, { mandantId: DEMO_IDS.talwind, durchfuehrungId: d.id }),
+          )
+        ).rechte.gegenzeichnen;
+      expect(await korb()).toContain(d.id);
+      expect((await recht()).erlaubt).toBe(true);
+      // Anna lädt (als Vertretung o. ä.) einen Nachweis hoch: Sie ist beteiligt.
+      const n = await mitTenant(DEMO_TENANT_ID, (tx) =>
+        tx.nachweis.create({
+          data: {
+            durchfuehrungId: d.id,
+            dokumentId: randomUUID(),
+            dateiname: 'beleg.pdf',
+            mime: 'application/pdf',
+            groesse: 10,
+            sha256: 'b'.repeat(64),
+            hochgeladenVon: DEMO_IDS.anna,
+          },
+        }),
+      );
+      try {
+        expect(await recht()).toMatchObject({ erlaubt: false, verweigerung: 'VIER_AUGEN' });
+        expect(await korb()).not.toContain(d.id);
+      } finally {
+        await mitTenant(DEMO_TENANT_ID, (tx) =>
+          tx.nachweis.update({
+            where: { id: n.id },
+            data: { entferntAm: new Date(), entferntVon: DEMO_IDS.anna },
+          }),
+        );
+      }
+    });
+
     it('liefert eine vertragsgemäße Antwort nur aus Mandanten der Liste', async () => {
       const k = await im(leon, (ctx) => ladeArbeitskorb(ctx, liste(DEMO_IDS.leon)));
       expect(ArbeitskorbAntwortSchema.parse(k)).toEqual(k);

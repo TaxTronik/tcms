@@ -2,8 +2,10 @@
 // Arbeitskorb (`POST /v1/arbeitskorb`): eigene Aufgaben der Person über die
 // von der kanzleikonsole bestätigten Mandanten. Quelle sind die aktuellen
 // Kontexte (blockweise, `jeAktuellerKontext`) plus wenige Zusatzfelder
-// (Antragsteller von Frequenzabweichungen und Verwerfen-Anträgen), beide nur
-// für Programme der geladenen Mandanten. Zuständigkeit: eigene Zuweisung an
+// (Antragsteller von Frequenzabweichungen und Verwerfen-Anträgen, Beteiligte
+// eingereichter Durchführungen), alle nur für Programme der geladenen
+// Mandanten. Rechte wie die Operationen: Gegenzeichnung über
+// `durchfuehrungsRechte`, Frequenzabweichung über `antragDerAbweichung`. Zuständigkeit: eigene Zuweisung an
 // Objekten oder `bt`/`hb` aus der Liste. Keine Leistungsvergleiche – nur die
 // eigenen Aufgaben; Personen nur als IDs.
 // =============================================================================
@@ -20,6 +22,7 @@ import {
   KLASSE_LABEL,
   tageZwischen,
   type AnzeigeStatus,
+  type DurchfuehrungStatus,
 } from '@tcms/domain';
 import { antragDerAbweichung } from '../../kern/abweichung';
 import {
@@ -33,11 +36,12 @@ import {
   gleicheId,
   istBerufstraeger,
   kannBearbeiten,
-  kannGegenzeichnen,
   kannWuerdigen,
   liestAlleVertraulichen,
   zweitePerson,
 } from '../../rechte';
+import { ladeBeteiligteJe } from '../durchfuehrung/lage';
+import { durchfuehrungsRechte } from '../durchfuehrung/rechte';
 import { alsJson, antwortNach } from './hilfen';
 import { zugaengeAusListe } from './zugang';
 
@@ -120,6 +124,11 @@ export async function ladeArbeitskorb(
         orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
       })
     : [];
+  // Beteiligte der eingereichten Durchführungen (Vier-Augen), eine Abfrage für alle Mandanten.
+  const beteiligteJe = await ladeBeteiligteJe(
+    ctx.tx,
+    kontexte.flatMap((c) => c.k.durchfuehrungen.filter((d) => d.anzeige === 'ZUR_GEGENZEICHNUNG')),
+  );
   const staendeJe = new Map<string, (typeof abweichungsStaende)[number][]>();
   for (const st of abweichungsStaende) {
     staendeJe.set(st.kontrolleId, [...(staendeJe.get(st.kontrolleId) ?? []), st]);
@@ -172,18 +181,35 @@ export async function ladeArbeitskorb(
     }
 
     // ---- Gegenzeichnungen, die die Person leisten darf ----
+    // Recht wie die Operation (`durchfuehrungsRechte`, auch Vier-Augen gegen alle
+    // Beteiligten); gelistet nur, wo die Person zugewiesen oder zuständige BT ist.
     for (const d of c.durchfuehrungen) {
       if (d.anzeige !== 'ZUR_GEGENZEICHNUNG') continue;
       const kontrolle = kontrolleJe.get(d.kontrolleId);
       if (!kontrolle) continue;
-      const recht = kannGegenzeichnen(
-        nutzer,
-        kontrolle,
-        m.id,
-        d.durchgefuehrtVon,
-        !!d.mandantBestaetigtVon,
-      );
-      if (!recht.erlaubt) continue;
+      const rechte = durchfuehrungsRechte({
+        akteur: nutzer,
+        rollen: [],
+        mandantId: m.id,
+        historisch: false,
+        status: d.status as DurchfuehrungStatus,
+        anzeige: d.anzeige,
+        periodeBis: d.periodeBis,
+        zustaendigkeit: {
+          partei: kontrolle.partei,
+          durchfuehrendId: kontrolle.durchfuehrendId,
+          vertretungId: kontrolle.vertretungId,
+          gegenzeichnerId: kontrolle.gegenzeichnerId,
+          gegenzeichnungMandant: kontrolle.gegenzeichnungMandant,
+        },
+        durchgefuehrtVon: d.durchgefuehrtVon,
+        mandantBestaetigtVon: d.mandantBestaetigtVon,
+        // Entfallen-Anträge bestimmen nur die Entfallen-Rechte, nicht die Gegenzeichnung.
+        entfallenBegruendung: null,
+        entfallenVon: null,
+        beteiligte: beteiligteJe.get(d.id) ?? [],
+      });
+      if (!rechte.gegenzeichnen.erlaubt) continue;
       if (
         !gleicheId(kontrolle.gegenzeichnerId, nutzer.id) &&
         !(istBerufstraeger(nutzer) && zustaendig)
