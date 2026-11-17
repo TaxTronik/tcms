@@ -42,7 +42,12 @@ export interface AkGegenzeichnung extends AkDurchfuehrung {
   eingereichtAm: Date | null;
 }
 
-export type VierAugenArt = 'UEBERSTEUERUNG' | 'FREQUENZ' | 'VERWERFEN' | 'RISIKOFREIGABE';
+export type VierAugenArt =
+  | 'UEBERSTEUERUNG'
+  | 'FREQUENZ'
+  | 'VERWERFEN'
+  | 'RISIKOFREIGABE'
+  | 'ENTFALLEN';
 
 export interface AkVierAugen {
   mandant: MandantRef;
@@ -116,6 +121,8 @@ function vierAugenHref(v: ArbeitskorbAntwort['vierAugen'][number], basis: string
       return `${basis}/feststellungen/${v.objektId}`;
     case 'RISIKOFREIGABE':
       return `${basis}/risiken`;
+    case 'ENTFALLEN':
+      return `${basis}/durchfuehrungen/${v.objektId}`;
   }
 }
 

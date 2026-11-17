@@ -41,6 +41,8 @@ process.env['TCMS_STORAGE_DIR'] = ABLAGE;
 
 const { erzeugeCookie } = await import('../sitzung-regeln');
 const A = await import('./durchfuehrung');
+const { akteurFuer, demoPerson } = await import('../demo');
+const { ladeDurchfuehrungDetail } = await import('../durchfuehrung-daten');
 const { GET } = await import('../../app/api/nachweise/[id]/route');
 
 const als = (personId: string) => {
@@ -59,8 +61,18 @@ describe.skipIf(!AKTIV)('Demo der Kontrolldurchführung gegen PostgreSQL', () =>
   let nachweisId = '';
   const inhalt = `Nachweis ${randomBytes(8).toString('hex')}\n`;
   const basis = () => ({ id: did, mandant: talwind, stand: '' });
-  const vollstaendig = () => ({
+  /** Gesehener Stand wie auf der Seite (verstecktes Feld `bisher`). */
+  const gesehen = async () => {
+    const d = await ladeDurchfuehrungDetail(
+      akteurFuer(demoPerson(DEMO_IDS.leon)!, talwind),
+      talwind,
+      did,
+    );
+    return d!.inhalt;
+  };
+  const vollstaendig = async () => ({
     ...basis(),
+    bisher: await gesehen(),
     schritt_0_erledigt: 'on',
     schritt_1_erledigt: 'on',
     schritt_2_erledigt: 'on',
@@ -108,7 +120,7 @@ describe.skipIf(!AKTIV)('Demo der Kontrolldurchführung gegen PostgreSQL', () =>
 
   it('Speichern mit Einreichen: Entwurf bleibt, Mängel werden genannt', async () => {
     als(DEMO_IDS.leon);
-    const r = await A.speichereDurchfuehrung(null, form(vollstaendig()));
+    const r = await A.speichereDurchfuehrung(null, form(await vollstaendig()));
     expect(r).toEqual({
       fehler: 'Entwurf gespeichert, aber noch nicht eingereicht: Nachweise: 0 von mindestens 1.',
     });
@@ -163,7 +175,7 @@ describe.skipIf(!AKTIV)('Demo der Kontrolldurchführung gegen PostgreSQL', () =>
 
   it('Einreichen, Vier-Augen beim Gegenzeichnen, Gegenzeichnung durch die zweite Person', async () => {
     als(DEMO_IDS.leon);
-    expect(await A.speichereDurchfuehrung(null, form(vollstaendig()))).toEqual({
+    expect(await A.speichereDurchfuehrung(null, form(await vollstaendig()))).toEqual({
       ok: 'Zur Gegenzeichnung eingereicht. Die Nachweise sind jetzt gesperrt.',
     });
     const r = await A.gegenzeichneDurchfuehrung(null, form(basis()));

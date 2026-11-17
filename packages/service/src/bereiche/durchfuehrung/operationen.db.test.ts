@@ -23,15 +23,21 @@ import {
   bestaetigeDurchfuehrung,
   entferneNachweis,
   gegenzeichneDurchfuehrung,
-  gibEntfallenFrei,
   haengeNachweisAn,
   legeNachtragAn,
   lehneEntfallenAb,
-  reicheDurchfuehrungEin,
-  speichereDurchfuehrung,
   weiseDurchfuehrungZurueck,
 } from './operationen';
-import { akteure, baueFall, fehlerVon, verweis, type Fall } from './testfall';
+import {
+  akteure,
+  baueFall,
+  fehlerVon,
+  gibFrei,
+  reicheEin,
+  speichere,
+  verweis,
+  type Fall,
+} from './testfall';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 const BEGRUENDUNG = 'Begründung mit ausreichend vielen Zeichen für die Prüfung.';
@@ -74,11 +80,9 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
   async function eingereicht(k: 'k1' | 'k2' = 'k1', ergebnis?: 'OHNE_BEFUND' | 'MIT_BEFUND') {
     const did = await f.durchfuehrung(k);
     const wer = k === 'k1' ? a.bearbeiter : a.ma;
-    await f.dienst(wer, (ctx) =>
-      speichereDurchfuehrung(ctx, { ...ziel(did), ...vollstaendig(ergebnis) }),
-    );
+    await f.dienst(wer, (ctx) => speichere(ctx, { ...ziel(did), ...vollstaendig(ergebnis) }));
     await f.dienst(wer, (ctx) => haengeNachweisAn(ctx, { ...ziel(did), verweis: verweis() }));
-    await f.dienst(wer, (ctx) => reicheDurchfuehrungEin(ctx, ziel(did)));
+    await f.dienst(wer, (ctx) => reicheEin(ctx, ziel(did)));
     return did;
   }
 
@@ -97,10 +101,9 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       ['beginnen', (c, d, m) => beginneDurchfuehrung(c, { mandantId: m, durchfuehrungId: d })],
       [
         'speichern',
-        (c, d, m) =>
-          speichereDurchfuehrung(c, { mandantId: m, durchfuehrungId: d, ...vollstaendig() }),
+        (c, d, m) => speichere(c, { mandantId: m, durchfuehrungId: d, ...vollstaendig() }),
       ],
-      ['einreichen', (c, d, m) => reicheDurchfuehrungEin(c, { mandantId: m, durchfuehrungId: d })],
+      ['einreichen', (c, d, m) => reicheEin(c, { mandantId: m, durchfuehrungId: d })],
       [
         'anhängen',
         (c, d, m) => haengeNachweisAn(c, { mandantId: m, durchfuehrungId: d, verweis: verweis() }),
@@ -128,10 +131,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
         (c, d, m) =>
           beantrageEntfallen(c, { mandantId: m, durchfuehrungId: d, begruendung: BEGRUENDUNG }),
       ],
-      [
-        'entfallen freigeben',
-        (c, d, m) => gibEntfallenFrei(c, { mandantId: m, durchfuehrungId: d }),
-      ],
+      ['entfallen freigeben', (c, d, m) => gibFrei(c, { mandantId: m, durchfuehrungId: d })],
       [
         'entfallen ablehnen',
         (c, d, m) =>
@@ -263,7 +263,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
     it('speichert Schritte, Werte und Ergebnis; vor Beginn mit implizitem Beginn', async () => {
       const did = await f.durchfuehrung('k1');
       const r = await f.dienst(a.bearbeiter, (ctx) =>
-        speichereDurchfuehrung(ctx, { ...ziel(did), ...vollstaendig() }),
+        speichere(ctx, { ...ziel(did), ...vollstaendig() }),
       );
       expect(r.status).toBe('IN_DURCHFUEHRUNG');
       expect(r.pruefung.maengel).toEqual(['Nachweise: 0 von mindestens 1']);
@@ -289,7 +289,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
         { ...basis, werte: [{ key: '__proto__', wert: 1, bemerkung: '', erklaert: false }] },
       ];
       for (const v of varianten) {
-        const e = await fehlerVon(f.dienst(a.bearbeiter, (ctx) => speichereDurchfuehrung(ctx, v)));
+        const e = await fehlerVon(f.dienst(a.bearbeiter, (ctx) => speichere(ctx, v)));
         expect(e.code).toBe('UNGUELTIG');
       }
       expect((await zeile(did)).status).toBe('GEPLANT');
@@ -298,16 +298,12 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
     it('nur zugewiesene Person; nach Einreichung → KONFLIKT', async () => {
       const did = await f.durchfuehrung('k1');
       const e = await fehlerVon(
-        f.dienst(a.kollege, (ctx) =>
-          speichereDurchfuehrung(ctx, { ...ziel(did), ...vollstaendig() }),
-        ),
+        f.dienst(a.kollege, (ctx) => speichere(ctx, { ...ziel(did), ...vollstaendig() })),
       );
       expect([e.code, e.grund]).toEqual(['NICHT_BERECHTIGT', 'DURCHFUEHREN']);
       const d2 = await eingereicht();
       const e2 = await fehlerVon(
-        f.dienst(a.bearbeiter, (ctx) =>
-          speichereDurchfuehrung(ctx, { ...ziel(d2), ...vollstaendig() }),
-        ),
+        f.dienst(a.bearbeiter, (ctx) => speichere(ctx, { ...ziel(d2), ...vollstaendig() })),
       );
       expect(e2.code).toBe('KONFLIKT');
     });
@@ -317,9 +313,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
     it('mit Mängeln → UNGUELTIG mit Mängelliste, ohne Änderung', async () => {
       const did = await f.durchfuehrung('k1');
       await f.dienst(a.bearbeiter, (ctx) => beginneDurchfuehrung(ctx, ziel(did)));
-      const e = await fehlerVon(
-        f.dienst(a.bearbeiter, (ctx) => reicheDurchfuehrungEin(ctx, ziel(did))),
-      );
+      const e = await fehlerVon(f.dienst(a.bearbeiter, (ctx) => reicheEin(ctx, ziel(did))));
       expect(e.code).toBe('UNGUELTIG');
       expect(e.felder?.['maengel']).toEqual(
         expect.arrayContaining(['2 von 2 Schritten offen', 'Ergebnis nicht gewählt']),
@@ -341,9 +335,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
 
     it('vor Beginn → KONFLIKT', async () => {
       const did = await f.durchfuehrung('k1');
-      const e = await fehlerVon(
-        f.dienst(a.bearbeiter, (ctx) => reicheDurchfuehrungEin(ctx, ziel(did))),
-      );
+      const e = await fehlerVon(f.dienst(a.bearbeiter, (ctx) => reicheEin(ctx, ziel(did))));
       expect(e.code).toBe('KONFLIKT');
     });
   });
@@ -491,9 +483,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
   describe('Nachweis entfernen', () => {
     it('vor Einreichung: Verweis als entfernt markiert, kein Lesepfad liefert ihn, Verweis im Audit', async () => {
       const did = await f.durchfuehrung('k1');
-      await f.dienst(a.bearbeiter, (ctx) =>
-        speichereDurchfuehrung(ctx, { ...ziel(did), ...vollstaendig() }),
-      );
+      await f.dienst(a.bearbeiter, (ctx) => speichere(ctx, { ...ziel(did), ...vollstaendig() }));
       const v = verweis();
       const { nachweis } = await f.dienst(a.bearbeiter, (ctx) =>
         haengeNachweisAn(ctx, { ...ziel(did), verweis: v }),
@@ -518,9 +508,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       expect(dl.code).toBe('NICHT_GEFUNDEN');
       const k = await f.dienst(a.bt, (ctx) => ladeKontext(ctx, { mandantId: f.mandant }));
       expect(k?.durchfuehrungen.find((x) => x.id === did)?.nachweise).toBe(0);
-      const ein = await fehlerVon(
-        f.dienst(a.bearbeiter, (ctx) => reicheDurchfuehrungEin(ctx, ziel(did))),
-      );
+      const ein = await fehlerVon(f.dienst(a.bearbeiter, (ctx) => reicheEin(ctx, ziel(did))));
       expect(ein.code).toBe('UNGUELTIG');
       // Zweites Entfernen findet nichts mehr.
       const nochmal = await fehlerVon(
@@ -582,14 +570,12 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
     it('TS-05: Entfernen und Einreichen gleichzeitig → konsistent (nie eingereicht ohne Nachweis)', async () => {
       for (let runde = 0; runde < 3; runde++) {
         const did = await f.durchfuehrung('k1');
-        await f.dienst(a.bearbeiter, (ctx) =>
-          speichereDurchfuehrung(ctx, { ...ziel(did), ...vollstaendig() }),
-        );
+        await f.dienst(a.bearbeiter, (ctx) => speichere(ctx, { ...ziel(did), ...vollstaendig() }));
         const { nachweis } = await f.dienst(a.bearbeiter, (ctx) =>
           haengeNachweisAn(ctx, { ...ziel(did), verweis: verweis() }),
         );
         await Promise.allSettled([
-          f.dienst(a.bearbeiter, (ctx) => reicheDurchfuehrungEin(ctx, ziel(did))),
+          f.dienst(a.bearbeiter, (ctx) => reicheEin(ctx, ziel(did))),
           f.dienst(a.vertretung, (ctx) =>
             entferneNachweis(ctx, { ...ziel(did), nachweisId: nachweis.id }),
           ),
@@ -657,13 +643,11 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       await f.dienst(a.vertretung, (ctx) =>
         entferneNachweis(ctx, { ...ziel(did), nachweisId: nachweis.id }),
       );
-      await f.dienst(a.bearbeiter, (ctx) =>
-        speichereDurchfuehrung(ctx, { ...ziel(did), ...vollstaendig() }),
-      );
+      await f.dienst(a.bearbeiter, (ctx) => speichere(ctx, { ...ziel(did), ...vollstaendig() }));
       await f.dienst(a.bearbeiter, (ctx) =>
         haengeNachweisAn(ctx, { ...ziel(did), verweis: verweis() }),
       );
-      await f.dienst(a.bearbeiter, (ctx) => reicheDurchfuehrungEin(ctx, ziel(did)));
+      await f.dienst(a.bearbeiter, (ctx) => reicheEin(ctx, ziel(did)));
       // Vertretung ist zugleich Berufsträgerin mit Zuständigkeit: Vier-Augen gilt trotzdem.
       const vertretungBt = f.kanzlei(f.p.vertretung, { bt: true, zustaendig: true, admin: true });
       for (const wer of [a.bearbeiter, vertretungBt]) {
@@ -821,9 +805,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       // Beteiligung allein über das Audit (z. B. ein früher gespeicherter Stand dieser Person,
       // als sie noch Vertretung war): Die zugewiesene Gegenzeichnung darf dann nicht.
       const did = await f.durchfuehrung('k1');
-      await f.dienst(a.bearbeiter, (ctx) =>
-        speichereDurchfuehrung(ctx, { ...ziel(did), ...vollstaendig() }),
-      );
+      await f.dienst(a.bearbeiter, (ctx) => speichere(ctx, { ...ziel(did), ...vollstaendig() }));
       await f.dienst(a.bearbeiter, (ctx) =>
         haengeNachweisAn(ctx, { ...ziel(did), verweis: verweis() }),
       );
@@ -840,7 +822,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
           detail: {},
         });
       });
-      await f.dienst(a.bearbeiter, (ctx) => reicheDurchfuehrungEin(ctx, ziel(did)));
+      await f.dienst(a.bearbeiter, (ctx) => reicheEin(ctx, ziel(did)));
       const e = await fehlerVon(
         f.dienst(a.pruefer, (ctx) => gegenzeichneDurchfuehrung(ctx, ziel(did))),
       );
@@ -944,12 +926,12 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
     it('Kontakt ohne Zuweisung (Mitarbeiter) kann nicht durchführen; Kanzlei-Kontrolle unsichtbar', async () => {
       const did = await f.durchfuehrung('k2');
       const e = await fehlerVon(
-        f.dienst(a.ma3, (ctx) => speichereDurchfuehrung(ctx, { ...ziel(did), ...vollstaendig() })),
+        f.dienst(a.ma3, (ctx) => speichere(ctx, { ...ziel(did), ...vollstaendig() })),
       );
       expect(e.code).toBe('NICHT_GEFUNDEN');
       // GV sieht die Aufgabe, ist aber nicht zugewiesen.
       const e2 = await fehlerVon(
-        f.dienst(a.gv, (ctx) => speichereDurchfuehrung(ctx, { ...ziel(did), ...vollstaendig() })),
+        f.dienst(a.gv, (ctx) => speichere(ctx, { ...ziel(did), ...vollstaendig() })),
       );
       expect([e2.code, e2.grund]).toEqual(['NICHT_BERECHTIGT', 'PORTAL_ZUGEORDNET']);
     });
@@ -980,7 +962,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       await f.dienst(a.bearbeiter, (ctx) =>
         beantrageEntfallen(ctx, { ...ziel(did), begruendung: BEGRUENDUNG }),
       );
-      const r = await f.dienst(a.bt, (ctx) => gibEntfallenFrei(ctx, ziel(did)));
+      const r = await f.dienst(a.bt, (ctx) => gibFrei(ctx, ziel(did)));
       expect(r.status).toBe('ENTFALLEN');
       const ev = await audit(did, 'tcms.durchfuehrung.entfallen');
       expect(ev[0]!.detail).toMatchObject({
@@ -995,20 +977,20 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       await f.dienst(a.bt, (ctx) =>
         beantrageEntfallen(ctx, { ...ziel(did), begruendung: BEGRUENDUNG }),
       );
-      const e1 = await fehlerVon(f.dienst(a.bt, (ctx) => gibEntfallenFrei(ctx, ziel(did))));
+      const e1 = await fehlerVon(f.dienst(a.bt, (ctx) => gibFrei(ctx, ziel(did))));
       expect([e1.code, e1.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       expect(e1.message).toBe('Freigabe durch eine zweite Person');
       // Nicht-Berufsträger und Berufsträger ohne Zuständigkeit/Admin.
       for (const wer of [a.kollege, a.bearbeiter, f.kanzlei(f.p.kollege, { bt: true })]) {
-        const e = await fehlerVon(f.dienst(wer, (ctx) => gibEntfallenFrei(ctx, ziel(did))));
+        const e = await fehlerVon(f.dienst(wer, (ctx) => gibFrei(ctx, ziel(did))));
         expect([e.code, e.grund]).toEqual(['NICHT_BERECHTIGT', 'WUERDIGEN']);
       }
       // Die antragstellende Person in anderer Schreibweise ist dieselbe Person.
       const btGross = f.kanzlei(f.p.bt.toUpperCase(), { bt: true, zustaendig: true });
-      const e2 = await fehlerVon(f.dienst(btGross, (ctx) => gibEntfallenFrei(ctx, ziel(did))));
+      const e2 = await fehlerVon(f.dienst(btGross, (ctx) => gibFrei(ctx, ziel(did))));
       expect([e2.code, e2.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       expect((await zeile(did)).status).toBe('GEPLANT');
-      await f.dienst(a.bt2, (ctx) => gibEntfallenFrei(ctx, ziel(did)));
+      await f.dienst(a.bt2, (ctx) => gibFrei(ctx, ziel(did)));
       expect((await zeile(did)).status).toBe('ENTFALLEN');
     });
 
@@ -1046,7 +1028,7 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
           beantrageEntfallen(ctx, { ...ziel(did), begruendung: BEGRUENDUNG }),
         );
         const r = await Promise.allSettled([
-          f.dienst(a.bt, (ctx) => gibEntfallenFrei(ctx, ziel(did))),
+          f.dienst(a.bt, (ctx) => gibFrei(ctx, ziel(did))),
           f.dienst(a.bt2, (ctx) =>
             lehneEntfallenAb(ctx, { ...ziel(did), begruendung: BEGRUENDUNG }),
           ),
@@ -1092,12 +1074,12 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       const zielG = (durchfuehrungId: string) => ({ mandantId: g.mandant, durchfuehrungId });
       const abschliessen = async (did: string, ergebnis: 'OHNE_BEFUND' | 'MIT_BEFUND') => {
         await g.dienst(b.bearbeiter, (ctx) =>
-          speichereDurchfuehrung(ctx, { ...zielG(did), ...vollstaendig(ergebnis) }),
+          speichere(ctx, { ...zielG(did), ...vollstaendig(ergebnis) }),
         );
         await g.dienst(b.bearbeiter, (ctx) =>
           haengeNachweisAn(ctx, { ...zielG(did), verweis: verweis() }),
         );
-        await g.dienst(b.bearbeiter, (ctx) => reicheDurchfuehrungEin(ctx, zielG(did)));
+        await g.dienst(b.bearbeiter, (ctx) => reicheEin(ctx, zielG(did)));
         await g.dienst(b.pruefer, (ctx) =>
           gegenzeichneDurchfuehrung(ctx, {
             ...zielG(did),

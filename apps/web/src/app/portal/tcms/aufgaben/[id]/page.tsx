@@ -182,7 +182,7 @@ export default async function Kontrollaufgabe({
       <EntwurfFormular
         action={speichereAufgabe}
         formId={FORM_ID}
-        felder={felder}
+        felder={{ ...felder, bisher: d.inhalt }}
         einreichen={gzm ? 'Zur Bestätigung übermitteln' : 'An Kanzlei übermitteln'}
         einreichenTitel="Alle Schritte erledigt, Anlagen vollständig und Ergebnis gewählt"
       />

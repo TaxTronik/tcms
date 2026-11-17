@@ -16,8 +16,7 @@
 
 import { DienstFehler } from '@tcms/contract';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { speichereDurchfuehrung } from '../../bereiche/durchfuehrung';
-import { akteure, baueFall, type Fall } from '../../bereiche/durchfuehrung/testfall';
+import { akteure, baueFall, speichere, type Fall } from '../../bereiche/durchfuehrung/testfall';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 
@@ -35,7 +34,7 @@ describe.skipIf(!AKTIV)('RT4-T-08 Portal-Kommentar mit NUL', () => {
     let fehler: unknown = null;
     try {
       await f.dienst(a.ma, (ctx) =>
-        speichereDurchfuehrung(ctx, {
+        speichere(ctx, {
           mandantId: f.mandant,
           durchfuehrungId: did,
           schritte: [

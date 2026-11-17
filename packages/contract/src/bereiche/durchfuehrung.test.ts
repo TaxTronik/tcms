@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   DF_MAX_NACHWEIS_BYTES,
   DurchfuehrungBegruendungBodySchema,
+  DurchfuehrungEinreichenBodySchema,
+  DurchfuehrungEinreichenEingabeSchema,
   DurchfuehrungLesenEingabeSchema,
   DurchfuehrungRechtSchema,
   DurchfuehrungSpeichernBodySchema,
   DurchfuehrungSpeichernEingabeSchema,
   DurchfuehrungZielSchema,
   EntfallenAblehnenBodySchema,
+  EntfallenFreigebenBodySchema,
   GegenzeichnenBodySchema,
   NachweisAnhaengenBodySchema,
   NachweisAnhaengenEingabeSchema,
@@ -84,7 +87,13 @@ describe('Vertrag durchfuehrung: Eingaben', () => {
   });
 
   it('Speichern: Grenzen für Schritte, Werte, Beträge und Kommentare', () => {
-    const basis = { schritte: [], werte: [], ergebnis: null, ergebnisKommentar: null };
+    const basis = {
+      schritte: [],
+      werte: [],
+      ergebnis: null,
+      ergebnisKommentar: null,
+      bisher: 'b'.repeat(64),
+    };
     expect(ok(DurchfuehrungSpeichernBodySchema, basis)).toBe(true);
     const zuViele = Array.from({ length: 101 }, () => ({ erledigt: true, kommentar: '' }));
     expect(ok(DurchfuehrungSpeichernBodySchema, { ...basis, schritte: zuViele })).toBe(false);
@@ -121,6 +130,30 @@ describe('Vertrag durchfuehrung: Eingaben', () => {
         ...basis,
         mandantId: MANDANT,
         durchfuehrungId: DID,
+      }),
+    ).toBe(true);
+  });
+
+  it('Gesehener Stand (TS-05): Speichern, Einreichen und Entfallen freigeben verlangen ein SHA-256-Merkmal', () => {
+    const basis = { schritte: [], werte: [], ergebnis: null, ergebnisKommentar: null };
+    expect(ok(DurchfuehrungSpeichernBodySchema, basis)).toBe(false);
+    expect(ok(DurchfuehrungEinreichenBodySchema, {})).toBe(false);
+    expect(ok(EntfallenFreigebenBodySchema, {})).toBe(false);
+    const gut = 'c'.repeat(64);
+    expect(ok(DurchfuehrungEinreichenBodySchema, { bisher: gut })).toBe(true);
+    expect(ok(EntfallenFreigebenBodySchema, { antrag: gut })).toBe(true);
+    for (const schlecht of ['', 'C'.repeat(64), 'c'.repeat(63), 'g'.repeat(64), null, 42]) {
+      expect(ok(DurchfuehrungSpeichernBodySchema, { ...basis, bisher: schlecht })).toBe(false);
+      expect(ok(DurchfuehrungEinreichenBodySchema, { bisher: schlecht })).toBe(false);
+      expect(ok(EntfallenFreigebenBodySchema, { antrag: schlecht })).toBe(false);
+    }
+    // Strikt: keine IDs im Body.
+    expect(ok(DurchfuehrungEinreichenBodySchema, { bisher: gut, mandantId: MANDANT })).toBe(false);
+    expect(
+      ok(DurchfuehrungEinreichenEingabeSchema, {
+        mandantId: MANDANT,
+        durchfuehrungId: DID,
+        bisher: gut,
       }),
     ).toBe(true);
   });

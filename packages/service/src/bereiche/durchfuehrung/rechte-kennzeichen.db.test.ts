@@ -27,16 +27,13 @@ import {
   beginneDurchfuehrung,
   bestaetigeDurchfuehrung,
   gegenzeichneDurchfuehrung,
-  gibEntfallenFrei,
   haengeNachweisAn,
   legeNachtragAn,
   lehneEntfallenAb,
-  reicheDurchfuehrungEin,
-  speichereDurchfuehrung,
   weiseDurchfuehrungZurueck,
 } from './operationen';
 import type { HandlungsRechte } from './rechte';
-import { akteure, baueFall, verweis, type Fall } from './testfall';
+import { akteure, baueFall, gibFrei, reicheEin, speichere, verweis, type Fall } from './testfall';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 const BEGRUENDUNG = 'Begründung mit ausreichend vielen Zeichen für die Prüfung.';
@@ -66,7 +63,7 @@ type Flag = { erlaubt: boolean; grund: string | null; verweigerung: Verweigerung
 const OPERATIONEN: Record<keyof HandlungsRechte, Operation[]> = {
   beginnen: [(z) => (ctx) => beginneDurchfuehrung(ctx, z)],
   bearbeiten: [
-    (z) => (ctx) => speichereDurchfuehrung(ctx, { ...z, ...SPEICHERN }),
+    (z) => (ctx) => speichere(ctx, { ...z, ...SPEICHERN }),
     (z) => (ctx) => haengeNachweisAn(ctx, { ...z, verweis: verweis() }),
   ],
   gegenzeichnen: [(z) => (ctx) => gegenzeichneDurchfuehrung(ctx, z)],
@@ -77,7 +74,7 @@ const OPERATIONEN: Record<keyof HandlungsRechte, Operation[]> = {
   entfallenBeantragen: [
     (z) => (ctx) => beantrageEntfallen(ctx, { ...z, begruendung: BEGRUENDUNG }),
   ],
-  entfallenFreigeben: [(z) => (ctx) => gibEntfallenFrei(ctx, z)],
+  entfallenFreigeben: [(z) => (ctx) => gibFrei(ctx, z)],
   entfallenAblehnen: [(z) => (ctx) => lehneEntfallenAb(ctx, { ...z, begruendung: BEGRUENDUNG })],
   nachtrag: [(z) => (ctx) => legeNachtragAn(ctx, { ...z, begruendung: BEGRUENDUNG })],
 };
@@ -134,13 +131,13 @@ describe.skipIf(!AKTIV)('Durchführung: Rechte-Kennzeichen = Ergebnis der Operat
     a = akteure(f);
     const bearbeitet = async (k: 'k1' | 'k2', wer: Akteur) => {
       const did = await f.durchfuehrung(k);
-      await f.dienst(wer, (ctx) => speichereDurchfuehrung(ctx, { ...ziel(did), ...SPEICHERN }));
+      await f.dienst(wer, (ctx) => speichere(ctx, { ...ziel(did), ...SPEICHERN }));
       await f.dienst(wer, (ctx) => haengeNachweisAn(ctx, { ...ziel(did), verweis: verweis() }));
       return did;
     };
     const eingereicht = async (k: 'k1' | 'k2', wer: Akteur) => {
       const did = await bearbeitet(k, wer);
-      await f.dienst(wer, (ctx) => reicheDurchfuehrungEin(ctx, ziel(did)));
+      await f.dienst(wer, (ctx) => reicheEin(ctx, ziel(did)));
       return did;
     };
     lagen['K1 geplant'] = await f.durchfuehrung('k1');

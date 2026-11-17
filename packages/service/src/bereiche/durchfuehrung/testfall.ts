@@ -7,10 +7,18 @@
 // =============================================================================
 
 import { randomBytes, randomUUID } from 'node:crypto';
-import { DienstFehler, type Akteur } from '@tcms/contract';
+import {
+  DienstFehler,
+  type Akteur,
+  type DurchfuehrungSpeichernEingabe,
+  type DurchfuehrungZiel,
+} from '@tcms/contract';
 import { mitTenant, type Tx } from '@tcms/db';
 import { verweisAblage } from '../../ablage';
 import { imDienst, keinPersonenVerzeichnis, type DienstKontext, type Uhr } from '../../kontext';
+import { antragMerkmal } from './lage';
+import { gibEntfallenFrei, reicheDurchfuehrungEin, speichereDurchfuehrung } from './operationen';
+import { inhaltMerkmal } from './werte';
 
 export const HEUTE = '2026-10-16';
 export const UHR: Uhr = { jetzt: () => new Date(`${HEUTE}T10:00:00.000Z`), heute: () => HEUTE };
@@ -333,4 +341,61 @@ export async function fehlerVon(p: Promise<unknown>): Promise<DienstFehler> {
     throw e;
   }
   throw new Error('Kein Fehler, obwohl einer erwartet war');
+}
+
+/**
+ * Merkmal des gespeicherten Inhalts, wie Detail und Kontrollaufgabe es als
+ * `inhalt` liefern (gesehener Stand beim Speichern und Einreichen).
+ */
+export async function gesehen(ctx: DienstKontext, durchfuehrungId: string): Promise<string> {
+  const d = await ctx.tx.durchfuehrung.findFirst({
+    where: { id: durchfuehrungId },
+    select: {
+      kontrolleStandId: true,
+      schritte: true,
+      werte: true,
+      ergebnis: true,
+      ergebnisKommentar: true,
+    },
+  });
+  return d ? inhaltMerkmal(d) : '0'.repeat(64);
+}
+
+/** Merkmal des offenen Entfallen-Antrags (wie `entfallenAntrag` im Detail). */
+export async function gesehenerAntrag(
+  ctx: DienstKontext,
+  durchfuehrungId: string,
+): Promise<string> {
+  const d = await ctx.tx.durchfuehrung.findFirst({
+    where: { id: durchfuehrungId },
+    select: { entfallenVon: true, entfallenBegruendung: true },
+  });
+  return (d && antragMerkmal(d)) ?? '0'.repeat(64);
+}
+
+/** Speichern auf dem zuletzt gespeicherten Stand (ohne Wettlauf). */
+export async function speichere(
+  ctx: DienstKontext,
+  e: Omit<DurchfuehrungSpeichernEingabe, 'bisher'> & { bisher?: string },
+) {
+  return speichereDurchfuehrung(ctx, {
+    ...e,
+    bisher: e.bisher ?? (await gesehen(ctx, e.durchfuehrungId)),
+  });
+}
+
+/** Einreichen des zuletzt gespeicherten Stands (ohne Wettlauf). */
+export async function reicheEin(ctx: DienstKontext, z: DurchfuehrungZiel & { bisher?: string }) {
+  return reicheDurchfuehrungEin(ctx, {
+    ...z,
+    bisher: z.bisher ?? (await gesehen(ctx, z.durchfuehrungId)),
+  });
+}
+
+/** Entfallen des offenen Antrags freigeben (gesehener Antrag). */
+export async function gibFrei(ctx: DienstKontext, z: DurchfuehrungZiel & { antrag?: string }) {
+  return gibEntfallenFrei(ctx, {
+    ...z,
+    antrag: z.antrag ?? (await gesehenerAntrag(ctx, z.durchfuehrungId)),
+  });
 }

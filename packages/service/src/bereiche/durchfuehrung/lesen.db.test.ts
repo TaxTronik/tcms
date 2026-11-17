@@ -13,6 +13,7 @@ import {
   type Akteur,
 } from '@tcms/contract';
 import type { DienstKontext } from '../../kontext';
+import { ladeKontext } from '../../kern/tcms-kontext';
 import {
   ladeDurchfuehrung,
   ladeKontrollaufgabe,
@@ -22,11 +23,18 @@ import {
 import {
   gegenzeichneDurchfuehrung,
   haengeNachweisAn,
-  reicheDurchfuehrungEin,
-  speichereDurchfuehrung,
   weiseDurchfuehrungZurueck,
 } from './operationen';
-import { akteure, baueFall, fehlerVon, PORTS, verweis, type Fall } from './testfall';
+import {
+  akteure,
+  baueFall,
+  fehlerVon,
+  PORTS,
+  reicheEin,
+  speichere,
+  verweis,
+  type Fall,
+} from './testfall';
 import { imDienst, kalendertag } from '../../kontext';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
@@ -59,18 +67,16 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
     f = await baueFall();
     a = akteure(f);
     abgeschlossen = await f.durchfuehrung('k1');
-    await f.dienst(a.bearbeiter, (ctx) =>
-      speichereDurchfuehrung(ctx, { ...ziel(abgeschlossen), ...SPEICHERN }),
-    );
+    await f.dienst(a.bearbeiter, (ctx) => speichere(ctx, { ...ziel(abgeschlossen), ...SPEICHERN }));
     const n = await f.dienst(a.bearbeiter, (ctx) =>
       haengeNachweisAn(ctx, { ...ziel(abgeschlossen), verweis: verweis() }),
     );
     nachweisId = n.nachweis.id;
-    await f.dienst(a.bearbeiter, (ctx) => reicheDurchfuehrungEin(ctx, ziel(abgeschlossen)));
+    await f.dienst(a.bearbeiter, (ctx) => reicheEin(ctx, ziel(abgeschlossen)));
     await f.dienst(a.pruefer, (ctx) =>
       weiseDurchfuehrungZurueck(ctx, { ...ziel(abgeschlossen), begruendung: BEGRUENDUNG }),
     );
-    await f.dienst(a.bearbeiter, (ctx) => reicheDurchfuehrungEin(ctx, ziel(abgeschlossen)));
+    await f.dienst(a.bearbeiter, (ctx) => reicheEin(ctx, ziel(abgeschlossen)));
     await f.dienst(a.pruefer, (ctx) =>
       gegenzeichneDurchfuehrung(ctx, {
         ...ziel(abgeschlossen),
@@ -130,13 +136,11 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
 
     it('Rechte als Flags je Akteur (Vier-Augen sichtbar mit Grund)', async () => {
       const did = await f.durchfuehrung('k1');
-      await f.dienst(a.bearbeiter, (ctx) =>
-        speichereDurchfuehrung(ctx, { ...ziel(did), ...SPEICHERN }),
-      );
+      await f.dienst(a.bearbeiter, (ctx) => speichere(ctx, { ...ziel(did), ...SPEICHERN }));
       await f.dienst(a.bearbeiter, (ctx) =>
         haengeNachweisAn(ctx, { ...ziel(did), verweis: verweis() }),
       );
-      await f.dienst(a.bearbeiter, (ctx) => reicheDurchfuehrungEin(ctx, ziel(did)));
+      await f.dienst(a.bearbeiter, (ctx) => reicheEin(ctx, ziel(did)));
       const alsBearbeiter = await f.dienst(a.bearbeiter, (ctx) =>
         ladeDurchfuehrung(ctx, ziel(did)),
       );
@@ -168,13 +172,13 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
         );
       const did = await f.durchfuehrung('k1'); // fällig 30.10.
       await am('2026-10-03T08:00:00Z', a.bearbeiter, (ctx) =>
-        speichereDurchfuehrung(ctx, { ...ziel(did), ...SPEICHERN }),
+        speichere(ctx, { ...ziel(did), ...SPEICHERN }),
       );
       await am('2026-10-03T08:05:00Z', a.bearbeiter, (ctx) =>
         haengeNachweisAn(ctx, { ...ziel(did), verweis: verweis() }),
       );
       await am('2026-10-05T08:00:00Z', a.bearbeiter, (ctx) =>
-        reicheDurchfuehrungEin(ctx, ziel(did)),
+        reicheEin(ctx, ziel(did)),
       );
       // 12.10.2026, 00:30 Uhr MESZ
       const zurueckAm = '2026-10-11T22:30:00.000Z';
@@ -203,7 +207,7 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
 
       // Erneute Einreichung lässt den Zeitpunkt der Zurückweisung stehen.
       await am('2026-10-14T08:00:00Z', a.bearbeiter, (ctx) =>
-        reicheDurchfuehrungEin(ctx, ziel(did)),
+        reicheEin(ctx, ziel(did)),
       );
       expect(await zeile()).toEqual({
         zurueckgewiesenAm: new Date(zurueckAm),
@@ -244,6 +248,25 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
       expect(d.nachweiseAusgeblendet).toBe(1);
       expect(d.abgeschlossenAm).toBeNull();
       expect(d.feststellungen).toHaveLength(0);
+      // Nichts aus der Zeit nach dem Stichtag (Befund 63): weder Inhalte vor dem
+      // Beginn noch spätere Personen oder eine spätere Zurückweisung.
+      expect(d.begonnenAm).toBeNull();
+      expect(d.schritte.every((s) => !s.erledigt && s.kommentar === '')).toBe(true);
+      expect([d.werte, d.ergebnis, d.ergebnisKommentar]).toEqual([[], null, null]);
+      expect(d.durchgefuehrtVon).toBeNull();
+      expect([d.zurueckgewiesenVon, d.zurueckweisungsgrund]).toEqual([null, null]);
+      expect(d.pruefung.ergebnis).toBeNull();
+      // Gespeicherter Status bleibt der aktuelle (Vertrag); zum Stichtag gilt `anzeige`.
+      expect(d.status).toBe('MIT_BEFUND');
+      const k = await f.dienst(a.bt, (ctx) =>
+        ladeKontext(ctx, { mandantId: f.mandant, stand: '2026-10-15' }),
+      );
+      const view = k.durchfuehrungen.find((x) => x.id === abgeschlossen)!;
+      expect([view.durchgefuehrtVon, view.gegengezeichnetVon, view.mandantBestaetigtVon]).toEqual([
+        null,
+        null,
+        null,
+      ]);
     });
 
     it('vertrauliche Feststellung: für Nicht-Beteiligte nur Nummer und Status (RT-01)', async () => {

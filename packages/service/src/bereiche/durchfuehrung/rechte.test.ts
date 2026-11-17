@@ -207,6 +207,68 @@ describe('durchfuehrungsRechte', () => {
     );
     expect(eingereicht.entfallenFreigeben).toMatchObject({ erlaubt: false, art: 'STATUS' });
   });
+
+  it('Entfallen freigeben fail-closed: ohne gespeicherte antragstellende Person keine Freigabe', () => {
+    const r = durchfuehrungsRechte(
+      lage({
+        entfallenBegruendung: 'x'.repeat(30),
+        entfallenVon: null,
+        akteur: kanzlei(id(5), { bt: true, adm: true }),
+      }),
+    );
+    expect(r.entfallenFreigeben).toMatchObject({ erlaubt: false, verweigerung: 'VIER_AUGEN' });
+  });
+
+  it('Offener Antrag sperrt Beginnen und Bearbeiten; Altbestand eingereicht: zurückweisen ja, abschließen nein', () => {
+    const antrag = { entfallenBegruendung: 'x'.repeat(30), entfallenVon: BT };
+    const offen = durchfuehrungsRechte(lage({ ...antrag }));
+    expect(offen.beginnen).toMatchObject({ erlaubt: false, art: 'STATUS' });
+    const inArbeit = durchfuehrungsRechte(lage({ ...antrag, status: 'IN_DURCHFUEHRUNG' }));
+    expect(inArbeit.bearbeiten).toMatchObject({ erlaubt: false, art: 'STATUS' });
+    // Wer ohnehin nicht durchführen darf, erfährt nichts vom Antrag (403 wie ohne Antrag).
+    const fremd = durchfuehrungsRechte(
+      lage({ ...antrag, status: 'IN_DURCHFUEHRUNG', akteur: kanzlei(id(99)) }),
+    );
+    expect(fremd.bearbeiten).toMatchObject({ art: 'RECHT', verweigerung: 'DURCHFUEHREN' });
+    const eingereicht = durchfuehrungsRechte(
+      lage({
+        ...antrag,
+        status: 'ZUR_GEGENZEICHNUNG',
+        durchgefuehrtVon: BEARBEITER,
+        akteur: kanzlei(PRUEFER),
+      }),
+    );
+    expect(eingereicht.gegenzeichnen).toMatchObject({ erlaubt: false, art: 'STATUS' });
+    expect(eingereicht.zurueckweisen.erlaubt).toBe(true);
+    // Abgeschlossen: ein Rest des Antrags zählt nicht als offen.
+    const fertig = durchfuehrungsRechte(
+      lage({ ...antrag, status: 'OHNE_BEFUND', akteur: kanzlei(id(5), { bt: true, adm: true }) }),
+    );
+    expect(fertig.entfallenFreigeben).toMatchObject({ grund: 'Kein Antrag offen' });
+  });
+
+  it('Mandantenkontakte: Entfallen-Kennzeichen unabhängig davon, ob ein Antrag offen ist', () => {
+    const portal = {
+      akteur: kontakt(MA),
+      rollen: [rolle(MA, 'MITARBEITER')],
+      zustaendigkeit: {
+        partei: 'MANDANT' as const,
+        durchfuehrendId: MA,
+        vertretungId: null,
+        gegenzeichnerId: null,
+        gegenzeichnungMandant: false,
+      },
+    };
+    const ohne = rechteFlags(durchfuehrungsRechte(lage(portal)));
+    const mit = rechteFlags(
+      durchfuehrungsRechte(
+        lage({ ...portal, entfallenBegruendung: 'x'.repeat(30), entfallenVon: BT }),
+      ),
+    );
+    expect(mit.entfallenFreigeben).toEqual(ohne.entfallenFreigeben);
+    expect(mit.entfallenAblehnen).toEqual(ohne.entfallenAblehnen);
+    expect(mit.entfallenFreigeben.verweigerung).toBe('PARTEI');
+  });
 });
 
 describe('Verweigerungsgrund je Handlung', () => {

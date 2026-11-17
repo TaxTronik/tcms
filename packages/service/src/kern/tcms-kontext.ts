@@ -81,6 +81,7 @@ import {
   type SpaetereEintraege,
 } from './rueckrechnung';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from './zeit';
+import { gueltigerKontrollStand, zustaendigkeitsStand } from './zustaendigkeit';
 
 export interface RisikoView {
   id: string;
@@ -786,7 +787,8 @@ function berechne(
     (typeof programm.kontrollen)[number]['staende'][number]
   >();
   for (const k of programm.kontrollen) {
-    const s = gueltig(k.staende, ende);
+    // Wie die Operationen: aktuell der offene Stand, historisch der zum Stichtag gültige.
+    const s = gueltigerKontrollStand(k.staende, stand, heute);
     if (s) kontrollStandJe.set(k.id, s);
   }
 
@@ -795,8 +797,9 @@ function berechne(
     zeit: DurchfuehrungImBetrieb;
   })[] = [];
   for (const k of programm.kontrollen) {
-    const ks = kontrollStandJe.get(k.id);
-    if (!ks) continue;
+    const aktuell = kontrollStandJe.get(k.id);
+    if (!aktuell) continue;
+    const standJe = new Map(k.staende.map((s) => [s.id, s]));
     for (const d of k.durchfuehrungen) {
       if (d.createdAt.getTime() > ende.getTime() && d.ausserplanmaessig) {
         ausgeblendet++;
@@ -816,11 +819,18 @@ function berechne(
         abgeschlossenAm: d.abgeschlossenAm,
         entfallenAm: d.entfallenAm,
       };
+      // Inhalt (Titel, Mindestnachweise) aus dem geplanten Stand der Durchführung,
+      // Zuständigkeit offener Durchführungen aus dem zum Stichtag gültigen Stand,
+      // abgeschlossener aus ihrem eigenen – dieselbe Regel wie die Operationen
+      // (`kern/zustaendigkeit.ts`).
+      const eigener = standJe.get(d.kontrolleStandId) ?? aktuell;
+      const ks = zustaendigkeitsStand(zeit, eigener, k.staende, stand, heute);
+      const vor = (x: Date | null) => (x && x.getTime() <= ende.getTime() ? x : null);
       alleDurchf.push({
         id: d.id,
         kontrolleId: k.id,
         code: k.code,
-        titel: ks.titel,
+        titel: eigener.titel,
         periodeLabel: d.periodeLabel,
         periodeVon: d.periodeVon,
         periodeBis: d.periodeBis,
@@ -832,19 +842,17 @@ function berechne(
         partei: ks.partei,
         durchfuehrendId: ks.durchfuehrendId,
         gegenzeichnerId: ks.gegenzeichnungMandant ? ks.vertretungId : ks.gegenzeichnerId,
-        durchgefuehrtVon: d.durchgefuehrtVon,
-        gegengezeichnetVon: d.gegengezeichnetVon,
-        mandantBestaetigtVon: d.mandantBestaetigtVon,
-        eingereichtAm:
-          d.eingereichtAm && d.eingereichtAm.getTime() <= ende.getTime() ? d.eingereichtAm : null,
-        abgeschlossenAm:
-          d.abgeschlossenAm && d.abgeschlossenAm.getTime() <= ende.getTime()
-            ? d.abgeschlossenAm
-            : null,
+        // Im historischen Stand Personen nur, soweit ihr Schritt zum Stichtag geschehen war.
+        durchgefuehrtVon:
+          !historisch || vor(d.begonnenAm) || vor(d.eingereichtAm) ? d.durchgefuehrtVon : null,
+        gegengezeichnetVon: !historisch || vor(d.abgeschlossenAm) ? d.gegengezeichnetVon : null,
+        mandantBestaetigtVon: !historisch || vor(d.abgeschlossenAm) ? d.mandantBestaetigtVon : null,
+        eingereichtAm: vor(d.eingereichtAm),
+        abgeschlossenAm: vor(d.abgeschlossenAm),
         nachweise: d._count.nachweise,
-        mindestNachweise: ks.mindestNachweise,
+        mindestNachweise: eigener.mindestNachweise,
         gt: null,
-        schluessel: ks.schluessel,
+        schluessel: aktuell.schluessel,
         periodeVonRaw: d.periodeVon,
         zeit,
       });

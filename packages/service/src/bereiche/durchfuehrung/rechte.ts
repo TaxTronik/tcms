@@ -30,6 +30,7 @@ import {
   kannGegenzeichnen,
   kannPortalLesen,
   kannWuerdigen,
+  zweitePerson,
   aktiveRollen,
   type KontaktRolle,
   type KontrollZustaendigkeit,
@@ -240,6 +241,19 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
   const darfDurchfuehren = kannDurchfuehren(a, k, l.mandantId, l.rollen);
   const beteiligt = l.beteiligte.some((id) => gleicheId(id, a.id));
   const gzm = k.gegenzeichnungMandant;
+  const offen = OFFEN.includes(s);
+  // Offener Entfallen-Antrag: nur an einer nicht abgeschlossenen Durchführung
+  // (Reste an abgeschlossenen aus der Zeit vor dieser Regel zählen nicht).
+  const hatAntrag = s !== 'ENTFALLEN' && !ABGESCHLOSSEN.includes(s) && !!l.entfallenBegruendung;
+  // Solange über das Entfallen nicht entschieden ist, wird nicht durchgeführt
+  // (sonst überlebte der Antrag Einreichen und Gegenzeichnung). Die
+  // Antragsbegründung ist ein Kanzlei-Vorgang; das Portal nennt sie nicht.
+  const antragSperrt = (): Recht =>
+    status(
+      a.art === 'MANDANT'
+        ? 'Die Kanzlei prüft diese Aufgabe; Bearbeitung derzeit nicht möglich'
+        : 'Entfallen beantragt — zuerst über den Antrag entscheiden',
+    );
 
   const beginnen = ((): Recht => {
     if (l.historisch) return status(NUR_AKTUELL);
@@ -248,6 +262,7 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
     if (l.anzeige === 'GEPLANT')
       return status(`Periode endet am ${fmtDatum(l.periodeBis)} — Beginn danach möglich`);
     if (!darfDurchfuehren) return durchfuehrenVerweigert(l);
+    if (hatAntrag) return antragSperrt();
     return ja;
   })();
 
@@ -256,6 +271,7 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
     if (s === 'GEPLANT') return beginnen;
     if (!BEARBEITBAR.includes(s)) return status(statusGrund(s));
     if (!darfDurchfuehren) return durchfuehrenVerweigert(l);
+    if (hatAntrag) return antragSperrt();
     return ja;
   })();
 
@@ -278,6 +294,10 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
     if (!kanzleiPruefer.erlaubt) return kanzleiPruefer;
     if (gzm && !l.mandantBestaetigtVon)
       return status('Bestätigung durch eine zweite Person beim Mandanten steht aus');
+    // Nur Altbestand (Einreichen ist bei offenem Antrag gesperrt): zuerst
+    // zurückweisen, dann über den Antrag entscheiden – nie mit offenem Antrag abschließen.
+    if (hatAntrag)
+      return status('Entfallen beantragt — zuerst zurückweisen und über den Antrag entscheiden');
     return ja;
   })();
 
@@ -305,9 +325,6 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
 
   const zurueckweisen = a.art === 'KANZLEI' ? kanzleiPruefer : mandantBestaetigen;
 
-  const offen = OFFEN.includes(s);
-  const hatAntrag = s !== 'ENTFALLEN' && !!l.entfallenBegruendung;
-
   const entfallenBeantragen = ((): Recht => {
     if (l.historisch) return status(NUR_AKTUELL);
     if (a.art !== 'KANZLEI') return recht('PARTEI', KEIN_RECHT);
@@ -323,6 +340,9 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
 
   const antragOffen = ((): Recht => {
     if (l.historisch) return status(NUR_AKTUELL);
+    // Kanzlei-Vorgang: Für Mandantenkontakte unabhängig davon, ob ein Antrag
+    // offen ist (die Kennzeichen verraten ihn nicht).
+    if (a.art !== 'KANZLEI') return recht('PARTEI', KEIN_RECHT);
     if (!hatAntrag) return status('Kein Antrag offen');
     if (!offen)
       return status(
@@ -339,7 +359,8 @@ export function durchfuehrungsRechte(l: RechteLage): HandlungsRechte {
         'WUERDIGEN',
         'Freigabe durch die zuständige Berufsträgerin bzw. den zuständigen Berufsträger',
       );
-    if (gleicheId(a.id, l.entfallenVon))
+    // Vier-Augen fail-closed: ohne gespeicherte antragstellende Person keine Freigabe.
+    if (!zweitePerson(a, l.entfallenVon))
       return recht('VIER_AUGEN', 'Freigabe durch eine zweite Person');
     return ja;
   })();

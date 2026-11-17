@@ -153,6 +153,7 @@ const INVENTAR: Record<string, string[]> = {
     'weiter:g.verweigerung', // kannGegenzeichnen (Mandant)
     'PARTEI', // Entfallen beantragen nur Kanzlei
     'BEARBEITEN', // Entfallen beantragen: weder zugewiesen noch kannBearbeiten
+    'PARTEI', // Entfallen entscheiden nur Kanzlei (antragsunabhängig, verrät keinen Antrag)
     'WUERDIGEN', // Entfallen freigeben: kannWuerdigen
     'VIER_AUGEN', // Entfallen freigeben: nicht die antragstellende Person
     'PARTEI', // Nachtrag nur Kanzlei
