@@ -122,6 +122,7 @@ export async function fordereZieleFreigabeAn(
   const offen = await ctx.tx.freigabe.findFirst({
     where: { programmId, art: 'ZIELE', status: 'OFFEN' },
     select: { id: true },
+    orderBy: { id: 'asc' },
   });
   if (offen) throw new DienstFehler('KONFLIKT', BEREITS_OFFEN);
   const teilbereiche = await ctx.tx.teilbereich.findMany({

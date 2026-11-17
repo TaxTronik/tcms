@@ -435,13 +435,14 @@ describe.skipIf(!AKTIV)('Kontrollen: Fachoperationen', () => {
           data: { gueltigAb: new Date(st.gueltigAb.getTime() - 86_400_000) },
         }),
       );
+      // Freigeben (Ablehnen durch die beantragende Person ist ein Zurückziehen, Befund 104).
       const entscheide = (akteur: typeof akt.hb) =>
         rufe(akteur, (ctx) =>
           frequenzAbweichungEntscheiden(ctx, {
             mandantId: a.mandantId,
             kontrolleId: k.id,
             standId: zwischen.standId,
-            entscheidung: 'ABLEHNEN',
+            entscheidung: 'FREIGEBEN',
             begruendung: BEGRUENDUNG,
           }),
         );

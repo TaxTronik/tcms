@@ -356,6 +356,9 @@ async function schreibeStaende(
   const tx = ctx.tx;
   // Zeitpunkt der Stände erst unter der Programmsperre: „jüngster Stand“ wird
   // über (Datenstand, createdAt) bestimmt und folgt so der Schreibreihenfolge.
+  // Je Land streng nach dem bisher jüngsten Stand (+1 ms bei gleicher oder
+  // zurückgestellter Uhr): Die ID entscheidet nie über die Reihenfolge, sie ist
+  // zufällig (cuid2, ADR 0001 §10.2).
   const erfasstAm = ctx.uhr.jetzt();
   const alle = await tx.landStand.findMany({
     where: { programmId },
@@ -408,7 +411,10 @@ async function schreibeStaende(
         stand: datenstand,
         quelle: 'MANUELL',
         erfasstVon: ctx.akteur.id,
-        createdAt: erfasstAm,
+        createdAt:
+          alt && alt.createdAt.getTime() >= erfasstAm.getTime()
+            ? new Date(alt.createdAt.getTime() + 1)
+            : erfasstAm,
       },
       select: { id: true },
     });

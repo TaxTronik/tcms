@@ -177,9 +177,7 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
       await am('2026-10-03T08:05:00Z', a.bearbeiter, (ctx) =>
         haengeNachweisAn(ctx, { ...ziel(did), verweis: verweis() }),
       );
-      await am('2026-10-05T08:00:00Z', a.bearbeiter, (ctx) =>
-        reicheEin(ctx, ziel(did)),
-      );
+      await am('2026-10-05T08:00:00Z', a.bearbeiter, (ctx) => reicheEin(ctx, ziel(did)));
       // 12.10.2026, 00:30 Uhr MESZ
       const zurueckAm = '2026-10-11T22:30:00.000Z';
       await am(zurueckAm, a.pruefer, (ctx) =>
@@ -206,9 +204,7 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
       expect(historisch.zurueckgewiesenAm).toBeNull();
 
       // Erneute Einreichung lässt den Zeitpunkt der Zurückweisung stehen.
-      await am('2026-10-14T08:00:00Z', a.bearbeiter, (ctx) =>
-        reicheEin(ctx, ziel(did)),
-      );
+      await am('2026-10-14T08:00:00Z', a.bearbeiter, (ctx) => reicheEin(ctx, ziel(did)));
       expect(await zeile()).toEqual({
         zurueckgewiesenAm: new Date(zurueckAm),
         status: 'ZUR_GEGENZEICHNUNG',

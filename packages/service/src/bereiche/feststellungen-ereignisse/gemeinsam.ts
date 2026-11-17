@@ -61,7 +61,9 @@ export function pruefe<T>(schema: Pruefbar<T>, eingabe: unknown): T {
  * Unique-Verletzung, Serialisierungsfehler oder Verklemmung der Datenbank?
  * Die eine Abbildung aus dem Kern (`kern/konflikt.ts`, Befund 92).
  */
-export const istSchreibkonflikt = istDbKonflikt;
+export function istSchreibkonflikt(e: unknown): boolean {
+  return istDbKonflikt(e);
+}
 
 /** Übersetzt einen Datenbankkonflikt in `KONFLIKT` (TS-05), sonst unverändert. */
 export function alsKonflikt(e: unknown): unknown {
