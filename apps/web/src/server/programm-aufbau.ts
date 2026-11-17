@@ -26,5 +26,7 @@ export interface Umfeld {
   mandant: { id: string; name: string; berufstraegerId: string; bearbeitungId: string };
   kanzlei: PersonKurz[];
   mandantPersonen: PersonKurz[];
+  /** Alle aktiven (Kontakt, Rolle)-Zeilen nach Anlage (Vorbelegung wie im Service). */
+  mandantRollen: { id: string; rolle: NonNullable<PersonKurz['mandantRolle']> }[];
   heute: Date;
 }

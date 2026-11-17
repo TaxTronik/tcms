@@ -51,10 +51,16 @@ import {
   type VorbelegteZustaendigkeit,
   type VorbelegungsRollen,
 } from '../../kern/kontroll-vorlage';
+import {
+  istKanzleiPerson,
+  pruefeZustaendigkeit,
+  type ZustaendigkeitsPools,
+} from '../../kern/zustaendigkeit';
+import { gleicheId } from '../../rechte';
 import { risikoEntscheidung } from './entwurf';
 import { legeNachrichtAn } from './nachrichten';
 
-/** Person im Umfeld: Kanzleiperson oder Mandantenkontakt mit (erster) aktiver Rolle. */
+/** Person im Umfeld: Kanzleiperson oder Mandantenkontakt (mit erster aktiver Rolle, nur Anzeige). */
 export interface AufbauPerson {
   id: string;
   mandantRolle?: MandantRolle | null;
@@ -69,7 +75,18 @@ export interface AufbauUmfeld {
     bearbeitungId: string | null;
   };
   kanzlei: readonly AufbauPerson[];
+  /** Kontakte mit aktiver Rolle (je Kontakt einmal). */
   mandantPersonen: readonly AufbauPerson[];
+  /**
+   * Alle aktiven (Kontakt, Rolle)-Zeilen nach Anlage – Grundlage der Vorbelegung
+   * wie in der Risikoaufnahme (ein Kontakt kann z. B. GV und TCB sein).
+   */
+  mandantRollen: readonly { id: string; rolle: MandantRolle }[];
+  /**
+   * Alle Kontakte des Mandanten, auch mit nur früheren Rollen (nie Kanzleiperson,
+   * fail closed). Fehlt die Liste (Anzeige der Demo), gelten die aktiven Kontakte.
+   */
+  kontakte?: readonly string[];
   heute: Date;
 }
 
@@ -79,18 +96,37 @@ export type AufbauRollen = VorbelegungsRollen;
 export function aufbauRollen(u: AufbauUmfeld): AufbauRollen {
   const bt = u.mandant.berufstraegerId;
   const hb = u.mandant.bearbeitungId;
-  const kanzleiVertretung = u.kanzlei.find((p) => p.id !== bt && p.id !== hb)?.id ?? null;
+  const pools = poolsAus(u);
+  const kanzleiVertretung =
+    u.kanzlei.find((p) => p.id !== bt && p.id !== hb && istKanzleiPerson(p.id, pools))?.id ?? null;
   return {
     bt,
     hb,
     kanzleiVertretung,
-    ...mandantSeiteVorbelegen(u.mandantPersonen.map((p) => ({ id: p.id, rolle: p.mandantRolle }))),
+    ...mandantSeiteVorbelegen(u.mandantRollen),
+  };
+}
+
+/** Personenkreise des Umfelds für die gemeinsame Zuständigkeitsregel (`kern/zustaendigkeit.ts`). */
+export function poolsAus(u: AufbauUmfeld): ZustaendigkeitsPools {
+  const k = (id: string) => id.toLowerCase();
+  const aktiv = u.mandantPersonen.map((p) => k(p.id));
+  return {
+    kanzlei: new Set(u.kanzlei.map((p) => k(p.id))),
+    mandantAktiv: new Set(aktiv),
+    kontakte: new Set([...(u.kontakte ?? []).map(k), ...aktiv]),
   };
 }
 
 export type AufbauZustaendigkeit = VorbelegteZustaendigkeit;
 export { standardKontrollZustaendigkeit };
 
+/**
+ * Zuständigkeit aus der Wahl in Schritt 5. Die IDs bleiben, wie gewählt
+ * (unbekannte oder nicht mehr aktive Personen meldet die Prüfung, statt sie
+ * still zu leeren). Eine Gegenzeichnung durch einen Kontakt des Mandanten ist
+ * die Gegenzeichnung beim Mandanten (`gegenzeichnungMandant`).
+ */
 function zustaendigkeitAus(
   kat: KatalogKontrolle,
   wahl: EntwurfKontrolle | undefined,
@@ -98,18 +134,15 @@ function zustaendigkeitAus(
   r: AufbauRollen,
 ): AufbauZustaendigkeit {
   if (!wahl) return standardKontrollZustaendigkeit(kat, r);
-  const bekannt = (id: string | null) =>
-    id && (u.kanzlei.some((p) => p.id === id) || u.mandantPersonen.some((p) => p.id === id))
-      ? id
-      : null;
-  const gegenzeichnerId = bekannt(wahl.gegenzeichnerId);
+  const pools = poolsAus(u);
+  const gegenzeichnerId = wahl.gegenzeichnerId;
   return {
     partei: wahl.partei,
-    durchfuehrendId: bekannt(wahl.durchfuehrendId),
-    vertretungId: bekannt(wahl.vertretungId),
+    durchfuehrendId: wahl.durchfuehrendId,
+    vertretungId: wahl.vertretungId,
     gegenzeichnerId,
     gegenzeichnungMandant:
-      gegenzeichnerId != null && u.mandantPersonen.some((p) => p.id === gegenzeichnerId),
+      gegenzeichnerId != null && pools.kontakte.has(gegenzeichnerId.toLowerCase()),
   };
 }
 
@@ -249,29 +282,29 @@ export function berechnePlan(e: SetupEntwurf, u: AufbauUmfeld): AufbauPlan {
   };
 }
 
-/** Prüfung von Schritt 5: Zuständigkeiten je Kontrolle (Pflichtattribute laut Fachkonzept § 6). */
+/**
+ * Prüfung von Schritt 5: Zuständigkeiten je Kontrolle (Pflichtattribute laut Fachkonzept § 6)
+ * mit der gemeinsamen Regel des Kerns (`pruefeZustaendigkeit`, wie Verantwortliche ändern).
+ * Im Assistenten wählt man die Gegenzeichnung beim Mandanten über die Person; bestätigen wird
+ * die Vertretung beim Mandanten, daher muss die gewählte Person die Vertretung sein (sonst
+ * nennten Kontext und Beschreibung eine andere Person als gewählt).
+ */
 export function pruefeKontrollZustaendigkeiten(plan: AufbauPlan, u: AufbauUmfeld): string[] {
   const f: string[] = [];
-  const kanzlei = new Set(u.kanzlei.map((p) => p.id));
-  const mandant = new Set(u.mandantPersonen.map((p) => p.id));
+  const pools = poolsAus(u);
   for (const k of plan.kontrollen) {
     const z = k.zust;
-    const pool = z.partei === 'KANZLEI' ? kanzlei : mandant;
-    if (!z.durchfuehrendId) f.push(`${k.code}: durchführende Person zuordnen.`);
-    else if (!pool.has(z.durchfuehrendId))
+    for (const x of pruefeZustaendigkeit(z, k.kat.schluessel, pools))
+      f.push(`${k.code}: ${x.meldung}`);
+    if (
+      z.partei === 'MANDANT' &&
+      z.gegenzeichnungMandant &&
+      z.vertretungId &&
+      !gleicheId(z.gegenzeichnerId, z.vertretungId)
+    )
       f.push(
-        `${k.code}: Die durchführende Person gehört nicht zur Partei ${z.partei === 'KANZLEI' ? 'Kanzlei' : 'Mandant'}.`,
+        `${k.code}: Bei Gegenzeichnung beim Mandanten bestätigt die Vertretung – als Gegenzeichnung die Vertretung wählen.`,
       );
-    if (z.vertretungId && z.vertretungId === z.durchfuehrendId)
-      f.push(`${k.code}: Vertretung und durchführende Person müssen verschieden sein.`);
-    if (z.vertretungId && !pool.has(z.vertretungId))
-      f.push(
-        `${k.code}: Die Vertretung gehört nicht zur Partei ${z.partei === 'KANZLEI' ? 'Kanzlei' : 'Mandant'}.`,
-      );
-    if (k.kat.schluessel && !z.gegenzeichnerId)
-      f.push(`${k.code}: Schlüsselkontrolle – Gegenzeichnung ist Pflicht.`);
-    if (z.gegenzeichnerId && z.gegenzeichnerId === z.durchfuehrendId)
-      f.push(`${k.code}: Die durchführende Person zeichnet nicht selbst gegen.`);
   }
   return f;
 }

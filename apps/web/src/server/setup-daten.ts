@@ -84,7 +84,7 @@ export async function ladeUmfeld(mandantId: string, heute: Date): Promise<Umfeld
   if (!mandant) return null;
   const kontakte = await db.mandantKontaktRolle.findMany({
     where: { mandantId, aktiv: true },
-    orderBy: { createdAt: 'asc' },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
   const kanzlei = demoPersonen
     .alle()
@@ -106,6 +106,7 @@ export async function ladeUmfeld(mandantId: string, heute: Date): Promise<Umfeld
     },
     kanzlei: kanzlei.sort((a, b) => a.name.localeCompare(b.name, 'de')),
     mandantPersonen: mandantPersonen.sort((a, b) => a.name.localeCompare(b.name, 'de')),
+    mandantRollen: kontakte.map((k) => ({ id: k.kontaktId, rolle: k.rolle })),
     heute,
   };
 }
@@ -126,6 +127,7 @@ export function umfeldAusKontext(ctx: TcmsKontext): Umfeld {
     },
     kanzlei,
     mandantPersonen: [...ctx.mandantPersonen].sort((a, b) => a.name.localeCompare(b.name, 'de')),
+    mandantRollen: ctx.kontaktRollen.map((r) => ({ id: r.kontaktId, rolle: r.rolle })),
     heute: ctx.heute,
   };
 }

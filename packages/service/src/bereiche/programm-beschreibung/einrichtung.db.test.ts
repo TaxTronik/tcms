@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { EinrichtungViewSchema } from '@tcms/contract';
 import { pruefeAuditKette, type PrismaClient } from '@tcms/db';
+import { dbAbgewiesen, regel } from '@tcms/db/testhilfe';
 import { ladeEinrichtung, legeProgrammAn, speichereEinrichtungsschritt } from './einrichtung';
 import {
   auditZu,
@@ -458,5 +459,255 @@ describe.skipIf(!AKTIV)('Einrichtungsassistent (Service, PostgreSQL)', () => {
     expect(tb).toBe(1);
     expect(freigaben).toBe(1);
     expect(v1).toBe(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Zuständigkeiten (Befunde 9/10/41/117): eine Regel mit Verantwortliche ändern
+  // ---------------------------------------------------------------------------
+
+  /** Mandant mit GV, TCB und Mitarbeit, Schritte 1–4 fertig; Plan aus dem Lesen. */
+  async function mandantMitKontakten() {
+    const m = await neuerMandant(w);
+    const tcb = randomUUID();
+    const ma = randomUUID();
+    const frueher = randomUUID();
+    await inWelt(w, async (tx) => {
+      await tx.mandantKontaktRolle.create({
+        data: { mandantId: m.mandantId, kontaktId: tcb, rolle: 'TAX_COMPLIANCE_BEAUFTRAGTER' },
+      });
+      await tx.mandantKontaktRolle.create({
+        data: { mandantId: m.mandantId, kontaktId: ma, rolle: 'MITARBEITER' },
+      });
+      await tx.mandantKontaktRolle.create({
+        data: { mandantId: m.mandantId, kontaktId: frueher, rolle: 'MITARBEITER', aktiv: false },
+      });
+    });
+    await bereiteVor(w, m.mandantId, m.gv);
+    const a = btFuer(w, m.mandantId);
+    const v = await lies(a, m.mandantId);
+    const plan = v.plan!.kontrollen;
+    // Je Partei eine Kontrolle des Plans, Schlüsselkontrollen bevorzugt.
+    const je = (partei: 'KANZLEI' | 'MANDANT') =>
+      plan.find((k) => k.zust.partei === partei && k.schluessel) ??
+      plan.find((k) => k.zust.partei === partei && !['K-EC-20', 'K-EC-24'].includes(k.code));
+    const kanzleiK = je('KANZLEI')!;
+    const mandantK = je('MANDANT')!;
+    expect(kanzleiK).toBeTruthy();
+    expect(mandantK).toBeTruthy();
+    return { ...m, tcb, ma, frueher, a, kanzleiK, mandantK };
+  }
+
+  const anlegen = (
+    a: ReturnType<typeof btA>,
+    mandantId: string,
+    kontrollen: Record<string, unknown>,
+    p = personen(w),
+  ) =>
+    im(a, (ctx) => legeProgrammAn(ctx, { mandantId, daten: { kontrollen } as never, personen: p }));
+  const meldungen = (f: { felder?: Record<string, string[]> }) =>
+    Object.values(f.felder ?? {})
+      .flat()
+      .join('\n');
+
+  it('Kanzleikontrolle mit Gegenzeichnung beim Mandanten: Speichern „weiter" und Anlegen abgewiesen, nichts angelegt', async () => {
+    const m = await mandantMitKontakten();
+    const falsch = {
+      [m.kanzleiK.code]: {
+        partei: 'KANZLEI',
+        durchfuehrendId: w.hb,
+        vertretungId: w.dritte,
+        gegenzeichnerId: m.gv,
+      },
+    };
+    const s = await fehlerVon(
+      im(m.a, (ctx) =>
+        speichereEinrichtungsschritt(ctx, {
+          mandantId: m.mandantId,
+          ziel: 'weiter',
+          personen: personen(w),
+          schritt: 5,
+          daten: { kontrollen: falsch },
+        } as never),
+      ),
+    );
+    expect(s.code).toBe('UNGUELTIG');
+    expect(meldungen(s)).toContain(
+      `${m.kanzleiK.code}: Eine Gegenzeichnung beim Mandanten gibt es nur bei Kontrollen des Mandanten`,
+    );
+    const f = await fehlerVon(anlegen(m.a, m.mandantId, falsch));
+    expect(f.code).toBe('UNGUELTIG');
+    expect(meldungen(f)).toContain('Gegenzeichnung beim Mandanten gibt es nur');
+    // Auch der Parteiwechsel der Demo mit stehengebliebener Mandanten-Gegenzeichnung (K-EC-23).
+    const g = await fehlerVon(
+      anlegen(m.a, m.mandantId, {
+        [m.mandantK.code]: {
+          partei: 'KANZLEI',
+          durchfuehrendId: w.hb,
+          vertretungId: w.dritte,
+          gegenzeichnerId: m.tcb,
+        },
+      }),
+    );
+    expect(g.code).toBe('UNGUELTIG');
+    expect(
+      await inWelt(w, (tx) =>
+        tx.tcmsProgramm.count({ where: { mandantId: m.mandantId, status: 'AKTIV' } }),
+      ),
+    ).toBe(0);
+  });
+
+  it('Mandantenkontrolle: Gegenzeichnung beim Mandanten nur durch die Vertretung (Anzeige = Wahl)', async () => {
+    const m = await mandantMitKontakten();
+    const f = await fehlerVon(
+      anlegen(m.a, m.mandantId, {
+        [m.mandantK.code]: {
+          partei: 'MANDANT',
+          durchfuehrendId: m.tcb,
+          vertretungId: m.ma,
+          gegenzeichnerId: m.gv,
+        },
+      }),
+    );
+    expect(f.code).toBe('UNGUELTIG');
+    expect(meldungen(f)).toContain('als Gegenzeichnung die Vertretung wählen');
+    const r = await anlegen(m.a, m.mandantId, {
+      [m.mandantK.code]: {
+        partei: 'MANDANT',
+        durchfuehrendId: m.tcb,
+        vertretungId: m.ma,
+        gegenzeichnerId: m.ma,
+      },
+    });
+    const stand = await inWelt(w, (tx) =>
+      tx.kontrolleStand.findFirstOrThrow({
+        where: { kontrolle: { programmId: r.programmId, code: m.mandantK.code } },
+      }),
+    );
+    expect(stand).toMatchObject({
+      partei: 'MANDANT',
+      durchfuehrendId: m.tcb,
+      vertretungId: m.ma,
+      gegenzeichnerId: m.ma,
+      gegenzeichnungMandant: true,
+    });
+    // Rückhalt der Datenbank: Kanzleikontrolle mit Gegenzeichnung beim Mandanten nie.
+    await dbAbgewiesen(
+      inWelt(w, (tx) =>
+        tx.kontrolleStand.update({
+          where: { id: stand.id },
+          data: { partei: 'KANZLEI' },
+        }),
+      ),
+      regel.check('KontrolleStand', 'KontrolleStand_gegenzeichnung_mandant_check'),
+    );
+  });
+
+  it('Kanzleiseite fail closed: Kontakte des Mandanten (auch frühere) sind keine Kanzleipersonen', async () => {
+    const m = await mandantMitKontakten();
+    for (const id of [m.gv, m.frueher]) {
+      // Auch wenn die kanzleikonsole die ID in der Liste der Kanzlei führt.
+      const p = { ...personen(w), kanzlei: [...personen(w).kanzlei, id] };
+      for (const feld of ['durchfuehrendId', 'vertretungId'] as const) {
+        const zust = {
+          partei: 'KANZLEI',
+          durchfuehrendId: w.hb,
+          vertretungId: w.dritte,
+          gegenzeichnerId: w.bt,
+          [feld]: id,
+        };
+        const f = await fehlerVon(anlegen(m.a, m.mandantId, { [m.kanzleiK.code]: zust }, p));
+        expect(f.code, `${id} ${feld}`).toBe('UNGUELTIG');
+        expect(meldungen(f), feld).toContain('gehört nicht (mehr) zur Partei Kanzlei');
+      }
+    }
+    expect(
+      await inWelt(w, (tx) =>
+        tx.tcmsProgramm.count({ where: { mandantId: m.mandantId, status: 'AKTIV' } }),
+      ),
+    ).toBe(0);
+  });
+
+  it('unbekannte Personen werden gemeldet statt geleert; Lesen kennt die gewählte Gegenzeichnung jeder Kontrolle', async () => {
+    const m = await mandantMitKontakten();
+    const g = randomUUID();
+    const p = { ...personen(w), kanzlei: [...personen(w).kanzlei, g] };
+    const mitG = {
+      [m.mandantK.code]: {
+        partei: 'MANDANT',
+        durchfuehrendId: m.tcb,
+        vertretungId: m.ma,
+        gegenzeichnerId: g,
+      },
+    };
+    await im(m.a, (ctx) =>
+      speichereEinrichtungsschritt(ctx, {
+        mandantId: m.mandantId,
+        ziel: 'speichern',
+        personen: p,
+        schritt: 5,
+        daten: { kontrollen: mitG },
+      } as never),
+    );
+    // GET ohne vollständige Liste: die Kanzlei-Gegenzeichnung G einer Mandantenkontrolle bleibt.
+    const v = await lies(m.a, m.mandantId);
+    const k = v.plan!.kontrollen.find((x) => x.code === m.mandantK.code)!;
+    expect(k.zust.gegenzeichnerId).toBe(g);
+    expect(v.pruefung.find((x) => x.schritt === 5)!.fehler.join('\n')).not.toContain(
+      `${m.mandantK.code}:`,
+    );
+    // Anlegen mit einer Person, die die kanzleikonsole nicht (mehr) führt: gemeldet, nicht null.
+    const unbekannt = randomUUID();
+    const f = await fehlerVon(
+      anlegen(m.a, m.mandantId, {
+        [m.kanzleiK.code]: {
+          partei: 'KANZLEI',
+          durchfuehrendId: w.hb,
+          vertretungId: unbekannt,
+          gegenzeichnerId: w.bt,
+        },
+      }),
+    );
+    expect(f.code).toBe('UNGUELTIG');
+    expect(meldungen(f)).toContain(`${m.kanzleiK.code}: Die Vertretung gehört nicht (mehr)`);
+  });
+
+  it('Vorbelegung aus allen aktiven Rollen eines Kontakts (wie die Risikoaufnahme)', async () => {
+    // X: GV (zuerst) und TCB; Y: Mitarbeit. TCB ist X, Vertretung Y.
+    const m = await neuerMandant(w);
+    const y = randomUUID();
+    await inWelt(w, async (tx) => {
+      await tx.mandantKontaktRolle.create({
+        data: { mandantId: m.mandantId, kontaktId: m.gv, rolle: 'TAX_COMPLIANCE_BEAUFTRAGTER' },
+      });
+      await tx.mandantKontaktRolle.create({
+        data: { mandantId: m.mandantId, kontaktId: y, rolle: 'MITARBEITER' },
+      });
+    });
+    const v = await lies(btFuer(w, m.mandantId), m.mandantId);
+    const mandantSeite = v.plan!.kontrollen.filter(
+      (k) => k.zust.partei === 'MANDANT' && !['K-EC-20', 'K-EC-24'].includes(k.code),
+    );
+    expect(mandantSeite.length).toBeGreaterThan(0);
+    for (const k of mandantSeite) {
+      expect(k.zust.durchfuehrendId, k.code).toBe(m.gv);
+      expect(k.zust.vertretungId, k.code).toBe(y);
+    }
+    // Z: TCB zuerst, GV später und einzige GV – die Freigabe der Ziele wird vorbelegt.
+    const n = await neuerMandant(w);
+    const z = randomUUID();
+    await inWelt(w, async (tx) => {
+      await tx.mandantKontaktRolle.updateMany({
+        where: { mandantId: n.mandantId },
+        data: { aktiv: false },
+      });
+      await tx.mandantKontaktRolle.create({
+        data: { mandantId: n.mandantId, kontaktId: z, rolle: 'TAX_COMPLIANCE_BEAUFTRAGTER' },
+      });
+      await tx.mandantKontaktRolle.create({
+        data: { mandantId: n.mandantId, kontaktId: z, rolle: 'GESETZLICHER_VERTRETER' },
+      });
+    });
+    const vn = await lies(btFuer(w, n.mandantId), n.mandantId);
+    expect(vn.entwurf?.freigabe).toEqual({ anfordern: true, empfaengerId: z });
   });
 });

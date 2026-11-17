@@ -719,6 +719,9 @@ export function SchrittKontrollen({
     setWahl({ ...wahl, [code]: { ...wahl[code]!, ...teil } });
   const anzahl = new Set(gruppen.flatMap((g) => g.kontrollen.map((k) => k.code))).size;
   const pool = (partei: 'KANZLEI' | 'MANDANT') => (partei === 'KANZLEI' ? kanzlei : mandant);
+  // Gegenzeichnung beim Mandanten gibt es nur bei Kontrollen des Mandanten; bestätigen wird die
+  // Vertretung (Regel des Dienstes). Wechseln Partei oder Vertretung, folgt die Wahl.
+  const istKontakt = (id: string | null) => !!id && mandant.some((p) => p.id === id);
 
   return (
     <SetupForm
@@ -812,6 +815,9 @@ export function SchrittKontrollen({
                                     partei,
                                     durchfuehrendId: p[0]?.id ?? null,
                                     vertretungId: p[1]?.id ?? null,
+                                    gegenzeichnerId: istKontakt(w.gegenzeichnerId)
+                                      ? null
+                                      : w.gegenzeichnerId,
                                   });
                                 }}
                               >
@@ -833,7 +839,14 @@ export function SchrittKontrollen({
                                 leer
                                 wert={w.vertretungId}
                                 pool={pool(w.partei)}
-                                onChange={(id) => setze(k.code, { vertretungId: id })}
+                                onChange={(id) =>
+                                  setze(k.code, {
+                                    vertretungId: id,
+                                    ...(istKontakt(w.gegenzeichnerId)
+                                      ? { gegenzeichnerId: id }
+                                      : {}),
+                                  })
+                                }
                               />
                             </td>
                             <td style={ZELLE}>
@@ -855,13 +868,30 @@ export function SchrittKontrollen({
                                       </option>
                                     ))}
                                   </optgroup>
-                                  <optgroup label="Mandant (zweite Person)">
-                                    {mandant.map((p) => (
-                                      <option key={p.id} value={p.id}>
-                                        {kurzname(p.name)}
-                                      </option>
-                                    ))}
-                                  </optgroup>
+                                  {w.partei === 'MANDANT' && w.vertretungId ? (
+                                    <optgroup label="Mandant (Bestätigung durch die Vertretung)">
+                                      {mandant
+                                        .filter((p) => p.id === w.vertretungId)
+                                        .map((p) => (
+                                          <option key={p.id} value={p.id}>
+                                            {kurzname(p.name)}
+                                          </option>
+                                        ))}
+                                    </optgroup>
+                                  ) : null}
+                                  {istKontakt(w.gegenzeichnerId) &&
+                                  !(
+                                    w.partei === 'MANDANT' && w.gegenzeichnerId === w.vertretungId
+                                  ) ? (
+                                    // Frühere Wahl, die nicht mehr passt: sichtbar lassen, die
+                                    // Prüfung des Schritts nennt den Grund.
+                                    <option value={w.gegenzeichnerId ?? ''}>
+                                      {kurzname(
+                                        mandant.find((p) => p.id === w.gegenzeichnerId)?.name ?? '',
+                                      )}{' '}
+                                      (Mandant – nicht zulässig)
+                                    </option>
+                                  ) : null}
                                 </select>
                                 {k.schluessel ? (
                                   <span

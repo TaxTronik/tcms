@@ -51,6 +51,7 @@ import {
   type AufbauUmfeld,
 } from './aufbau';
 import { leseProfil } from '../../kern/profil';
+import { ladeZustaendigkeitsPools } from '../../kern/zustaendigkeit';
 import {
   leseEntwurf,
   pruefeSchritt1,
@@ -87,6 +88,9 @@ async function baueUmfeld(
     if (!mandantPersonen.some((p) => p.id === k.kontaktId))
       mandantPersonen.push({ id: k.kontaktId, mandantRolle: k.rolle });
   }
+  // Fail closed (wie `pruefeKanzleiPersonen`): auch Kontakte mit nur früheren Rollen
+  // sind nie Kanzleipersonen.
+  const pools = await ladeZustaendigkeitsPools(tx, mandant.id, null);
   const bt = klein(personen.berufstraegerId);
   const hb = klein(personen.bearbeitungId);
   const kanzlei: AufbauPerson[] = [];
@@ -104,6 +108,9 @@ async function baueUmfeld(
       },
       kanzlei,
       mandantPersonen,
+      // Vorbelegung aus allen aktiven Rollenzeilen wie in der Risikoaufnahme (`rollenFuer`).
+      mandantRollen: kontakte.map((k) => ({ id: k.kontaktId, rolle: k.rolle })),
+      kontakte: [...pools.kontakte],
       heute,
     },
     gvIds: kontakte.filter((k) => k.rolle === 'GESETZLICHER_VERTRETER').map((k) => k.kontaktId),
@@ -235,11 +242,16 @@ export async function ladeEinrichtung(
   const heute = heuteDatum(ctx.uhr);
   const programm = await ladeProgramm(ctx.tx, mandantId, false);
   // Lesen ohne vollständige Personenliste: Kanzleipersonen sind Zuständigkeit,
-  // Vertretung und die im Entwurf bereits gewählten Personen (Prüfung beim Speichern).
+  // Vertretung und die im Entwurf bereits gewählten Personen (Prüfung beim Speichern):
+  // Durchführung und Vertretung der Kanzleikontrollen und die Gegenzeichnung jeder
+  // Kontrolle. Kontakte des Mandanten darunter bleiben Kontakte (fail closed im Kern).
   const gespeichert = leseEntwurf(programm?.setupEntwurf, heute, null);
   const gewaehlt = Object.values(gespeichert.kontrollen)
-    .filter((k) => k.partei === 'KANZLEI')
-    .flatMap((k) => [k.durchfuehrendId, k.vertretungId, k.gegenzeichnerId])
+    .flatMap((k) =>
+      k.partei === 'KANZLEI'
+        ? [k.durchfuehrendId, k.vertretungId, k.gegenzeichnerId]
+        : [k.gegenzeichnerId],
+    )
     .filter((id): id is string => !!id);
   const personen: EinrichtungPersonen = {
     berufstraegerId: e.berufstraegerId ?? null,
