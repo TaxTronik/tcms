@@ -8,8 +8,17 @@
 //   unsafe      `$queryRawUnsafe` / `$executeRawUnsafe` (SQL aus Text)
 //   raw         `Prisma.raw`, `sql.raw`, jeder Aufruf `<x>.raw(…)` außer
 //               `String.raw` sowie ein Import namens `raw` (roher SQL-Baustein)
+//               und der Zugriff `Prisma['raw']` bzw. `const { raw } = …`
 //   raw-aufruf  `$queryRaw` / `$executeRaw` anders als als Tag eines Template-
-//               Literals (z. B. als Funktionsaufruf mit zusammengesetztem Text)
+//               Literals (z. B. als Funktionsaufruf mit zusammengesetztem Text),
+//               auch über einen Alias aus einer Destrukturierung
+//   baustein    rohe SQL-Bausteine, die in ein erlaubtes Tagged Template als
+//               `${…}` eingesetzt Text unverändert ins SQL bringen:
+//               `sql`/`sqltag` nur als Tag (nie `Prisma.sql([text])`, kein
+//               Alias), `new …Sql(…)`, `Prisma.join` nur mit festen
+//               String-Literalen als Trenner, Präfix und Suffix; Prisma-Bausteine
+//               nur über den Namensraum `Prisma` (kein Import, keine
+//               Destrukturierung, kein Elementzugriff `Prisma['sql']`)
 //   pg-text     `.query(…)` (Treiber `pg`) mit einem SQL-Text, der kein festes
 //               String-Literal ist (Verkettung, Template mit `${…}`, Variable)
 //   tenant-guc  `set_config` oder `tcms.tenant_id` in einem String – außer in
@@ -27,7 +36,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-type Regel = 'unsafe' | 'raw' | 'raw-aufruf' | 'pg-text' | 'tenant-guc';
+type Regel = 'unsafe' | 'raw' | 'raw-aufruf' | 'baustein' | 'pg-text' | 'tenant-guc';
 
 interface Befund {
   regel: Regel;
@@ -121,9 +130,58 @@ const AUSNAHMEN: Record<string, { regeln: Regel[]; begruendung: string }> = {
 
 const RAW_TAGS = new Set(['$queryRaw', '$executeRaw']);
 const UNSAFE = new Set(['$queryRawUnsafe', '$executeRawUnsafe']);
+/** Rohe SQL-Bausteine von Prisma (`@prisma/client-runtime-utils`): nur über `Prisma.…`. */
+const BAUSTEINE = new Set(['sql', 'sqltag', 'join', 'Sql', 'raw']);
+/** Tags, die Werte zu Parametern machen – nur als Tag eines Template-Literals erlaubt. */
+const SQL_TAGS = new Set(['sql', 'sqltag']);
 
 function istFesterText(n: ts.Node | undefined): boolean {
   return !!n && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n));
+}
+
+/** Name eines Zugriffs `x.name` bzw. `x['name']` (festes Literal), sonst `null`. */
+function zugriffsname(n: ts.Node): string | null {
+  if (ts.isPropertyAccessExpression(n)) return n.name.text;
+  if (ts.isElementAccessExpression(n) && istFesterText(n.argumentExpression)) {
+    return (n.argumentExpression as ts.StringLiteral).text;
+  }
+  return null;
+}
+
+const ohneKlammern = (n: ts.Expression): ts.Expression => {
+  let x = n;
+  while (ts.isParenthesizedExpression(x) || ts.isAsExpression(x) || ts.isNonNullExpression(x)) {
+    x = x.expression;
+  }
+  return x;
+};
+
+/** Ausdruck ist der Namensraum `Prisma` (auch `x.Prisma`). */
+const istPrisma = (n: ts.Expression): boolean => {
+  const x = ohneKlammern(n);
+  return (ts.isIdentifier(x) && x.text === 'Prisma') || zugriffsname(x) === 'Prisma';
+};
+
+/**
+ * Destrukturierung aus `Prisma` oder aus einem Prisma-Modul
+ * (`require('@prisma/…')`, `await import('@prisma/…')`).
+ */
+function ausPrisma(n: ts.BindingElement): boolean {
+  let x: ts.Node = n;
+  while (ts.isBindingElement(x) || ts.isObjectBindingPattern(x) || ts.isArrayBindingPattern(x)) {
+    x = x.parent;
+  }
+  const init = ts.isVariableDeclaration(x) ? x.initializer : undefined;
+  if (!init) return false;
+  let quelle = ohneKlammern(init);
+  if (ts.isAwaitExpression(quelle)) quelle = ohneKlammern(quelle.expression);
+  if (istPrisma(quelle)) return true;
+  return (
+    ts.isCallExpression(quelle) &&
+    quelle.arguments.length > 0 &&
+    istFesterText(quelle.arguments[0]) &&
+    /prisma/i.test((quelle.arguments[0] as ts.StringLiteral).text)
+  );
 }
 
 /** Befunde einer Quelldatei (rein, für die Testfälle unten auch direkt aufrufbar). */
@@ -155,10 +213,58 @@ export function pruefeQuelltext(text: string, datei = 'x.ts', tenantErlaubt = fa
       if (ziel === 'Prisma' || ziel === 'sql' || (aufruf && ziel !== 'String')) melde('raw', n);
     }
     if (ts.isImportSpecifier(n) && (n.propertyName ?? n.name).text === 'raw') melde('raw', n);
+    if (ts.isElementAccessExpression(n) && zugriffsname(n) === 'raw') melde('raw', n);
     // raw-aufruf: $queryRaw/$executeRaw nur als Tag eines Template-Literals.
     if (ts.isPropertyAccessExpression(n) && RAW_TAGS.has(n.name.text)) {
       const p = n.parent;
       if (!(ts.isTaggedTemplateExpression(p) && p.tag === n)) melde('raw-aufruf', n);
+    }
+    // Destrukturierung: `const { raw } = Prisma` (raw), `const { $queryRaw: q } = tx`
+    // (Alias, später als Funktionsaufruf mit Sql-Objekt nicht mehr erkennbar),
+    // `const { sql, join } = Prisma` (baustein).
+    if (ts.isBindingElement(n)) {
+      const name = n.propertyName ?? n.name;
+      const text = ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : null;
+      if (text === 'raw') melde('raw', n);
+      else if (text !== null && RAW_TAGS.has(text)) melde('raw-aufruf', n);
+      else if (text !== null && BAUSTEINE.has(text) && ausPrisma(n)) melde('baustein', n);
+    }
+    // baustein: Prisma-Bausteine nur über `Prisma.…` (kein Import, kein Re-Export) …
+    if (ts.isImportSpecifier(n) || ts.isExportSpecifier(n)) {
+      const name = (n.propertyName ?? n.name).text;
+      const modul = ts.isImportSpecifier(n)
+        ? n.parent.parent.parent.moduleSpecifier
+        : n.parent.parent.moduleSpecifier;
+      const ausModul = !!modul && ts.isStringLiteral(modul) && /prisma/i.test(modul.text);
+      if (ausModul && name === 'raw' && ts.isExportSpecifier(n)) melde('raw', n);
+      else if (ausModul && name !== 'raw' && BAUSTEINE.has(name)) melde('baustein', n);
+    }
+    if (ts.isElementAccessExpression(n) && istPrisma(n.expression)) {
+      const name = zugriffsname(n);
+      if (name !== null && name !== 'raw' && BAUSTEINE.has(name)) melde('baustein', n);
+    }
+    // … `sql`/`sqltag` nur als Tag (ein Aufruf `sql([text])` setzt den Text roh ein) …
+    if (ts.isCallExpression(n)) {
+      const c = ohneKlammern(n.expression);
+      const name = ts.isIdentifier(c) ? c.text : zugriffsname(c);
+      if (name !== null && SQL_TAGS.has(name)) melde('baustein', n);
+    }
+    if (ts.isPropertyAccessExpression(n) && SQL_TAGS.has(n.name.text) && istPrisma(n.expression)) {
+      const p = n.parent;
+      const tag = ts.isTaggedTemplateExpression(p) && p.tag === n;
+      const aufruf = ts.isCallExpression(p) && p.expression === n; // meldet die Regel davor
+      if (!tag && !aufruf) melde('baustein', n);
+    }
+    // … kein `new Sql(…)` (Text und Werte frei wählbar) …
+    if (ts.isNewExpression(n)) {
+      const c = ohneKlammern(n.expression);
+      if ((ts.isIdentifier(c) ? c.text : zugriffsname(c)) === 'Sql') melde('baustein', n);
+    }
+    // … und `Prisma.join` nur aufgerufen, Trenner/Präfix/Suffix als feste Literale.
+    if (ts.isPropertyAccessExpression(n) && n.name.text === 'join' && istPrisma(n.expression)) {
+      const p = n.parent;
+      if (!(ts.isCallExpression(p) && p.expression === n)) melde('baustein', n);
+      else if (p.arguments.slice(1).some((a) => !istFesterText(a))) melde('baustein', p);
     }
     // pg-text: .query(<fester Text>, [werte]) – SQL nie zusammengesetzt.
     if (
@@ -244,6 +350,69 @@ describe('RT-02: keine SQL-Injection-Bausteine (statisch)', () => {
       ]);
       expect(regeln('const q = tx.$queryRaw; await q`SELECT 1`;')).toEqual(['raw-aufruf']);
       expect(regeln("await tx['$queryRaw']`SELECT 1`;")).toEqual(['raw-aufruf']);
+    });
+
+    it('erlaubt Prisma-Bausteine als Tag bzw. mit festen Trennern und gleichnamige fremde Funktionen', () => {
+      expect(
+        regeln(`
+          await tx.$queryRaw\`SELECT 1 WHERE id IN (\${Prisma.join(ids, ', ')})\`;
+          await tx.$queryRaw\`SELECT 1 WHERE \${Prisma.join(bed, ' OR ', '(', ')')}\`;
+          const teil: Prisma.Sql = Prisma.sql\`a = \${b}\`;
+          if (teil instanceof Prisma.Sql) void 0;
+          import { join } from 'node:path';
+          const { join: verbinde } = path;
+          const p = join(a, b) + path.join(a, b) + liste.join(trenner);
+        `),
+      ).toEqual([]);
+    });
+
+    it('meldet rohe SQL-Bausteine in einem erlaubten Tagged Template (Befunde 48, 93)', () => {
+      // Text aus der Eingabe landet wörtlich im SQL (sql([text]).values ist leer).
+      expect(regeln('await tx.$queryRaw`SELECT id FROM r WHERE ${Prisma.sql([filter])}`;')).toEqual(
+        ['baustein'],
+      );
+      expect(regeln('await tx.$queryRaw`SELECT 1 WHERE ${Prisma.sqltag([f])}`;')).toEqual([
+        'baustein',
+      ]);
+      expect(regeln('await tx.$queryRaw`SELECT 1 WHERE ${new Prisma.Sql([f], [])}`;')).toEqual([
+        'baustein',
+      ]);
+      expect(regeln('const s = sql([text]);')).toEqual(['baustein']);
+      // Trenner, Präfix und Suffix von join stehen roh im SQL.
+      expect(regeln('const j = Prisma.join(ids, trenner);')).toEqual(['baustein']);
+      expect(regeln("const j = Prisma.join(ids, ', ', praefix);")).toEqual(['baustein']);
+      expect(regeln('const j = Prisma.join(ids, `${a} OR `);')).toEqual(['baustein']);
+      // Aliase und Elementzugriffe entziehen sich den Regeln oben.
+      expect(regeln('const j = Prisma.join;')).toEqual(['baustein']);
+      expect(regeln('const s = Prisma.sql;')).toEqual(['baustein']);
+      expect(regeln('f(Prisma.sql);')).toEqual(['baustein']);
+      expect(regeln("const t = Prisma['sql']`x`;")).toEqual(['baustein']);
+      expect(regeln("const r = Prisma['raw'];")).toEqual(['raw']);
+      expect(regeln('const { raw } = Prisma;')).toEqual(['raw']);
+      expect(regeln('const { sql: s, join } = Prisma;')).toEqual(['baustein', 'baustein']);
+      expect(regeln("const { sql } = require('@prisma/client/runtime/client');")).toEqual([
+        'baustein',
+      ]);
+      expect(regeln("const { Sql } = await import('@prisma/client-runtime-utils');")).toEqual([
+        'baustein',
+      ]);
+      expect(
+        regeln("import { sql as s, join as j } from '@prisma/client/runtime/client';"),
+      ).toEqual(['baustein', 'baustein']);
+      expect(
+        regeln("import { Sql } from '@prisma/client-runtime-utils'; const x = new Sql([f], []);"),
+      ).toEqual(['baustein', 'baustein']);
+      expect(regeln("export { sql } from '@prisma/client-runtime-utils';")).toEqual(['baustein']);
+      expect(regeln("export { raw } from '@prisma/client-runtime-utils';")).toEqual(['raw']);
+    });
+
+    it('meldet Aliase von $queryRaw/$executeRaw aus einer Destrukturierung', () => {
+      expect(regeln('const { $queryRaw: q } = tx; await q(Prisma.sql([text]));')).toEqual([
+        'raw-aufruf',
+        'baustein',
+      ]);
+      expect(regeln('const { $executeRaw } = tx;')).toEqual(['raw-aufruf']);
+      expect(regeln("const { '$queryRaw': q } = tx;")).toEqual(['raw-aufruf']);
     });
 
     it('meldet zusammengesetzte pg-Texte', () => {

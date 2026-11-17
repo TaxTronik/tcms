@@ -598,7 +598,11 @@ Gegenmittel:
   `packages/db/src/__tests__/roh-sql.test.ts` prüft alle Quelltexte (Apps, Pakete,
   Seed, Skripte) mit dem TypeScript-Parser: kein `$queryRawUnsafe` oder
   `$executeRawUnsafe`, kein `Prisma.raw`, `sql.raw` oder `.raw(…)`;
-  `$queryRaw`/`$executeRaw` nur als Tagged Template (Werte werden Parameter);
+  `$queryRaw`/`$executeRaw` nur als Tagged Template (Werte werden Parameter), auch
+  ohne Alias aus einer Destrukturierung; keine rohen Bausteine im Template
+  (`Prisma.sql` nur als Tag, nie `Prisma.sql([text])` oder `new Prisma.Sql(…)`,
+  `Prisma.join` nur mit festen Literalen als Trenner, Präfix und Suffix,
+  Prisma-Bausteine nur über `Prisma.…`, nie importiert oder destrukturiert);
   `pg`-Abfragen nur mit festem SQL-Text; `set_config` und `tcms.tenant_id` nur in
   `packages/db/src/tenant.ts`. Ausnahmen nur für Tests und den Seed, je Datei und
   Regel begründet; Laufzeitcode kann nicht freigestellt werden.
