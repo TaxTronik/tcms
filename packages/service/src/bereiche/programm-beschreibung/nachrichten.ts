@@ -104,7 +104,9 @@ export type NeueNachricht = NachrichtInhalt & {
  * Änderung). Empfänger und Mandant nur als ID, die Empfängerart folgt aus dem
  * Zweck (`NACHRICHT_EMPFAENGER`), die Vorlagendaten werden gegen den Vertrag
  * geprüft. Ein Verstoß ist ein Programmierfehler (fail closed, Meldung ohne
- * Werte). Der Code landet nur in der Spalte `code`, nie in `daten`.
+ * Werte). Der Code landet im Klartext nur in der Spalte `code` und im
+ * Rückfalltext `text` (beide leeren Zustellung, Unzustellbarkeit und Verwerfen),
+ * nie in `daten`.
  */
 export async function legeNachrichtAn(tx: Tx, n: NeueNachricht): Promise<string> {
   if (!UUID.test(n.empfaengerId)) throw new Error('[service] Empfänger ohne gültige ID');

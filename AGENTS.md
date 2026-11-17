@@ -242,8 +242,10 @@ für KI-Werkzeuge.
 - Nachrichten adressieren Empfänger nur über die Personen-ID (`empfaengerId`, UUID) mit einem
   Zweck aus `NACHRICHT_ZWECKE`, nie über Namen; jede trägt `mandantId`, die aus dem Zweck folgende
   `empfaengerArt` und Vorlagendaten `daten` (geprüft gegen den Vertrag, ohne Namen und ohne Code).
-  Neue Nachrichten nur über `legeNachrichtAn`. Der Code steht nur in der Spalte `code` der offenen
-  Nachricht. Der Abruf hält die erste Auslieferung fest (`abgerufenAm`); eine verworfene, nie
+  Neue Nachrichten nur über `legeNachrichtAn`. Der Code steht im Klartext nur in der offenen
+  Nachricht: in der Spalte `code` und im Rückfalltext `text` (für den Abruf zusätzlich als
+  `daten.code` der Antwort), nie in den gespeicherten `daten`; wer offene Nachrichten liest,
+  sichert oder auswertet, behandelt `code` und `text` gleich. Der Abruf hält die erste Auslieferung fest (`abgerufenAm`); eine verworfene, nie
   ausgelieferte Nachricht lässt sich weder als zugestellt noch als unzustellbar melden (`409`, CHECK,
   H2). „Zugestellt" setzt `zugestelltAm` und leert `code` und Text; „unzustellbar" (Meldung der
   kanzleikonsole mit Grund aus `NACHRICHT_UNZUSTELLBAR_GRUENDE`) setzt `unzustellbarAm` und
