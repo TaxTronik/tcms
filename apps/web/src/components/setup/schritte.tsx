@@ -428,7 +428,7 @@ export function SchrittZiele({
           </div>
           <p className="hint">
             {gv.length === 0
-              ? 'Für diesen Mandanten ist keine gesetzliche Vertretung erfasst; die Freigabe kann später angefordert werden.'
+              ? 'Für diesen Mandanten ist keine gesetzliche Vertretung erfasst; die Freigabe kann nach Version 1 unter „Kommunikation“ angefordert werden.'
               : 'Die Anforderung entsteht mit Version 1; die Freigabe erfolgt durch die gesetzliche Vertretung im Mandantenportal (Bestätigung per E-Mail-Code).'}
           </p>
         </div>

@@ -228,7 +228,7 @@ für KI-Werkzeuge.
   UPDATE); Freigabe-Operationen lesen und prüfen Rollen erst nach der Zeilensperre ihres Objekts
   und `halteRollenFest` (dieselbe Zeile FOR KEY SHARE, `src/rollen.ts`) – TS-05, RT4-T-05. Das
   gilt für Erteilen, Code anfordern, Kenntnisnahme, Neuadressieren und jedes Anlegen einer Freigabe
-  (Ziele mit Version 1, Beschreibung, Risikoakzeptanz): Entfernen der letzten GV und Adressieren an
+  (Ziele mit Version 1 oder später über „Ziele-Freigabe anfordern“, Beschreibung, Risikoakzeptanz): Entfernen der letzten GV und Adressieren an
   sie laufen so nacheinander (kein Write Skew, RT4-T-06).
 - Bestätigungscodes: 6 Ziffern aus `randomInt`, nur ein an die Freigabe gebundener HMAC-SHA-256 mit
   dem Schlüssel aus `TCMS_CODE_SCHLUESSEL` wird gespeichert (`codeHash`, CHECK hex, dazu die

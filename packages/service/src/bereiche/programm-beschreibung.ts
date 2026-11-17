@@ -30,6 +30,7 @@ export {
   ladePortalFreigaben,
 } from './programm-beschreibung/freigaben';
 export { ladeFreigabenHistorie } from './programm-beschreibung/kommunikation';
+export { fordereZieleFreigabeAn } from './programm-beschreibung/ziele';
 export {
   bestaetigeNachrichtZustellung,
   ladeOffeneNachrichten,

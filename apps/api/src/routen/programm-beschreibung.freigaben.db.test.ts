@@ -214,6 +214,25 @@ describe.skipIf(!AKTIV)('Endpunkte CMS-Beschreibung und Freigaben (App + Postgre
     expect(v09.snapshotGeprueft).toBe(true);
   });
 
+  it('Ziele-Freigabe anfordern: höchstens eine offene je Programm (409), Empfänger nur GV (400)', async () => {
+    // Version 1 hat die Freigabe der Ziele bereits angefordert; sie ist offen.
+    const offen = await senden(w, 'POST', `${m(w.A)}/ziele/freigabe`, a.bt(), {
+      empfaengerId: w.GV,
+    });
+    expect(offen.status).toBe(409);
+    expect(((await json(offen))['fehler'] as { code: string }).code).toBe('KONFLIKT');
+    const ohneRecht = await senden(
+      w,
+      'POST',
+      `${m(w.A)}/ziele/freigabe`,
+      a.kanzlei(w.DRITTE, w.A),
+      {
+        empfaengerId: w.GV,
+      },
+    );
+    expect(ohneRecht.status).toBe(403);
+  });
+
   const V = (x: string) => `${m(x)}/beschreibung/versionen/v123`;
   const P = (x: string) => `${m(x)}/portal/freigaben/f123`;
   pruefeEndpunkte(w, [
@@ -266,6 +285,13 @@ describe.skipIf(!AKTIV)('Endpunkte CMS-Beschreibung und Freigaben (App + Postgre
           namen: [],
         },
       },
+    },
+    {
+      name: 'Ziele-Freigabe anfordern',
+      methode: 'POST',
+      pfad: (x) => `${m(x)}/ziele/freigabe`,
+      body: { empfaengerId: w.GV },
+      ungueltig: { body: { empfaengerId: 'Jana Weller' } },
     },
     {
       name: 'Neuadressierung',

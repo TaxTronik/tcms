@@ -1011,6 +1011,27 @@ export const FreigabeNeuadressierungErgebnisSchema = z
   .object({ freigabeId: z.string(), vorherId: z.string(), empfaengerId: z.string() })
   .strict();
 
+/**
+ * Freigabe der Compliance-Ziele nach Version 1 anfordern (z. B. wenn bei der
+ * Einrichtung noch keine gesetzliche Vertretung erfasst war): an eine aktive
+ * gesetzliche Vertretung (ID), für alle noch nicht freigegebenen Ziele; höchstens
+ * eine offene Ziele-Freigabe je Programm (sonst `KONFLIKT`, neu adressieren).
+ */
+export const ZieleFreigabeAnfordernBodySchema = z.object({ empfaengerId: uuid }).strict();
+export const ZieleFreigabeAnfordernEingabeSchema = ZieleFreigabeAnfordernBodySchema.extend({
+  mandantId: uuid,
+}).strict();
+export type ZieleFreigabeAnfordernEingabe = z.infer<typeof ZieleFreigabeAnfordernEingabeSchema>;
+export const ZieleFreigabeAnfordernErgebnisSchema = z
+  .object({
+    freigabeId: z.string(),
+    teilbereichId: z.string(),
+    /** Zahl der Ziele, die zur Freigabe vorliegen. */
+    ziele: z.number().int().min(1),
+  })
+  .strict();
+export type ZieleFreigabeAnfordernErgebnis = z.infer<typeof ZieleFreigabeAnfordernErgebnisSchema>;
+
 export const PortalFreigabenEingabeSchema = z.object({ mandantId: uuid }).strict();
 export type PortalFreigabenEingabe = z.infer<typeof PortalFreigabenEingabeSchema>;
 

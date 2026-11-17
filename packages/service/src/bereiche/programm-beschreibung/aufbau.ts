@@ -18,12 +18,10 @@ import {
   addTage,
   BEWERTUNGSMODELL_VERSION,
   brutto as berechneBrutto,
-  fmtEurGanz,
   hoeher,
   katalogRisiko,
   KATALOG_KONTROLLEN,
   KATALOG_RISIKEN,
-  KLASSE_LABEL,
   leiteFrequenzAb,
   monatSchluessel,
   PAKET,
@@ -58,7 +56,7 @@ import {
 } from '../../kern/zustaendigkeit';
 import { gleicheId } from '../../rechte';
 import { risikoEntscheidung } from './entwurf';
-import { legeNachrichtAn } from './nachrichten';
+import { legeZieleFreigabeAn } from './ziele';
 
 /** Person im Umfeld: Kanzleiperson oder Mandantenkontakt (mit erster aktiver Rolle, nur Anzeige). */
 export interface AufbauPerson {
@@ -526,44 +524,17 @@ export async function schreibeVersion1(
   if (anfordern) {
     // TS-06: Empfänger über die ID; die Prüfung von Schritt 3 hat sie gegen die
     // aktiven gesetzlichen Vertretungen des Mandanten geprüft.
-    const empfaengerId = e.freigabe.empfaengerId!.toLowerCase();
-    const inhalt = [
-      `Compliance-Ziele für den Teilbereich „${tb.name}"`,
-      '',
-      ...ziele.map(
-        (z, i) =>
-          `${i + 1}. ${z.text.trim()} (Wesentlichkeitsgrenze ${fmtEurGanz(z.wesentlichkeitEur)}, Risikoappetit ${KLASSE_LABEL[z.risikoappetit]})`,
-      ),
-    ].join('\n');
-    const titel = `Compliance-Ziele · ${tb.name}`;
-    const fr = await tx.freigabe.create({
-      data: {
-        programmId,
-        art: 'ZIELE',
-        refId: tb.id,
-        titel,
-        inhalt,
-        angefordertVon: nutzer.id,
-        angefordertAm: zeitpunkt,
-        empfaengerId,
-      },
-    });
-    freigabeId = fr.id;
-    await legeNachrichtAn(tx, {
-      mandantId: u.mandant.id,
-      empfaengerId,
-      zweck: 'FREIGABE_ANGEFORDERT',
-      daten: { freigabeId: fr.id, art: 'ZIELE', titel, version: null },
-      betreff: 'Freigabe angefordert: Compliance-Ziele',
-      text: `Im Portal warten die Compliance-Ziele der ${u.mandant.name} auf Ihre Freigabe. Den Bestätigungscode erhalten Sie beim Freigeben.`,
-    });
-    protokolle.push({
-      aktion: 'tcms.ziele.freigabe_angefordert',
-      objektTyp: 'Teilbereich',
-      objektId: tb.id,
+    const fr = await legeZieleFreigabeAn(tx, {
       programmId,
-      detail: { freigabeId: fr.id, empfaengerId, anzahl: ziele.length },
+      mandant: { id: u.mandant.id, name: u.mandant.name },
+      teilbereich: { id: tb.id, name: tb.name },
+      ziele,
+      empfaengerId: e.freigabe.empfaengerId!,
+      von: nutzer.id,
+      zeitpunkt,
     });
+    freigabeId = fr.freigabeId;
+    protokolle.push(fr.protokoll);
   }
 
   protokolle.unshift({

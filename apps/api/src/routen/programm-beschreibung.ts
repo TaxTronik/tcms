@@ -22,6 +22,7 @@ import {
   erteileFreigabe,
   fordereBeschreibungsfreigabeAn,
   fordereFreigabeCodeAn,
+  fordereZieleFreigabeAn,
   gibBeschreibungZurReview,
   ladeBeschreibung,
   ladeEinrichtung,
@@ -100,7 +101,10 @@ export function registriereProgrammBeschreibung(r: Routen<Tx>, codes: CodeSchlue
     fordereBeschreibungsfreigabeAn(dienstKontext(c), { ...c.body, ...version(c) }),
   );
 
-  // ---- Freigaben: Neuadressierung (Kanzlei) ----
+  // ---- Freigaben: Ziele-Freigabe anfordern und Neuadressierung (Kanzlei) ----
+  r.endpunkt(ENDPUNKTE.zieleFreigabeAnfordern, (c) =>
+    fordereZieleFreigabeAn(dienstKontext(c), { ...c.body, ...mandant(c) }),
+  );
   r.endpunkt(ENDPUNKTE.freigabeNeuadressieren, (c) =>
     adressiereFreigabeNeu(dienstKontext(c), { ...c.body, ...freigabe(c) }),
   );

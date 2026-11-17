@@ -63,6 +63,7 @@ import {
   aktiveKontakte,
   fachlichUngueltig,
   iso,
+  istEingerichtet,
   kanzleiZugriff,
   konfliktBeiEindeutigkeit,
   programmIdDesMandanten,
@@ -174,8 +175,7 @@ async function ladeProgramm(
   });
 }
 
-const eingerichtet = (p: ProgrammZeile | null) =>
-  !!p && (p.status !== 'ENTWURF' || p.version1Am !== null);
+const eingerichtet = (p: ProgrammZeile | null) => istEingerichtet(p);
 
 /**
  * TS-05 für den (unversionierten) Entwurf: Der Aufrufer nennt den Stand, den er

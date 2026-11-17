@@ -157,6 +157,8 @@ import {
   ProgrammAnlegenBodySchema,
   ProgrammAnlegenErgebnisSchema,
   ReviewZurueckweisenBodySchema,
+  ZieleFreigabeAnfordernBodySchema,
+  ZieleFreigabeAnfordernErgebnisSchema,
 } from './bereiche/programm-beschreibung';
 import {
   AbweichungAufhebenBodySchema,
@@ -1227,6 +1229,14 @@ export const ENDPUNKTE = register({
   },
 
   // ---- Freigaben ----------------------------------------------------------------
+  zieleFreigabeAnfordern: {
+    methode: 'POST',
+    pfad: `${M}/ziele/freigabe`,
+    params: MandantPfadSchema,
+    body: ZieleFreigabeAnfordernBodySchema,
+    antwort: ZieleFreigabeAnfordernErgebnisSchema,
+    status: 201,
+  },
   freigabeNeuadressieren: {
     methode: 'POST',
     pfad: `${M}/freigaben/:freigabeId/neuadressierung`,

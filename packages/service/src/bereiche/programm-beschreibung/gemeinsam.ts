@@ -110,6 +110,39 @@ export async function programmIdDesMandanten(
 }
 
 /**
+ * Eine Regel „Programm eingerichtet": Version 1 ist angelegt (Status nicht mehr
+ * ENTWURF oder `version1Am` gesetzt). Die Programmzeile entsteht schon beim
+ * ersten Speichern des Einrichtungsassistenten (Status ENTWURF).
+ */
+export const istEingerichtet = (p: { status: string; version1Am: Date | null } | null) =>
+  !!p && (p.status !== 'ENTWURF' || p.version1Am !== null);
+
+export const NOCH_NICHT_EINGERICHTET =
+  'Für diesen Mandanten ist noch kein Tax-CMS eingerichtet (Version 1 fehlt).';
+
+/**
+ * ID des eingerichteten Programms eines Mandanten, optional unter Zeilensperre
+ * (TS-05: Programm vor allen anderen Zeilen); ohne Programm oder nur mit dem
+ * Entwurf des Einrichtungsassistenten → `KONFLIKT`.
+ */
+export async function eingerichtetesProgramm(
+  tx: Tx,
+  mandantId: string,
+  sperren: boolean,
+): Promise<string> {
+  const zeilen = sperren
+    ? await tx.$queryRaw<{ id: string; status: string; version1Am: Date | null }[]>`
+        SELECT id, status::text AS status, "version1Am" FROM "TcmsProgramm"
+        WHERE "mandantId" = ${mandantId}::uuid FOR UPDATE`
+    : await tx.$queryRaw<{ id: string; status: string; version1Am: Date | null }[]>`
+        SELECT id, status::text AS status, "version1Am" FROM "TcmsProgramm"
+        WHERE "mandantId" = ${mandantId}::uuid`;
+  const p = zeilen[0] ?? null;
+  if (!p || !istEingerichtet(p)) throw new DienstFehler('KONFLIKT', NOCH_NICHT_EINGERICHTET);
+  return p.id;
+}
+
+/**
  * Sperrt eine Beschreibungsversion (FOR UPDATE), sofern sie zum Programm des
  * Mandanten gehört; sonst `NICHT_GEFUNDEN`. Alle Statusübergänge einer Version
  * laufen nach dieser Sperre, damit Prüfung und Änderung in derselben
