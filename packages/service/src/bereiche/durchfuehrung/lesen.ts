@@ -191,7 +191,14 @@ async function gemeinsam(
       historisch && !vorStand(d.abgeschlossenAm, ende) ? null : d.gegengezeichnetVon,
     abgeschlossenAm: isoN(historisch ? vorStand(d.abgeschlossenAm, ende) : d.abgeschlossenAm),
     zurueckgewiesenVon: d.zurueckgewiesenVon,
-    zurueckgewiesenAm: isoN(zurueck?.at),
+    // Gespeicherte Zurückweisung (fachliche Zeit wie `eingereichtAm`); ältere Zeilen ohne Spalte: Audit.
+    zurueckgewiesenAm: isoN(
+      d.zurueckgewiesenAm
+        ? historisch
+          ? vorStand(d.zurueckgewiesenAm, ende)
+          : d.zurueckgewiesenAm
+        : zurueck?.at,
+    ),
     zurueckweisungsgrund: d.zurueckweisungsgrund,
     entfallenBegruendung: d.entfallenBegruendung,
     entfallenAm: isoN(historisch ? vorStand(d.entfallenAm, ende) : d.entfallenAm),

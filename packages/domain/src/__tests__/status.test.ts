@@ -11,6 +11,7 @@ const basis = {
   periodeVon: utc(2026, 9, 1),
   periodeBis: utc(2026, 9, 30),
   faelligAm: utc(2026, 10, 10),
+  zurueckgewiesenAm: null,
 };
 
 describe('Abgeleiteter Status einer Durchführung', () => {
@@ -84,12 +85,67 @@ describe('Abgeleiteter Status: Zeitpunkte nach Berliner Kalendertag', () => {
   });
 });
 
+describe('Abgeleiteter Status nach Zurückweisung', () => {
+  // fällig 10.10., eingereicht 05.10., zurückgewiesen 12.10.
+  const zurueck = {
+    ...basis,
+    status: 'ZURUECKGEWIESEN' as const,
+    begonnenAm: utc(2026, 10, 2),
+    eingereichtAm: new Date('2026-10-05T09:00:00Z'),
+    zurueckgewiesenAm: new Date('2026-10-12T09:00:00Z'),
+  };
+  it('zwischen Einreichung und Zurückweisung: zur Gegenzeichnung', () => {
+    expect(statusAm(zurueck, utc(2026, 10, 3))).toBe('IN_DURCHFUEHRUNG');
+    expect(statusAm(zurueck, utc(2026, 10, 7))).toBe('ZUR_GEGENZEICHNUNG');
+    expect(statusAm(zurueck, utc(2026, 10, 11))).toBe('ZUR_GEGENZEICHNUNG');
+    expect(statusAm(zurueck, utc(2026, 10, 12))).toBe('UEBERFAELLIG');
+  });
+  it('vor der Fälligkeit zurückgewiesen: zurückgewiesen ab dem Tag der Zurückweisung', () => {
+    const d = { ...zurueck, zurueckgewiesenAm: new Date('2026-10-08T09:00:00Z') };
+    expect(statusAm(d, utc(2026, 10, 7))).toBe('ZUR_GEGENZEICHNUNG');
+    expect(statusAm(d, utc(2026, 10, 8))).toBe('ZURUECKGEWIESEN');
+    expect(statusAm(d, utc(2026, 10, 11))).toBe('UEBERFAELLIG');
+  });
+  it('ohne gespeicherte Zurückweisung (Altbestand): zurückgewiesen ab der Einreichung', () => {
+    const d = { ...zurueck, zurueckgewiesenAm: null };
+    expect(statusAm(d, utc(2026, 10, 7))).toBe('ZURUECKGEWIESEN');
+  });
+  it('erneut eingereicht: zurückgewiesen bis zur erneuten Einreichung', () => {
+    const d = {
+      ...zurueck,
+      status: 'ZUR_GEGENZEICHNUNG' as const,
+      eingereichtAm: new Date('2026-10-14T09:00:00Z'),
+    };
+    expect(statusAm(d, utc(2026, 10, 12))).toBe('UEBERFAELLIG');
+    expect(statusAm(d, utc(2026, 10, 14))).toBe('ZUR_GEGENZEICHNUNG');
+    const frueh = { ...d, faelligAm: utc(2026, 10, 31) };
+    expect(statusAm(frueh, utc(2026, 10, 13))).toBe('ZURUECKGEWIESEN');
+  });
+  it('Betriebsstand überspringt die eingereichte Durchführung bis zur Zurückweisung', () => {
+    const aug = {
+      id: 'a',
+      angelegtAm: utc(2026, 7, 1),
+      nachtragZuId: null,
+      periodeVon: utc(2026, 8, 1),
+      periodeBis: utc(2026, 8, 31),
+      faelligAm: utc(2026, 9, 10),
+      zurueckgewiesenAm: null,
+      status: 'OHNE_BEFUND' as const,
+      abgeschlossenAm: utc(2026, 9, 9),
+    };
+    const sep = { ...zurueck, id: 's', nachtragZuId: null, angelegtAm: utc(2026, 7, 1) };
+    expect(betriebsStand([aug, sep], utc(2026, 10, 11))).toBe('OK');
+    expect(betriebsStand([aug, sep], utc(2026, 10, 12))).toBe('UEBERFAELLIG');
+  });
+});
+
 describe('Betriebsstand einer Kontrolle', () => {
   it('nimmt die jüngste abgeschlossene oder überfällige Durchführung', () => {
     const aug = {
       periodeVon: utc(2026, 8, 1),
       periodeBis: utc(2026, 8, 31),
       faelligAm: utc(2026, 9, 10),
+      zurueckgewiesenAm: null,
       status: 'OHNE_BEFUND' as const,
       abgeschlossenAm: utc(2026, 9, 9),
     };

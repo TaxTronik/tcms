@@ -146,7 +146,9 @@ auf ein Objekt eines anderen Tenants scheitert also schon in der Datenbank.
   kein Klartext danach. `20261020100000_portal_meldung_idempotenz` legt `PortalMeldungIdempotenz` an
   (Idempotenzschlüssel der Portal-Meldung, tcms-s10): `tenant_id`, RLS mit Policy `tcms_tenant`,
   eindeutig je Tenant, Mandant, Person und Schlüssel sowie je Ereignis, `tcms_app` nur SELECT, INSERT,
-  DELETE.
+  DELETE. `20261117050000_durchfuehrung_zurueckgewiesen_am` ergänzt `zurueckgewiesenAm` (letzte
+  Zurückweisung, fachliche Zeit), damit historische Stichtage zwischen Einreichung und Zurückweisung
+  „zur Gegenzeichnung" zeigen (Bestandszeilen bleiben NULL und behalten die frühere Ableitung).
 
 DB-Tests (RLS je Tabelle aus dem Katalog, Rechte, Tenantgrenzen, Audit-Kette bei parallelen
 Schreibern) laufen gegen eine migrierte Datenbank:

@@ -733,6 +733,7 @@ function berechne(
         faelligAm: d.faelligAm,
         begonnenAm: d.begonnenAm,
         eingereichtAm: d.eingereichtAm,
+        zurueckgewiesenAm: d.zurueckgewiesenAm,
         abgeschlossenAm: d.abgeschlossenAm,
         entfallenAm: d.entfallenAm,
       };

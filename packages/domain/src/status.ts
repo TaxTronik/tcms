@@ -58,7 +58,14 @@ export interface DurchfuehrungZeit {
   periodeBis: Date;
   faelligAm: Date;
   begonnenAm?: Date | null;
+  /** Letzte Einreichung (eine erneute Einreichung überschreibt sie). */
   eingereichtAm?: Date | null;
+  /**
+   * Letzte Zurückweisung; bleibt nach erneuter Einreichung stehen. `null` bei
+   * Durchführungen ohne Zurückweisung und bei Zurückweisungen, die vor der
+   * Spalte entstanden sind (dann gilt die Zurückweisung ab `eingereichtAm`).
+   */
+  zurueckgewiesenAm: Date | null;
   abgeschlossenAm?: Date | null;
   entfallenAm?: Date | null;
 }
@@ -69,6 +76,11 @@ const OFFEN: readonly DurchfuehrungStatus[] = ['GEPLANT', 'IN_DURCHFUEHRUNG', 'Z
  * Status, wie er zum Stichtag `stand` galt. Für den aktuellen Stand ist
  * `stand` = heute. Zustände gelten ab dem Kalendertag (Europe/Berlin) ihres
  * Zeitstempels (`kalendertagVon`).
+ *
+ * Grenze: Gespeichert sind nur die letzte Einreichung und die letzte
+ * Zurückweisung. Für Stichtage vor der letzten Zurückweisung einer erneut
+ * eingereichten Durchführung (frühere Prüfrunden) gilt der Stand vor der
+ * Einreichung (in Durchführung bzw. überfällig).
  */
 export function statusAm(d: DurchfuehrungZeit, stand: Date): AnzeigeStatus {
   const vor = (x: Date | null | undefined) => x != null && !nachTag(x, stand);
@@ -76,13 +88,17 @@ export function statusAm(d: DurchfuehrungZeit, stand: Date): AnzeigeStatus {
     return d.status;
   }
   if (d.status === 'ENTFALLEN' && vor(d.entfallenAm)) return 'ENTFALLEN';
-  const eingereicht =
-    vor(d.eingereichtAm) &&
-    (d.status === 'ZUR_GEGENZEICHNUNG' || d.status === 'OHNE_BEFUND' || d.status === 'MIT_BEFUND');
-  if (eingereicht) return 'ZUR_GEGENZEICHNUNG';
-  if (d.status === 'ZURUECKGEWIESEN' && vor(d.eingereichtAm)) {
-    return nachTag(stand, d.faelligAm) ? 'UEBERFAELLIG' : 'ZURUECKGEWIESEN';
+  const zurueckgewiesen = () => (nachTag(stand, d.faelligAm) ? 'UEBERFAELLIG' : 'ZURUECKGEWIESEN');
+  if (d.status === 'ZURUECKGEWIESEN') {
+    // Zurückgewiesen ab der Zurückweisung, davor (ab der Einreichung) zur Gegenzeichnung.
+    if (vor(d.zurueckgewiesenAm ?? d.eingereichtAm)) return zurueckgewiesen();
+    if (vor(d.eingereichtAm)) return 'ZUR_GEGENZEICHNUNG';
   }
+  const eingereicht =
+    d.status === 'ZUR_GEGENZEICHNUNG' || d.status === 'OHNE_BEFUND' || d.status === 'MIT_BEFUND';
+  if (eingereicht && vor(d.eingereichtAm)) return 'ZUR_GEGENZEICHNUNG';
+  // Erneut eingereicht: zwischen Zurückweisung und erneuter Einreichung zurückgewiesen.
+  if (eingereicht && vor(d.zurueckgewiesenAm)) return zurueckgewiesen();
   if (nachTag(stand, d.faelligAm)) return 'UEBERFAELLIG';
   const begonnen = vor(d.begonnenAm) && d.status !== 'GEPLANT';
   if (begonnen) return 'IN_DURCHFUEHRUNG';
