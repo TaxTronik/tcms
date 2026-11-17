@@ -1,6 +1,6 @@
 // =============================================================================
 // Nummernkreise gegen PostgreSQL (DB_TESTS=1, eigener Tenant): max + 1 rechnet
-// die Datenbank, je Jahr, Tenant und – bei Feststellungen – Programm; auch
+// die Datenbank, je Jahr, Tenant und Programm; auch
 // jenseits von vier Stellen numerisch (nicht nach Text sortiert).
 // =============================================================================
 
@@ -22,7 +22,7 @@ async function programmIn(tx: Tx): Promise<string> {
 }
 
 describe.skipIf(!AKTIV)('Nummernkreise gegen PostgreSQL', () => {
-  it('Ereignisnummern: max + 1 je Jahr und Tenant, numerisch', async () => {
+  it('Ereignisnummern: max + 1 je Jahr und Programm, numerisch', async () => {
     const t = randomUUID();
     await mitTenant(t, async (tx) => {
       const programmId = await programmIn(tx);
@@ -39,13 +39,17 @@ describe.skipIf(!AKTIV)('Nummernkreise gegen PostgreSQL', () => {
           },
         });
       }
-      expect(await naechsteEreignisnummern(tx, 2026, 2)).toEqual(['2026-T-10001', '2026-T-10002']);
-      expect(await naechsteEreignisnummern(tx, 2025, 1)).toEqual(['2025-T-0043']);
-      expect(await naechsteEreignisnummern(tx, 2027, 1)).toEqual(['2027-T-0001']);
+      expect(await naechsteEreignisnummern(tx, programmId, 2026, 2)).toEqual([
+        '2026-T-10001',
+        '2026-T-10002',
+      ]);
+      expect(await naechsteEreignisnummern(tx, programmId, 2025, 1)).toEqual(['2025-T-0043']);
+      expect(await naechsteEreignisnummern(tx, programmId, 2027, 1)).toEqual(['2027-T-0001']);
     });
-    // Ein anderer Tenant beginnt bei 1 (RLS).
+    // Ein anderes Programm (hier in einem anderen Tenant) beginnt bei 1.
     await mitTenant(randomUUID(), async (tx) => {
-      expect(await naechsteEreignisnummern(tx, 2026, 1)).toEqual(['2026-T-0001']);
+      const anderes = await programmIn(tx);
+      expect(await naechsteEreignisnummern(tx, anderes, 2026, 1)).toEqual(['2026-T-0001']);
     });
   });
 

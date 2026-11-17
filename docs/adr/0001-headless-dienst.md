@@ -141,8 +141,14 @@ beides liegt im Hash der Kette. Logs nennen `akteurArt`.
 ## 4. Mandantentrennung in der Datenbank
 
 - Jede Tabelle erhält `tenant_id uuid NOT NULL`; Indizes und eindeutige
-  Schlüssel beginnen mit `tenant_id`, wo sie fachlich je Kanzlei gelten
-  (z. B. Ereignisnummern, Feststellungsnummern, Wiedervorlagen).
+  Schlüssel beginnen mit `tenant_id` (z. B. Wiedervorlagen je Kanzlei,
+  Ereignis- und Feststellungsnummern je Programm `(tenant_id, programmId,
+nummer)`). Ereignisnummern laufen je Programm, nicht je Kanzlei:
+  Mandantenkontakte sehen sie im Portal, und die Lücken einer kanzleiweiten
+  Folge verrieten das Meldeaufkommen anderer Mandanten (wie `seq`, RT-03).
+  Nummernkreise sperren sich über einen Advisory-Lock je Tenant und
+  Nummernkreis (Ereignisse und Feststellungen je Programm), genommen erst nach
+  den Zeilen, unter denen angelegt wird (Programm → … → Nummernkreis, TS-05).
 - Rollen: `tcms_owner` (Eigentümer der Tabellen, nur Migrationen),
   `tcms_app` (Laufzeit, `NOBYPASSRLS`, kein Superuser, nur DML).
   `ALTER TABLE … ENABLE/FORCE ROW LEVEL SECURITY` auf allen Tabellen; Policy
@@ -349,7 +355,8 @@ Routentabelle weisen mehrdeutige Muster ab).
   `ZU_VIELE_CODES`, `ZWISCHENZEITLICH_GEAENDERT`), `portalFreigabeErteilen`
   (`BEREITS_ERLEDIGT`, `CODE_GESPERRT`, `CODE_FEHLT`, `CODE_ABGELAUFEN`,
   `VERSION_NICHT_VORGELEGT`, `INHALT_VERAENDERT`, `ZWISCHENZEITLICH_GEAENDERT`)
-  und `portalMeldungErfassen` (`IDEMPOTENZ_ABWEICHUNG`, `ZWISCHENZEITLICH_GEAENDERT`);
+  und `portalMeldungErfassen` (`IDEMPOTENZ_ABWEICHUNG`, `ZWISCHENZEITLICH_GEAENDERT`,
+  `ZU_VIELE_MELDUNGEN`);
   die kanzleikonsole wählt danach ihre feste Meldung. Wie `grund` erst nach der
   Sichtbarkeitsprüfung, nie an `404`. Erzwungen in vier Schichten:
   `DienstFehler` (nur `KONFLIKT`, nur über `konfliktMitGrund`), Register
@@ -368,7 +375,15 @@ Routentabelle weisen mehrdeutige Muster ab).
   nacheinander; Tabelle `PortalMeldungIdempotenz` mit eindeutigem Index
   `(tenant_id, mandantId, personId, schluessel)`, RLS und für `tcms_app` nur
   SELECT, INSERT, DELETE. Rechte prüft der Dienst vor dem Schlüssel; der
-  Schlüssel einer anderen Person liefert nie deren Ereignis.
+  Schlüssel einer anderen Person liefert nie deren Ereignis. Vor dem Anlegen
+  liest er die Rollen erneut unter `halteRollenFest` (eine gleichzeitig
+  entzogene Rolle meldet nicht mehr). `benachrichtigen.name` ist ohne Wirkung
+  und geht nicht in den Inhalts-Hash ein (adressiert wird nur über die ID).
+- Mengenbegrenzung der Portal-Meldung (wie Codes, H1): höchstens 20 Meldungen je
+  Person und Mandant in einer Stunde (echte Zeit, gezählt an den Audit-Einträgen
+  der Meldungen unter einer Sperre je Person und Mandant), darüber `409` mit
+  `konflikt: ZU_VIELE_MELDUNGEN`. Wiederholungen mit Idempotenzschlüssel zählen
+  nicht. Abgelaufene Schlüssel der Person räumt die nächste Meldung.
 - Datumswerte als ISO-8601-Strings, keine `Map`/`Set`/`Date` im JSON.
 - Lesen zu einem Stichtag: `?stand=YYYY-MM-DD`. Schreibende Endpunkte nehmen
   **keinen** Stichtag an und arbeiten immer auf dem aktuellen Stand.
@@ -690,14 +705,19 @@ Kontexts innerhalb derselben Transaktion.
   kanzleikonsole ADMIN oder PARTNER ist (`rol.adm` der Akteursbestätigung), liest
   jede vertrauliche Feststellung des Tenants; die kanzleikonsole vergibt diese
   Rollen entsprechend eng.
-- **Hash im Ereignisdetail (tcms-s11).** `GET …/ereignisse/{id}` nennt den Hash
-  des Meldungs-Audits (`meldung.hash`) jeder Kanzleiperson mit Leserecht. Liegt
-  ein maskierter Eintrag unmittelbar zwischen zwei Einträgen mit bekanntem Hash
-  und bekanntem Inhalt (etwa zwei Ereignis-Meldungen), ließe sich sein Inhalt
-  theoretisch durchprobieren; dafür müssten Zeitpunkt auf die Millisekunde,
-  Aktion, Objekt-ID und Person mitgeraten werden, und die Nachbarschaft in der
-  Kette ist nicht steuerbar. Nicht behoben (Vertragsänderung außerhalb des
-  Audits); bei Bedarf `meldung.hash` nur ausgeben, wenn davor kein für den
-  Lesenden maskierter Eintrag liegt. Seit tcms-s12 liest nur die Kanzleileitung
-  das Audit, und sie sieht keine maskierten Einträge; das Restrisiko lebt wieder
-  auf, sobald ein Audit-Lesepfad für andere Personen dazukommt.
+- **Hash im Ereignisdetail (tcms-s11, behoben).** `GET …/ereignisse/{id}` nennt
+  den Ketten-Hash des Meldungs-Audits (`meldung.hash`) nur der Kanzleileitung
+  (`liestAlleVertraulichen`), die das Audit ohnehin vollständig liest; für alle
+  anderen ist er `null` – dieselbe Regel wie die Audit-Liste (§5.1: keine
+  Hashes, die maskierte Inhalte bestätigen ließen). Die frühere Duldung trug
+  nicht: Mit `kannBearbeiten` setzt eine Person über `erfasseEreignis` beliebig
+  viele Anker mit vollständig bekanntem Inhalt, die Abstände der `pos` zählen
+  die Einträge dazwischen, und Objekt-ID, Nummer und Fristen einer vertraulichen
+  Feststellung nennt schon die maskierte Liste; ein ungeschlüsselter Hash hätte
+  damit eine vertrauliche §-153-Entscheidung zwischen zwei eigenen Meldungen
+  offline bestätigen lassen. Die Verlaufspositionen `pos` des Ereignisses
+  bleiben sichtbar; ohne Hash bestätigen sie keinen Inhalt.
+- **Ereignisnummern im Portal.** Seit sie je Programm laufen (§4), zeigen sie
+  einem Mandantenkontakt nur das Aufkommen des eigenen Mandanten (alle Quellen,
+  auch die nicht im Portal sichtbaren). Nummern aus der Zeit davor bleiben
+  unverändert (je Tenant eindeutig, also auch je Programm).

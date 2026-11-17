@@ -9,8 +9,10 @@
 
 import { randomBytes, randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { erzeugeClient, mitTenant, schreibeAuditFolge } from '@tcms/db';
 import { dbAbgewiesen, regel } from '@tcms/db/testhilfe';
-import { IDEMPOTENZ_FENSTER_MS, meldeEreignis } from './portal';
+import { sperreRollenZumAendern } from '../../rollen';
+import { IDEMPOTENZ_FENSTER_MS, MAX_MELDUNGEN_JE_STUNDE, meldeEreignis } from './portal';
 import {
   akteure,
   aufwaermen,
@@ -264,5 +266,139 @@ describe.skipIf(!AKTIV)('Portal-Meldung mit Idempotenzschlüssel (Service, Postg
     // Fremde Tenants: Fremdschlüssel und RLS prüft rls.db.test.ts für jede Tabelle.
     // RLS: Tenant B sieht die Bindungen von A nicht.
     expect(await inTenant(w, (tx) => tx.portalMeldungIdempotenz.count(), w.tenantB)).toBe(0);
+  });
+
+  it('der Anzeigename von `benachrichtigen` geht nicht in den Inhalt ein (ohne Wirkung)', async () => {
+    const titel = `Lager Name ${randomBytes(3).toString('hex')}`;
+    const k = randomUUID();
+    const erst = await melde(A.gv, meldung(k, { titel }));
+    // Dieselbe Person anders aufgelöst bzw. ohne Namen: dieselbe Meldung.
+    const umbenannt = meldung(k, { titel, benachrichtigen: { id: w.p.hb, name: 'L. Brandt' } });
+    expect(await melde(A.gv, umbenannt)).toEqual(erst);
+    expect(await melde(A.gv, meldung(k, { titel, benachrichtigen: { id: w.p.hb } }))).toEqual(erst);
+    // Eine andere Person bleibt eine Abweichung.
+    const andere = meldung(k, { titel, benachrichtigen: { id: w.p.zbt, name: 'Leon Brandt' } });
+    expect((await fehlerVon(melde(A.gv, andere))).konflikt).toBe('IDEMPOTENZ_ABWEICHUNG');
+  });
+
+  it('abgelaufene Schlüssel der Person werden beim nächsten Melden geräumt', async () => {
+    const titel = `Lager Räumen ${randomBytes(3).toString('hex')}`;
+    const alt = await melde(A.gv, meldung(undefined, { titel }));
+    const k = randomUUID();
+    await inTenant(w, (tx) =>
+      tx.portalMeldungIdempotenz.create({
+        data: {
+          mandantId: w.mandant,
+          personId: w.p.gv,
+          schluessel: k,
+          inhaltSha256: 'f'.repeat(64),
+          ereignisId: alt.id,
+          createdAt: new Date(Date.now() - IDEMPOTENZ_FENSTER_MS - 60_000),
+        },
+      }),
+    );
+    await melde(A.gv, meldung(undefined, { titel }));
+    expect(
+      await inTenant(w, (tx) => tx.portalMeldungIdempotenz.count({ where: { schluessel: k } })),
+    ).toBe(0);
+  });
+});
+
+/** Wartet, bis eine Sitzung dieser Datenbank auf eine Sperre wartet. */
+async function bisWartend(tenant: string): Promise<void> {
+  for (let i = 0; i < 250; i += 1) {
+    const [z] = await mitTenant(
+      tenant,
+      (tx) => tx.$queryRaw<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM pg_catalog.pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+    );
+    if ((z?.n ?? 0) >= 1) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error('Kein Lauf wartet auf die Sperre');
+}
+
+describe.skipIf(!AKTIV)('Portal-Meldung: Mengenbegrenzung und Rollen unter der Sperre', () => {
+  const meldung = (w: Welt, x: Record<string, unknown> = {}) => ({
+    mandantId: w.mandant,
+    typ: 'T-02',
+    titel: `Neues Lager ${randomBytes(3).toString('hex')}`,
+    beschreibung: 'Ab November lagern wir Ware in Posen.',
+    datum: '2026-10-12',
+    anlagen: [],
+    zusageAenderungen: true,
+    ...x,
+  });
+
+  it(`höchstens ${MAX_MELDUNGEN_JE_STUNDE} Meldungen je Person und Stunde: darüber 409 ZU_VIELE_MELDUNGEN, nichts angelegt`, async () => {
+    const w = await baueWelt();
+    const A = akteure(w);
+    const mitSchluessel = meldung(w, { idempotenzSchluessel: randomUUID() });
+    const erst = await im(A.gv, (ctx) => meldeEreignis(ctx, mitSchluessel as never));
+    // Weitere Meldungen der Person in der letzten Stunde (Audit, echte Zeit).
+    await inTenant(w, (tx) =>
+      schreibeAuditFolge(
+        tx,
+        Array.from({ length: MAX_MELDUNGEN_JE_STUNDE - 1 }, () => ({
+          actorId: w.p.gv,
+          actorName: 'GV',
+          aktion: 'tcms.ereignis.gemeldet',
+          objektTyp: 'Ereignis',
+          objektId: erst.id,
+          programmId: w.programm,
+          detail: {},
+        })),
+      ),
+    );
+    const vorher = await inTenant(w, (tx) => tx.ereignis.count());
+    const x = await fehlerVon(im(A.gv, (ctx) => meldeEreignis(ctx, meldung(w) as never)));
+    expect([x.code, x.konflikt]).toEqual(['KONFLIKT', 'ZU_VIELE_MELDUNGEN']);
+    expect(await inTenant(w, (tx) => tx.ereignis.count())).toBe(vorher);
+    // Die Wiederholung mit Schlüssel legt nichts an und zählt nicht.
+    expect(await im(A.gv, (ctx) => meldeEreignis(ctx, mitSchluessel as never))).toEqual(erst);
+    // Die Grenze gilt je Person: die TCB meldet weiter.
+    await expect(
+      im(A.tcb, (ctx) => meldeEreignis(ctx, meldung(w) as never)),
+    ).resolves.toMatchObject({ nummer: expect.any(String) });
+  });
+
+  it('Rollen erst unter halteRollenFest: eine gleichzeitig entzogene Rolle meldet nicht mehr (RT4-T-05)', async () => {
+    const w = await baueWelt();
+    const A = akteure(w);
+    const zweite = erzeugeClient(process.env['DATABASE_URL']);
+    try {
+      let loslassen!: () => void;
+      const schranke = new Promise<void>((r) => (loslassen = r));
+      let entzogen!: () => void;
+      const istEntzogen = new Promise<void>((r) => (entzogen = r));
+      // Rollenpflege: Mandantenzeile gesperrt, Rolle der GV deaktiviert, noch nicht festgeschrieben.
+      const pflege = mitTenant(
+        w.tenant,
+        async (tx) => {
+          await sperreRollenZumAendern(tx, w.mandant);
+          await tx.mandantKontaktRolle.updateMany({
+            where: { mandantId: w.mandant, kontaktId: w.p.gv },
+            data: { aktiv: false },
+          });
+          entzogen();
+          await schranke;
+        },
+        { timeoutMs: 30_000, client: zweite },
+      );
+      await istEntzogen;
+      const titel = `Lager Rollenentzug ${randomBytes(3).toString('hex')}`;
+      // Die Vorprüfung sieht noch die festgeschriebene Rolle; die Meldung wartet an der Mandantenzeile.
+      const melden = fehlerVon(
+        im(A.gv, (ctx) => meldeEreignis(ctx, meldung(w, { titel }) as never)),
+      );
+      await bisWartend(w.tenant);
+      loslassen();
+      await pflege;
+      expect((await melden).code).toBe('NICHT_GEFUNDEN');
+      expect(await inTenant(w, (tx) => tx.ereignis.count({ where: { titel } }))).toBe(0);
+    } finally {
+      await zweite.$disconnect();
+    }
   });
 });

@@ -139,9 +139,17 @@ const faelle: Fall[] = [
     erfolg: 200,
     akteur: () => ZBT,
     ungueltig: {},
-    vorbereiten: async () => ({
-      pfad: `${B}/feststellungen/${(await feststellung({ verwerfenBeantragtVon: P.hb, verwerfenBegruendung: BEGRUENDUNG })).id}/verwerfen/bestaetigen`,
-    }),
+    vorbereiten: async () => {
+      const f = await feststellung({
+        verwerfenBeantragtVon: P.hb,
+        verwerfenBegruendung: BEGRUENDUNG,
+      });
+      return {
+        pfad: `${B}/feststellungen/${f.id}/verwerfen/bestaetigen`,
+        // Gebunden an den gesehenen Antrag und die gesehene Auswirkung.
+        body: { antragId: f.verwerfenAntragId, auswirkung: f.auswirkung },
+      };
+    },
   },
   {
     name: 'Verwerfen ablehnen',
@@ -280,7 +288,10 @@ describe.skipIf(!AKTIV)('API Feststellungen gegen PostgreSQL', () => {
       verwerfenBegruendung: BEGRUENDUNG,
     });
     const ziel = `${B}/feststellungen/${f.id}/verwerfen/bestaetigen`;
-    const hb = await rufe(HB, 'POST', ziel);
+    const hb = await rufe(HB, 'POST', ziel, {
+      antragId: f.verwerfenAntragId,
+      auswirkung: f.auswirkung,
+    });
     expect(hb.status).toBe(403);
     expect(hb.json).toMatchObject({
       ok: false,
@@ -292,8 +303,24 @@ describe.skipIf(!AKTIV)('API Feststellungen gegen PostgreSQL', () => {
       verwerfenBeantragtVon: P.zbt,
       verwerfenBegruendung: BEGRUENDUNG,
     });
+    const neinZiel = `${B}/feststellungen/${nein.id}/verwerfen/bestaetigen`;
+    // Ohne Kennung des gesehenen Antrags: 400; mit fremder Kennung: 409.
+    expect((await rufe(HB, 'POST', neinZiel)).status).toBe(400);
     expect(
-      (await rufe(HB, 'POST', `${B}/feststellungen/${nein.id}/verwerfen/bestaetigen`)).status,
+      (
+        await rufe(HB, 'POST', neinZiel, {
+          antragId: '00000000-0000-4000-8000-000000000001',
+          auswirkung: 'NEIN',
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await rufe(HB, 'POST', neinZiel, {
+          antragId: nein.verwerfenAntragId,
+          auswirkung: nein.auswirkung,
+        })
+      ).status,
     ).toBe(200);
   });
 });

@@ -108,7 +108,7 @@ export function registriereFeststellungenEreignisse(r: Routen<Tx>): void {
     beantrageFeststellungVerwerfen(dienstKontext(c), { ...c.body, ...fst(c) }),
   );
   r.endpunkt(ENDPUNKTE.feststellungVerwerfenBestaetigen, (c) =>
-    bestaetigeFeststellungVerwerfen(dienstKontext(c), fst(c)),
+    bestaetigeFeststellungVerwerfen(dienstKontext(c), { ...c.body, ...fst(c) }),
   );
   r.endpunkt(ENDPUNKTE.feststellungVerwerfenAblehnen, (c) =>
     lehneFeststellungVerwerfenAb(dienstKontext(c), fst(c)),
@@ -161,7 +161,7 @@ export function registriereFeststellungenEreignisse(r: Routen<Tx>): void {
     beantrageEreignisVerwerfen(dienstKontext(c), { ...c.body, ...erg(c) }),
   );
   r.endpunkt(ENDPUNKTE.ereignisVerwerfenBestaetigen, (c) =>
-    bestaetigeEreignisVerwerfen(dienstKontext(c), erg(c)),
+    bestaetigeEreignisVerwerfen(dienstKontext(c), { ...c.body, ...erg(c) }),
   );
   r.endpunkt(ENDPUNKTE.ereignisVerwerfenAblehnen, (c) =>
     lehneEreignisVerwerfenAb(dienstKontext(c), erg(c)),

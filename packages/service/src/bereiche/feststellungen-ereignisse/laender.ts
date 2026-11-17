@@ -25,11 +25,13 @@ import type { Tx } from '@tcms/db';
 import {
   bewerteSchwelle,
   EU_LAENDER,
+  EU_LIEFERSCHWELLE_EUR,
   fmtEurGanz,
   fmtMonatJahr,
   istEuAusland,
   LAND_NAME,
   summeEur,
+  p153Offen,
   type FeststellungStatus,
 } from '@tcms/domain';
 import type { Protokoll } from '../../audit';
@@ -111,26 +113,26 @@ export function risikoBezuegeZumLand(l: LandMerkmale): { code: string; grund: st
   return kandidaten.flatMap(([code, grund]) => (grund ? [{ code, grund }] : []));
 }
 
+/** Sonderzeichen eines Regex-Literals maskieren (Landesnamen kommen aus dem Katalog). */
+function regexLiteral(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
- * Ereignisse, die ein Land nennen: Ländercode als eigenes Wort oder deutscher
- * Name des Landes in Titel oder Beschreibung. Der Code geht nur als zwei
- * Großbuchstaben in den Ausdruck ein (keine Regex-Einschleusung).
+ * Ereignisse, die ein Land nennen: deutscher Name des Landes als eigenes Wort
+ * (Unicode-Wortgrenzen) in Titel oder Beschreibung. Der Ländercode allein
+ * zählt nicht: Mehrere EU-Codes sind gängige Abkürzungen („IT“, „HR“, „NL“,
+ * „AT“) und ordneten sonst Ereignisse fälschlich einem Land zu. Ereignisse des
+ * Länder-Monitors nennen den Namen (T-02).
  */
 export function ereignisseZumLand(
   ereignisse: readonly Pick<EreignisView, 'id' | 'titel' | 'beschreibung'>[],
   land: string,
 ): string[] {
-  if (!/^[A-Z]{2}$/.test(land)) return [];
-  const name = LAND_NAME[land];
-  const re = new RegExp(`\\b${land}\\b`);
-  return ereignisse
-    .filter(
-      (e) =>
-        re.test(e.titel) ||
-        re.test(e.beschreibung) ||
-        (!!name && (e.titel.includes(name) || e.beschreibung.includes(name))),
-    )
-    .map((e) => e.id);
+  const name = /^[A-Z]{2}$/.test(land) ? LAND_NAME[land] : undefined;
+  if (!name) return [];
+  const re = new RegExp(`(?<![\\p{L}\\p{N}])${regexLiteral(name)}(?![\\p{L}\\p{N}])`, 'u');
+  return ereignisse.filter((e) => re.test(e.titel) || re.test(e.beschreibung)).map((e) => e.id);
 }
 
 /**
@@ -164,7 +166,8 @@ export function laenderBezuege(
 
 /**
  * Alle Länderstände bis zum Stichtag (je Land neueste zuerst) und
- * Feststellungen mit Länderbezug (Erklärungen oder Ländercode im Titel).
+ * Feststellungen mit Länderbezug (Land einer betroffenen Erklärung; kein
+ * Abgleich des Titels, Ländercodes sind oft gängige Abkürzungen).
  * Vertrauliche Feststellungen erscheinen hier nur für die Kanzleileitung
  * (`liestAlleVertraulichen`, tcms-s12); für alle anderen nie – auch nicht für
  * Beteiligte, denn die Einträge haben keine maskierte Variante und schon der
@@ -225,16 +228,11 @@ export async function ladeLaender(ctx: DienstKontext, eingabe: LaenderLesen): Pr
   const fJe = new Map<string, Laender['feststellungen'][number]['eintraege']>();
   for (const f of feststellungen) {
     if (f.erfasstAm.getTime() > ende.getTime() || f.status === 'VERWORFEN') continue;
-    const entschieden =
-      f.p153EntschiedenAm != null && f.p153EntschiedenAm.getTime() <= ende.getTime();
     const status: FeststellungStatus =
       f.status === 'GESCHLOSSEN' && f.geschlossenAm && f.geschlossenAm.getTime() > ende.getTime()
         ? 'NACHKONTROLLE'
         : f.status;
     const laender = new Set(f.erklaerungen.map((e) => e.land).filter((l) => l && l !== 'DE'));
-    for (const code of historie.keys()) {
-      if (/^[A-Z]{2}$/.test(code) && new RegExp(`\\b${code}\\b`).test(f.titel)) laender.add(code);
-    }
     for (const code of laender) {
       fJe.set(code, [
         ...(fJe.get(code) ?? []),
@@ -243,7 +241,8 @@ export async function ladeLaender(ctx: DienstKontext, eingabe: LaenderLesen): Pr
           nummer: f.nummer,
           titel: f.titel,
           status,
-          p153Offen: (f.auswirkung === 'JA' || f.auswirkung === 'UNKLAR') && !entschieden,
+          // „Weitere Klärung" lässt die Würdigung offen (eine Regel, @tcms/domain).
+          p153Offen: p153Offen(f, ende),
         },
       ]);
     }
@@ -289,21 +288,43 @@ function pruefeLand(l: LandEingabe, datenstand: Date): void {
   }
 }
 
+/**
+ * Titel des Ereignisses T-04 nach dem Auslöser: Überschreitet das laufende
+ * Jahr die Schwelle, nennt er dessen Summe; sonst das Vorjahr (die Schwelle
+ * gilt auch dann als überschritten, `bewerteSchwelle`).
+ */
+export function schwellenTitel(
+  status: 'WARNUNG' | 'UEBERSCHRITTEN' | 'UNTERSCHRITTEN',
+  b: { lfd: number; vj: number },
+): string {
+  if (status === 'UEBERSCHRITTEN') {
+    return b.lfd > EU_LIEFERSCHWELLE_EUR
+      ? `Lieferschwelle überschritten (${fmtEurGanz(b.lfd)} von 10.000 €)`
+      : `Lieferschwelle im Vorjahr überschritten (${fmtEurGanz(b.vj)} von 10.000 €)`;
+  }
+  const pct = Math.round((b.lfd / EU_LIEFERSCHWELLE_EUR) * 100);
+  return `Lieferschwelle ${pct} % erreicht (${fmtEurGanz(b.lfd)} von 10.000 €)`;
+}
+
 function betrag(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
 type StandZeile = Awaited<ReturnType<Tx['landStand']['findMany']>>[number];
 
+/**
+ * Jüngster Stand je Land: größtes (Datenstand, createdAt, id) – dieselbe
+ * Ordnung wie die Historie in `ladeLaender` (neueste zuerst) und der Kontext,
+ * damit `gesehenerStandId` überall denselben Stand meint.
+ */
 function juengsteJeLand(staende: StandZeile[]): Map<string, StandZeile> {
   const m = new Map<string, StandZeile>();
+  const wert = (s: StandZeile) => [s.stand.getTime(), s.createdAt.getTime()] as const;
   for (const s of staende) {
     const b = m.get(s.land);
-    if (
-      !b ||
-      s.stand > b.stand ||
-      (s.stand.getTime() === b.stand.getTime() && s.createdAt > b.createdAt)
-    )
+    const [st, ca] = wert(s);
+    const [bst, bca] = b ? wert(b) : [0, 0];
+    if (!b || st > bst || (st === bst && (ca > bca || (ca === bca && s.id > b.id))))
       m.set(s.land, s);
   }
   return m;
@@ -329,10 +350,13 @@ async function schreibeStaende(
   zeitpunkt: Date,
   programmId: string,
   datenstand: Date,
-  eingaben: LandEingabe[],
+  eingaben: (LandEingabe & { gesehenerStandId?: string })[],
   modus: 'neu' | 'aktualisieren',
 ): Promise<{ wert: LandStaendeErgebnis; protokoll: Protokoll[] }> {
   const tx = ctx.tx;
+  // Zeitpunkt der Stände erst unter der Programmsperre: „jüngster Stand“ wird
+  // über (Datenstand, createdAt) bestimmt und folgt so der Schreibreihenfolge.
+  const erfasstAm = ctx.uhr.jetzt();
   const alle = await tx.landStand.findMany({
     where: { programmId },
     orderBy: [{ stand: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
@@ -352,6 +376,14 @@ async function schreibeStaende(
       throw new DienstFehler('KONFLIKT', `${e.land} ist bereits im Länder-Monitor.`);
     if (modus === 'aktualisieren' && !alt) {
       throw new DienstFehler('KONFLIKT', `${e.land} ist nicht im Länder-Monitor.`);
+    }
+    // Nur auf dem gesehenen Stand (TS-05): Ein inzwischen erfasster Stand wird
+    // nicht ungesehen überschrieben.
+    if (modus === 'aktualisieren' && alt && alt.id !== e.gesehenerStandId) {
+      throw new DienstFehler(
+        'KONFLIKT',
+        `${e.land}: Der Stand wurde inzwischen geändert. Bitte neu laden.`,
+      );
     }
     if (alt && datenstand.getTime() < alt.stand.getTime()) {
       ungueltig(
@@ -376,7 +408,7 @@ async function schreibeStaende(
         stand: datenstand,
         quelle: 'MANUELL',
         erfasstVon: ctx.akteur.id,
-        createdAt: zeitpunkt,
+        createdAt: erfasstAm,
       },
       select: { id: true },
     });
@@ -416,7 +448,7 @@ async function schreibeStaende(
       const name = LAND_NAME[e.land] ?? e.land;
       ausgeloest.push({
         typ: 'T-02',
-        titel: `Neues Lagerland ${e.land} seit ${fmtMonatJahr(e.lagerSeit)} (Länder-Monitor)`,
+        titel: `Neues Lagerland ${name} (${e.land}) seit ${fmtMonatJahr(e.lagerSeit)} (Länder-Monitor)`,
         beschreibung: `Im Länder-Monitor wurde für ${name} erstmals ein Lager erfasst (seit ${fmtMonatJahr(e.lagerSeit)}, Stand ${datumDe(datenstand)}). Lokale USt-Registrierung: ${e.lokaleUstNr ? 'erfasst' : 'nicht erfasst'}.`,
         datum: new Date(`${e.lagerSeit}-01T00:00:00Z`),
       });
@@ -429,13 +461,9 @@ async function schreibeStaende(
   const sa = bewerteSchwelle(a.lfd, a.vj).status;
   const sb = bewerteSchwelle(b.lfd, b.vj).status;
   if (sa !== sb && (sb === 'UEBERSCHRITTEN' || (sb === 'WARNUNG' && sa === 'UNTERSCHRITTEN'))) {
-    const pct = Math.round((b.lfd / 10_000) * 100);
     ausgeloest.push({
       typ: 'T-04',
-      titel:
-        sb === 'UEBERSCHRITTEN'
-          ? `Lieferschwelle überschritten (${fmtEurGanz(b.lfd)} von 10.000 €)`
-          : `Lieferschwelle ${pct} % erreicht (${fmtEurGanz(b.lfd)} von 10.000 €)`,
+      titel: schwellenTitel(sb, b),
       beschreibung: `Die im Länder-Monitor erfassten kumulierten EU-Fernverkäufe liegen bei ${fmtEurGanz(b.lfd)} (Vorjahr ${fmtEurGanz(b.vj)}).`,
       datum: datenstand,
     });

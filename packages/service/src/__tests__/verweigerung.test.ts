@@ -181,6 +181,7 @@ const INVENTAR: Record<string, string[]> = {
   'packages/service/src/bereiche/feststellungen-ereignisse/laender.ts': ['BEARBEITEN'],
   'packages/service/src/bereiche/feststellungen-ereignisse/portal.ts': [
     'PORTAL_ROLLE|PARTEI', // meldeEreignis: Kontakt ohne GV/TCB bzw. Kanzleiperson
+    'PORTAL_ROLLE', // meldeEreignis: Rolle unter halteRollenFest erneut geprüft (RT4-T-05)
   ],
   'packages/service/src/bereiche/lesepfade/audit.ts': ['VERWALTUNG'],
   'packages/service/src/bereiche/lesepfade/hilfen.ts': ['PARTEI'], // nurKanzlei

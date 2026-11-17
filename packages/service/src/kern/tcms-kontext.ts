@@ -43,6 +43,7 @@ import {
   katalogRisiko,
   leiteFrequenzAb,
   monatSchluessel,
+  p153Offen,
   pruflast,
   statusAm,
   summeEur,
@@ -77,7 +78,6 @@ import {
   ladeSpaetereEintraege,
   massnahmenZumStand,
   p153EntschiedenAm,
-  p153OffenAm,
   type SpaetereEintraege,
 } from './rueckrechnung';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from './zeit';
@@ -1150,6 +1150,8 @@ function berechne(
       const p153Entschieden = p153EntschiedenAm(f, ende);
       const massnahmen = massnahmenZumStand(f.massnahmen, ende);
       const statusAmStand = feststellungsStatusZumStand(f, nachStand(f.id), ende);
+      // Maßnahmen einer zum Stichtag verworfenen Feststellung sind nicht mehr zu erledigen.
+      const verworfen = statusAmStand === 'VERWORFEN';
       return {
         maskiert: false as const,
         id: f.id,
@@ -1165,10 +1167,11 @@ function berechne(
         vertraulich: f.vertraulich,
         beteiligte: beteiligteVon(f),
         p153Entscheidung: p153Entschieden ? f.p153Entscheidung : null,
-        p153Offen: p153OffenAm(f, p153Entschieden, statusAmStand),
-        massnahmenOffen: massnahmen.offen.length,
+        // „Weitere Klärung“ lässt die Würdigung offen (eine Regel, @tcms/domain).
+        p153Offen: p153Offen({ ...f, status: statusAmStand }, ende),
+        massnahmenOffen: verworfen ? 0 : massnahmen.offen.length,
         massnahmen: massnahmen.bestand.length,
-        aeltesteFrist: massnahmen.aeltesteFrist,
+        aeltesteFrist: verworfen ? null : massnahmen.aeltesteFrist,
         erfasstAm: f.erfasstAm,
         risikoCodes: f.risiken.map((x) => x.risiko.code).sort(),
       };
@@ -1185,6 +1188,9 @@ function berechne(
   const lesbareFeststellungen = feststellungen.filter((f): f is FeststellungView => !f.maskiert);
 
   // ---- Länder (jüngster Stand je Land bis zum Stichtag) ----
+  // Jüngster = größtes (Datenstand, createdAt, id) wie im Länder-Monitor
+  // (`ladeLaender`, Schreibprüfung `gesehenerStandId`); die Liste ist danach
+  // aufsteigend sortiert, bei Gleichstand gewinnt also die spätere Zeile.
   const laenderJe = new Map<string, (typeof programm.laender)[number]>();
   for (const l of programm.laender) {
     if (l.stand.getTime() > ende.getTime() || l.createdAt.getTime() > ende.getTime()) continue;
@@ -1192,7 +1198,7 @@ function berechne(
     if (
       !bisher ||
       l.stand.getTime() > bisher.stand.getTime() ||
-      (l.stand.getTime() === bisher.stand.getTime() && l.createdAt > bisher.createdAt)
+      (l.stand.getTime() === bisher.stand.getTime() && l.createdAt >= bisher.createdAt)
     )
       laenderJe.set(l.land, l);
   }

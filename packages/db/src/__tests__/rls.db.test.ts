@@ -1421,7 +1421,7 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
       );
     });
 
-    it('Ereignisnummer und Wiedervorlage je Tenant: doppelt in A scheitert, gleich in B erlaubt', async () => {
+    it('Ereignisnummer je Programm, Wiedervorlage je Tenant: doppelt in A scheitert, gleich in B erlaubt', async () => {
       await scheitert(
         (tx) =>
           tx.ereignis.create({
@@ -1435,7 +1435,7 @@ describe.skipIf(!AKTIV)('Mandantentrennung in PostgreSQL', () => {
               ereignisDatum: new Date('2026-10-01'),
             },
           }),
-        regel.eindeutig('Ereignis_tenant_id_nummer_key'),
+        regel.eindeutig('Ereignis_tenant_id_programmId_nummer_key'),
       );
       await scheitert(
         (tx) =>

@@ -244,7 +244,7 @@ export async function profilAendern(
       // nach den Zeilensperren).
       const nummern =
         typen.length > 0
-          ? await naechsteEreignisnummern(tx, kalenderjahr(zeitpunkt), typen.length)
+          ? await naechsteEreignisnummern(tx, programm.id, kalenderjahr(zeitpunkt), typen.length)
           : [];
       const ereignisse: string[] = [];
       for (const [i, t] of typen.entries()) {

@@ -181,7 +181,10 @@ export async function bestaetigeEreignisVerwerfen(
     akteur,
     mandantId,
     (ctx) =>
-      bestaetigeEreignisVerwerfenDienst(ctx, eingabe({ mandantId, ereignisId: feld(fd, 'id') })),
+      bestaetigeEreignisVerwerfenDienst(
+        ctx,
+        eingabe({ mandantId, ereignisId: feld(fd, 'id'), antragId: feld(fd, 'antragId') }),
+      ),
     (r) => `Ereignis ${r.nummer} verworfen.`,
   );
 }

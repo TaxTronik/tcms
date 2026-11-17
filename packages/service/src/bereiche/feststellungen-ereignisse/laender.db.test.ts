@@ -49,8 +49,33 @@ describe.skipIf(!AKTIV)('Länder-Monitor gegen PostgreSQL', () => {
 
   const hinzu = (a: Akteur, l: LandEingabe, datenstand = '2026-10-01', mandantId = w.mandant) =>
     im(a, (ctx) => fuegeLandHinzu(ctx, { mandantId, datenstand, land: l }));
-  const staende = (a: Akteur, laender: LandEingabe[], datenstand = '2026-10-10') =>
-    im(a, (ctx) => speichereLandStaende(ctx, { mandantId: w.mandant, datenstand, laender }));
+  /** ID des jüngsten Stands eines Landes (wie `historie[].staende[0].id`), sonst ein Platzhalter. */
+  const juengster = async (code: string) => {
+    const s = await inTenant(w, (tx) =>
+      tx.landStand.findFirst({
+        where: { programmId: w.programm, land: code },
+        orderBy: [{ stand: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        select: { id: true },
+      }),
+    );
+    return s?.id ?? 'cunbekannt000000000000000';
+  };
+  /** Neue Stände auf dem jeweils jüngsten Stand (ohne `gesehenerStandId` aus der Datenbank). */
+  const staende = async (
+    a: Akteur,
+    laender: (LandEingabe & { gesehenerStandId?: string })[],
+    datenstand = '2026-10-10',
+  ) => {
+    const mitStand = await Promise.all(
+      laender.map(async (l) => ({
+        ...l,
+        gesehenerStandId: l.gesehenerStandId ?? (await juengster(l.land)),
+      })),
+    );
+    return im(a, (ctx) =>
+      speichereLandStaende(ctx, { mandantId: w.mandant, datenstand, laender: mitStand }),
+    );
+  };
 
   it('Rechte: ohne Bezug, fremder Mandant/Tenant, Mandantenkontakte → NICHT_GEFUNDEN; Lesende → NICHT_BERECHTIGT', async () => {
     for (const a of [
@@ -138,6 +163,29 @@ describe.skipIf(!AKTIV)('Länder-Monitor gegen PostgreSQL', () => {
     expect((await fehlerVon(staende(A.hb, [land('FR'), land('FR')]))).code).toBe('UNGUELTIG');
   });
 
+  it('TS-05: Stände nur auf dem gesehenen Stand – ein inzwischen erfasster wird nicht ungesehen überschrieben', async () => {
+    await hinzu(A.hb, land('EE'));
+    const gesehen = await juengster('EE');
+    // A und B sehen denselben Stand; A speichert zuerst.
+    await staende(A.hb, [
+      { ...land('EE', { fernverkaeufeLfdEur: 700 }), gesehenerStandId: gesehen },
+    ]);
+    const x = await fehlerVon(
+      staende(A.zbt, [{ ...land('EE', { fernverkaeufeLfdEur: 550 }), gesehenerStandId: gesehen }]),
+    );
+    expect(x.code).toBe('KONFLIKT');
+    const alle = await inTenant(w, (tx) =>
+      tx.landStand.findMany({ where: { programmId: w.programm, land: 'EE' } }),
+    );
+    expect(alle.map((s) => Number(s.fernverkaeufeLfdEur)).sort((a, b) => a - b)).toEqual([
+      700, 1200,
+    ]);
+    // Auf dem neuen Stand gelingt es; „jüngster Stand“ ist der zuletzt geschriebene.
+    await staende(A.zbt, [land('EE', { fernverkaeufeLfdEur: 550 })]);
+    const l = await im(A.zbt, (ctx) => ladeLaender(ctx, { mandantId: w.mandant }));
+    expect(l.historie.find((h) => h.land === 'EE')?.staende[0]?.fernverkaeufeLfdEur).toBe(550);
+  });
+
   it('Schwellenwechsel der EU-Fernverkäufe löst T-04 aus', async () => {
     await hinzu(A.zbt, land('NL', { fernverkaeufeLfdEur: 100 }));
     const r = await staende(A.zbt, [land('NL', { fernverkaeufeLfdEur: 20_000 })]);
@@ -159,14 +207,33 @@ describe.skipIf(!AKTIV)('Länder-Monitor gegen PostgreSQL', () => {
           land: land(code, { fernverkaeufeLfdEur: 100, fernverkaeufeVorjahrEur: 0 }),
         }),
       );
-    const r = await im(B.hb, (ctx) =>
+    const gesehen = async (code: string) =>
+      (
+        await inTenant(v, (tx) =>
+          tx.landStand.findFirstOrThrow({
+            where: { land: code, programm: { mandantId: v.mandant } },
+            orderBy: [{ stand: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            select: { id: true },
+          }),
+        )
+      ).id;
+    const r = await im(B.hb, async (ctx) =>
       speichereLandStaende(ctx, {
         mandantId: v.mandant,
         datenstand: '2026-10-10',
         laender: [
-          land('AT', { fernverkaeufeLfdEur: 4_885.13, fernverkaeufeVorjahrEur: 0 }),
-          land('FR', { fernverkaeufeLfdEur: 3_513.34, fernverkaeufeVorjahrEur: 0 }),
-          land('PL', { fernverkaeufeLfdEur: 1_601.53, fernverkaeufeVorjahrEur: 0 }),
+          {
+            ...land('AT', { fernverkaeufeLfdEur: 4_885.13, fernverkaeufeVorjahrEur: 0 }),
+            gesehenerStandId: await gesehen('AT'),
+          },
+          {
+            ...land('FR', { fernverkaeufeLfdEur: 3_513.34, fernverkaeufeVorjahrEur: 0 }),
+            gesehenerStandId: await gesehen('FR'),
+          },
+          {
+            ...land('PL', { fernverkaeufeLfdEur: 1_601.53, fernverkaeufeVorjahrEur: 0 }),
+            gesehenerStandId: await gesehen('PL'),
+          },
         ],
       }),
     );
@@ -186,13 +253,28 @@ describe.skipIf(!AKTIV)('Länder-Monitor gegen PostgreSQL', () => {
 
   it('Lesen: Historie zum Stichtag, keine vertraulichen Feststellungen; vertragskonform', async () => {
     await hinzu(A.hb, land('SK'));
-    await neueFeststellung(w, { titel: 'SK Registrierung fehlt', vertraulich: false });
-    await neueFeststellung(w, { titel: 'SK geheime Selbstanzeige', vertraulich: true });
+    await hinzu(A.hb, land('IT'));
+    const mitErklaerung = async (titel: string, vertraulich: boolean, landCode?: string) => {
+      const f = await neueFeststellung(w, { titel, vertraulich });
+      if (landCode) {
+        await inTenant(w, (tx) =>
+          tx.betroffeneErklaerung.create({
+            data: { feststellungId: f.id, steuerart: 'USt', land: landCode, zeitraum: '2026' },
+          }),
+        );
+      }
+      return f;
+    };
+    await mitErklaerung('Registrierung in der Slowakei fehlt', false, 'SK');
+    await mitErklaerung('Selbstanzeige geheime Sache', true, 'SK');
+    // Ländercode nur im Titel (gängige Abkürzung): kein Länderbezug.
+    await mitErklaerung('Ausfall der IT-Schnittstelle zum Shop', false);
     const l = await im(A.leser, (ctx) => ladeLaender(ctx, { mandantId: w.mandant }));
     expect(LaenderSchema.parse(l)).toEqual(l);
     expect(l.historie.find((h) => h.land === 'SK')?.staende).toHaveLength(1);
     const sk = l.feststellungen.find((x) => x.land === 'SK')?.eintraege ?? [];
-    expect(sk.map((x) => x.titel)).toEqual(['SK Registrierung fehlt']);
+    expect(sk.map((x) => x.titel)).toEqual(['Registrierung in der Slowakei fehlt']);
+    expect(l.feststellungen.find((x) => x.land === 'IT')).toBeUndefined();
     expect(JSON.stringify(l)).not.toMatch(/geheime/);
     const alt = await im(A.leser, (ctx) =>
       ladeLaender(ctx, { mandantId: w.mandant, stand: '2026-09-01' }),
@@ -222,10 +304,15 @@ describe.skipIf(!AKTIV)('Länder-Monitor gegen PostgreSQL', () => {
         }),
       );
     const [code, name, fremd, spaet] = await Promise.all([
+      // Nur der Code (könnte eine Abkürzung sein): kein Bezug.
       ereignis('Neue Rechnungsregeln LU', 'Hinweis der Steuerverwaltung', '2026-10-05T09:00:00Z'),
       ereignis('Hinweis', 'Lager in Luxemburg geplant', '2026-10-06T09:00:00Z'),
-      ereignis('LUX-Anbindung', 'Schnittstelle LUXOR', '2026-10-07T09:00:00Z'),
-      ereignis('LU nach dem Stichtag', 'später', '2026-10-15T09:00:00Z'),
+      ereignis(
+        'LUX-Anbindung',
+        'Schnittstelle LUXOR, Luxemburgerin im Team',
+        '2026-10-07T09:00:00Z',
+      ),
+      ereignis('Luxemburg nach dem Stichtag', 'später', '2026-10-15T09:00:00Z'),
     ]);
     await inTenant(w, async (tx) => {
       // EC-UST-02 (Steuersätze) aktiv mit Stand und Kontrolle K-EC-02 daran.
@@ -299,13 +386,14 @@ describe.skipIf(!AKTIV)('Länder-Monitor gegen PostgreSQL', () => {
     const lu = l.bezuege.find((b) => b.land === 'LU')!;
     expect(lu.risiken).toEqual([{ code: 'EC-UST-02', grund: 'Steuersätze in Luxemburg' }]);
     expect(lu.kontrollen).toEqual(['K-EC-02']);
-    expect(lu.ereignisse.sort()).toEqual([code.id, name.id, spaet.id].sort());
+    expect(lu.ereignisse.sort()).toEqual([name.id, spaet.id].sort());
     expect(lu.ereignisse).not.toContain(fremd.id);
+    expect(lu.ereignisse).not.toContain(code.id);
     // Jedes Land im Monitor hat genau einen Eintrag.
     expect(l.bezuege.map((b) => b.land).sort()).toEqual(l.historie.map((h) => h.land).sort());
     // Stichtag: Ereignisse erst bis zum Ende des Stichtags.
     const frueher = (await lies('2026-10-10')).bezuege.find((b) => b.land === 'LU')!;
-    expect(frueher.ereignisse.sort()).toEqual([code.id, name.id].sort());
+    expect(frueher.ereignisse).toEqual([name.id]);
 
     // RT-01: Eine vertrauliche Feststellung zum Land ändert keine Ausgabe – weder
     // `feststellungen` noch die Bezüge (kein Inhalt, keine Zahl, kein Orakel).

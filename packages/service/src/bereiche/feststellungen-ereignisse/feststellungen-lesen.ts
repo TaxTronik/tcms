@@ -24,6 +24,8 @@ import {
 import {
   FESTSTELLUNG_STATUS_LABEL,
   P153_LABEL,
+  p153Abschliessend,
+  p153Offen,
   statusAm,
   type FeststellungStatus,
   type Paragraph153Entscheidung,
@@ -39,7 +41,6 @@ import {
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { beteiligteVon, kannVertraulichLesen } from '../../rechte';
-import { p153Abschliessend } from './feststellungen';
 import {
   isoTag,
   isoTagOderNull,
@@ -150,6 +151,9 @@ export async function ladeFeststellungen(
       const entschieden = p153EntschiedenAm(f, ende);
       // Kennzahlen wie im Tax-CMS-Kontext über dieselben Maßnahmen wie die Zeilen.
       const kennzahlen = massnahmenZumStand(f.massnahmen, ende);
+      // Maßnahmen einer (zum Stichtag) verworfenen Feststellung sind nicht mehr zu
+      // erledigen und zählen nicht als offen.
+      const verworfen = status === 'VERWORFEN';
       personen.push(f.erfasstVon, entschieden ? f.p153EntschiedenVon : null);
       for (const m of zeilen) personen.push(m.verantwortlich, m.erledigtVon);
       return {
@@ -177,12 +181,18 @@ export async function ladeFeststellungen(
               am: isoZeit(f.p153EntschiedenAm!),
             }
           : null,
-        p153Offen: p153OffenAm(f, entschieden, status),
+        // „Weitere Klärung“ lässt die Würdigung offen (eine Regel, @tcms/domain).
+        p153Offen: p153Offen({ ...f, status }, ende),
+        // Nur auf offenen Feststellungen entscheidbar (Altbestand: geschlossen mit Antrag).
         verwerfenOffen:
-          !!f.verwerfenBeantragtVon && !f.verwerfenBestaetigtVon && f.status !== 'VERWORFEN',
-        massnahmenOffen: kennzahlen.offen.length,
+          !!f.verwerfenBeantragtVon &&
+          !f.verwerfenBestaetigtVon &&
+          f.status !== 'VERWORFEN' &&
+          f.status !== 'GESCHLOSSEN',
+        massnahmenOffen: verworfen ? 0 : kennzahlen.offen.length,
         massnahmenGesamt: kennzahlen.bestand.length,
-        aeltesteFrist: kennzahlen.aeltesteFrist ? isoTag(kennzahlen.aeltesteFrist) : null,
+        aeltesteFrist:
+          !verworfen && kennzahlen.aeltesteFrist ? isoTag(kennzahlen.aeltesteFrist) : null,
         risikoCodes: f.risiken.map((x) => x.risiko.code).sort(),
         massnahmen: zeilen,
       };
@@ -365,6 +375,18 @@ export async function ladeFeststellung(
   }
 
   const p153Gilt = p153EntschiedenAm(f, ende);
+  // Liegt die (letzte) Entscheidung nach dem Stichtag, kann davor eine frühere
+  // gegolten haben (Folgeentscheidung nach „weitere Klärung“ überschreibt die
+  // Zeile): aus dem jüngsten §-153-Eintrag des Audits bis zum Stand.
+  const p153Frueher = p153Gilt
+    ? undefined
+    : audits.filter((a) => a.aktion === 'tcms.feststellung.p153_entschieden' && bisStand(a)).at(-1);
+  const p153FrueherDetail = p153Frueher ? detail(p153Frueher) : null;
+  const p153FrueherEntscheidung =
+    p153FrueherDetail && typeof p153FrueherDetail['entscheidung'] === 'string'
+      ? (p153FrueherDetail['entscheidung'] as Paragraph153Entscheidung)
+      : null;
+  const p153EntscheidungStand = p153Gilt ? f.p153Entscheidung : p153FrueherEntscheidung;
 
   const nk = f.nachkontrolle;
   const nkSichtbar = !!nk && !(nk.ausserplanmaessig && nk.createdAt.getTime() > ende.getTime());
@@ -403,7 +425,7 @@ export async function ladeFeststellung(
       ? begrenzeStatus(status, {
           p153Offen:
             (f.auswirkung === 'JA' || f.auswirkung === 'UNKLAR') &&
-            !(p153Gilt && p153Abschliessend(f.p153Entscheidung)),
+            !p153Abschliessend(p153EntscheidungStand),
           massnahmen: massnahmen.length,
           offen: massnahmen.filter((m) => m.status === 'OFFEN').length,
           nachkontrolleOhneBefund: nkAnzeige === 'OHNE_BEFUND',
@@ -426,6 +448,7 @@ export async function ladeFeststellung(
           begruendung: f.verwerfenBegruendung,
           beantragtVon: f.verwerfenBeantragtVon,
           bestaetigtVon: status === 'VERWORFEN' ? f.verwerfenBestaetigtVon : null,
+          antragId: f.verwerfenAntragId,
         }
       : null;
   const p153 = p153Gilt
@@ -436,7 +459,19 @@ export async function ladeFeststellung(
         von: f.p153EntschiedenVon,
         am: isoZeit(f.p153EntschiedenAm!),
       }
-    : null;
+    : p153Frueher && p153FrueherDetail && p153FrueherEntscheidung
+      ? {
+          entscheidung: p153FrueherEntscheidung,
+          // Begründung erst seit sie im Audit steht (frühere Einträge: null).
+          begruendung:
+            typeof p153FrueherDetail['begruendung'] === 'string'
+              ? p153FrueherDetail['begruendung']
+              : null,
+          frist: typeof p153FrueherDetail['frist'] === 'string' ? p153FrueherDetail['frist'] : null,
+          von: p153Frueher.actorId,
+          am: isoZeit(p153Frueher.at),
+        }
+      : null;
 
   return {
     maskiert: false,

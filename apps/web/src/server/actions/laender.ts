@@ -49,6 +49,13 @@ function leseLand(fd: FormData, land: string, praefix: string) {
 
 const UNGUELTIG =
   'Bitte die Angaben prüfen (Stand als Datum, „Lager seit“ als Monat, Beträge ab 0 €).';
+/**
+ * Der Stand, den das Formular zeigte (`gesehenerStandId`): Ist inzwischen ein
+ * anderer Stand der jüngste, antwortet der Dienst mit KONFLIKT (TS-05).
+ */
+function mitGesehenemStand<T extends object>(fd: FormData, l: T, praefix: string) {
+  return { ...l, gesehenerStandId: String(fd.get(`${praefix}gesehenerStandId`) ?? '') };
+}
 
 async function kanzlei(fd: FormData) {
   const mandantId = feld(fd, 'mandantId');
@@ -64,7 +71,7 @@ export async function speichereLandStand(_prev: Ergebnis, fd: FormData): Promise
   const land = feld(fd, 'land');
   let laender;
   try {
-    laender = [leseLand(fd, land, '')];
+    laender = [mitGesehenemStand(fd, leseLand(fd, land, ''), '')];
   } catch (e) {
     if (e instanceof FormularFehler) return { fehler: e.message };
     throw e;
@@ -93,7 +100,7 @@ export async function speichereLaender(_prev: Ergebnis, fd: FormData): Promise<E
   if (!codes.length) return { fehler: 'Keine Länder übermittelt.' };
   let laender;
   try {
-    laender = codes.map((l) => leseLand(fd, l, `${l}.`));
+    laender = codes.map((l) => mitGesehenemStand(fd, leseLand(fd, l, `${l}.`), `${l}.`));
   } catch (e) {
     if (e instanceof FormularFehler) return { fehler: e.message };
     throw e;

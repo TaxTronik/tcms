@@ -32,7 +32,9 @@ für KI-Werkzeuge.
   Kern aller Bereiche in `src/kern/` (Export über `bereiche/lesepfade.ts`):
   `ladeKontext(ctx, { mandantId, stand? })` lädt den Tax-CMS-Kontext eines
   Mandanten zu einem Stichtag (prüft `kannLesen`, maskiert vertrauliche
-  Feststellungen), Nummernkreise je Tenant, reine Stichtag-Helfer, die
+  Feststellungen), Nummernkreise (`kern/nummern.ts`: Ereignis- und
+  Feststellungsnummern je Programm, Wiedervorlagen je Tenant; Advisory-Lock je
+  Nummernkreis erst nach den Elternzeilen), reine Stichtag-Helfer, die
   Rückrechnung historischer Stände (`kern/rueckrechnung.ts`: Maßnahmen,
   Feststellungsstatus, Ereignisse und Folgen zum Stichtag für Kontext, Listen
   und Details), der Antrag einer Frequenzabweichung (`kern/abweichung.ts`,
@@ -296,7 +298,13 @@ für KI-Werkzeuge.
   24 h (echte Zeit) gleicher Inhalt (SHA-256 der geprüften Eingabe) → dieselbe Antwort ohne Ereignis,
   Nachricht oder Audit, anderer Inhalt → `IDEMPOTENZ_ABWEICHUNG`. Der Schlüssel gilt nur für die
   Person, die ihn verwendet hat (nie die Antwort einer anderen); `PortalMeldungIdempotenz` hat kein
-  UPDATE für `tcms_app`.
+  UPDATE für `tcms_app`. Jede Portal-Meldung nimmt zuerst die Sperre
+  `portal-meldung-menge|<mandant>|<person>` und zählt darunter die Meldungen der Person der letzten
+  Stunde (Audit, echte Zeit): ab 20 → `409 ZU_VIELE_MELDUNGEN` (wie Codes, H1). Vor dem Anlegen liest
+  sie die Rollen unter `halteRollenFest` erneut (RT4-T-05).
+- Bestätigungen eines Antrags auf Verwerfen (Feststellung, Ereignis) nennen die Kennung des gesehenen
+  Antrags (`verwerfenAntragId`, je Antrag neu), bei Feststellungen zusätzlich die gesehene Auswirkung;
+  Abweichung unter der Zeilensperre → `KONFLIKT`.
 - Höchstens eine offene Risikoakzeptanz je Risiko, eine beantragte Übersteuerung je (Risiko,
   Sicht) und ein offener Nachtrag je Durchführung: unter Zeilensperre geprüft und zusätzlich als
   eindeutiger Teilindex (Verletzung → `KONFLIKT`).

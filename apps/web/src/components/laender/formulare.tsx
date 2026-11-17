@@ -154,6 +154,8 @@ export function LandStandForm({
     >
       <input type="hidden" name="mandantId" value={mandantId} />
       <input type="hidden" name="land" value={land.land} />
+      {/* Gesehener Stand: ein inzwischen erfasster wird nicht ungesehen überschrieben. */}
+      <input type="hidden" name="gesehenerStandId" value={land.id} />
       <StandFeld heute={heute} min={isoDatum(land.stand)} ip="drawer" />
       <Felder w={land} heute={heute} ip="drawer" />
       <div
@@ -228,6 +230,7 @@ export function SammelErfassung({
               <tr key={l.land}>
                 <td style={{ padding: '8px 16px' }}>
                   <input type="hidden" name="land" value={l.land} />
+                  <input type="hidden" name={`${l.land}.gesehenerStandId`} value={l.id} />
                   <span className="text-sm font-m">{l.land}</span>{' '}
                   <span className="text-xs text-muted">{LAND_NAME[l.land] ?? ''}</span>
                 </td>

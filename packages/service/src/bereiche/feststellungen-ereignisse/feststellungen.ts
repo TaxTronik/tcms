@@ -10,12 +10,14 @@
 //      gesperrten Zeile prüfen (KONFLIKT), ändern und protokollieren (mitAudit).
 // =============================================================================
 
+import { randomUUID } from 'node:crypto';
 import {
   DienstFehler,
   nichtBerechtigt,
   ErklaerungSchema,
   FeststellungAktionSchema,
   FeststellungErfassenSchema,
+  FeststellungVerwerfenBestaetigenSchema,
   FeststellungVerwerfenBeantragenSchema,
   FeststellungWeiterSchema,
   MassnahmeErledigenSchema,
@@ -31,6 +33,7 @@ import {
   type FeststellungErfasst,
   type FeststellungErgebnis,
   type FeststellungVerwerfenBeantragen,
+  type FeststellungVerwerfenBestaetigen,
   type FeststellungWeiter,
   type MassnahmeEingabe,
   type MassnahmeErgebnis,
@@ -44,7 +47,7 @@ import {
   type VerwerfenAbgelehnt,
   type WuerdigungEingabe,
 } from '@tcms/contract';
-import { naechsterFeststellungsschritt, p153Erforderlich } from '@tcms/domain';
+import { naechsterFeststellungsschritt, p153Abschliessend, p153Erforderlich } from '@tcms/domain';
 import type { Protokoll } from '../../audit';
 import { naechsteWiedervorlageNr } from '../../kern/nummern';
 import { heuteDatum } from '../../kern/zeit';
@@ -68,6 +71,7 @@ import {
   NUR_BERUFSTRAEGER,
   programmVon,
   pruefe,
+  pruefeFrist,
   pruefeKanzleiZugriff,
   pruefeMandant,
   sperreFeststellung,
@@ -81,10 +85,8 @@ const ABGESCHLOSSEN =
 const FRIST_VERGANGEN = 'Die Frist darf nicht in der Vergangenheit liegen.';
 const KEIN_ANTRAG = 'Es liegt kein offener Antrag auf Verwerfen vor.';
 
-/** Eine Entscheidung „weitere Klärung" ist nicht abschließend und erlaubt eine Folgeentscheidung. */
-export function p153Abschliessend(e: string | null | undefined): boolean {
-  return e != null && e !== 'WEITERE_KLAERUNG';
-}
+/** Regel aus `@tcms/domain` (eine Quelle für Schreib- und Lesepfade). */
+export { p153Abschliessend };
 
 // ---------------------------------------------------------------------------
 // Laden und Prüfen unter Sperre
@@ -146,6 +148,48 @@ function ergebnis(f: { id: string; nummer: string }, status: FeststellungErgebni
   return { id: f.id, nummer: f.nummer, status };
 }
 
+const ABSCHLUSS = new Set(['OHNE_BEFUND', 'MIT_BEFUND', 'ENTFALLEN']);
+
+/**
+ * Ist die Nachkontrolle „ohne Befund und gegengezeichnet“? Korrekturen
+ * abgeschlossener Durchführungen entstehen als Nachtrag (Regel 3, eigene Zeile
+ * mit `nachtragZuId`); maßgeblich ist daher der jüngste Nachtrag zur
+ * Nachkontrolle (auch Nachträge zu Nachträgen), ohne Nachtrag die Nachkontrolle
+ * selbst. Ein noch offener Nachtrag sperrt das Schließen.
+ */
+async function nachkontrolleOhneBefund(
+  ctx: DienstKontext,
+  nk: { id: string; status: string; gegengezeichnetVon: string | null; createdAt: Date } | null,
+): Promise<boolean> {
+  if (!nk) return false;
+  let massgeblich = nk;
+  let ebene = [nk.id];
+  for (let tiefe = 0; ebene.length > 0 && tiefe < 50; tiefe++) {
+    const nachtraege = await ctx.tx.durchfuehrung.findMany({
+      where: { nachtragZuId: { in: ebene } },
+      select: { id: true, status: true, gegengezeichnetVon: true, createdAt: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    for (const n of nachtraege) {
+      if (!ABSCHLUSS.has(n.status)) return false;
+      if (n.createdAt.getTime() >= massgeblich.createdAt.getTime()) massgeblich = n;
+    }
+    ebene = nachtraege.map((n) => n.id);
+  }
+  return massgeblich.status === 'OHNE_BEFUND' && !!massgeblich.gegengezeichnetVon;
+}
+
+/** Offener Antrag auf Verwerfen (beantragt, nicht bestätigt). */
+function verwerfenOffen(f: {
+  verwerfenBeantragtVon: string | null;
+  verwerfenBestaetigtVon: string | null;
+}): boolean {
+  return !!f.verwerfenBeantragtVon && !f.verwerfenBestaetigtVon;
+}
+
+const MASSNAHMEN_OFFEN_VERWERFEN =
+  'Es gibt offene Maßnahmen (Wiedervorlagen). Diese zuerst erledigen – eine verworfene Feststellung lässt keine Maßnahme mehr erledigen.';
+
 // ---------------------------------------------------------------------------
 // Status weiterschalten
 // ---------------------------------------------------------------------------
@@ -190,13 +234,20 @@ export async function schalteFeststellungWeiter(
       massnahmen: f.massnahmen.length,
       massnahmenOffen: f.massnahmen.filter((m) => m.status === 'OFFEN').length,
       nachkontrolleOhneBefund:
-        f.nachkontrolle?.status === 'OHNE_BEFUND' && !!f.nachkontrolle.gegengezeichnetVon,
+        f.status === 'NACHKONTROLLE' && (await nachkontrolleOhneBefund(ctx, f.nachkontrolle)),
     });
     if (!schritt.ziel) {
       throw schrittGesperrt('Für diesen Status gibt es keinen weiteren Schritt.');
     }
     if (schritt.blockiert) {
       throw schrittGesperrt(`Noch nicht möglich: ${schritt.blockiert}.`);
+    }
+    // Ein offener Antrag auf Verwerfen überlebte das Schließen und ließe sich
+    // danach weder bestätigen noch ablehnen: zuerst entscheiden.
+    if (schritt.ziel === 'GESCHLOSSEN' && verwerfenOffen(f)) {
+      throw schrittGesperrt(
+        'Noch nicht möglich: Das Verwerfen ist beantragt – zuerst bestätigen oder ablehnen.',
+      );
     }
     const ziel = schritt.ziel;
     const n = await tx.feststellung.updateMany({
@@ -236,9 +287,7 @@ export async function entscheideP153(
     throw new DienstFehler('UNGUELTIG', text, { frist: [text] });
   }
   const frist = braucheFrist && e.frist ? alsTag(e.frist) : null;
-  if (frist && frist.getTime() < heuteDatum(ctx.uhr).getTime()) {
-    throw new DienstFehler('UNGUELTIG', FRIST_VERGANGEN, { frist: [FRIST_VERGANGEN] });
-  }
+  if (frist) pruefeFrist(frist, heuteDatum(ctx.uhr), 'frist', FRIST_VERGANGEN);
   return aendere(ctx, async (tx, zeitpunkt) => {
     const f = await ladeGesperrt(ctx, mandantId, e.feststellungId);
     // Höchstpersönlich: ausschließlich zuständige Berufsträger:innen (oder Admin-BT).
@@ -276,11 +325,17 @@ export async function entscheideP153(
         objektTyp: 'Feststellung',
         objektId: f.id,
         programmId: f.programmId,
+        // Die Begründung steht im Audit (hashgesichert): Eine Folgeentscheidung nach
+        // „weitere Klärung“ überschreibt die Zeile, die frühere Begründung bleibt
+        // hier und im vorigen Eintrag erhalten (Eintrag einer Feststellung, für
+        // Nicht-Beteiligte maskiert).
         detail: {
           nummer: f.nummer,
           entscheidung: e.entscheidung,
+          begruendung: e.begruendung,
           frist: frist ? isoTag(frist) : null,
           vorher: f.p153Entscheidung,
+          ...(f.p153Entscheidung ? { vorherBegruendung: f.p153Begruendung } : {}),
         },
       },
     ];
@@ -440,9 +495,7 @@ export async function legeMassnahmeAn(
   const mandantId = e.mandantId.toLowerCase();
   pruefeKanzleiZugriff(ctx, mandantId);
   const frist = alsTag(e.frist);
-  if (frist.getTime() < heuteDatum(ctx.uhr).getTime()) {
-    throw new DienstFehler('UNGUELTIG', FRIST_VERGANGEN, { frist: [FRIST_VERGANGEN] });
-  }
+  pruefeFrist(frist, heuteDatum(ctx.uhr), 'frist', FRIST_VERGANGEN);
   const verantwortlich = e.verantwortlich.id.toLowerCase();
   return aendere(ctx, async (tx, zeitpunkt) => {
     const f = await ladeZumAendern(ctx, mandantId, e.feststellungId);
@@ -553,10 +606,12 @@ export async function legeNachkontrolleAn(
   const mandantId = e.mandantId.toLowerCase();
   pruefeKanzleiZugriff(ctx, mandantId);
   const faelligAm = alsTag(e.faelligAm);
-  if (faelligAm.getTime() < heuteDatum(ctx.uhr).getTime()) {
-    const text = 'Die Fälligkeit darf nicht in der Vergangenheit liegen.';
-    throw new DienstFehler('UNGUELTIG', text, { faelligAm: [text] });
-  }
+  pruefeFrist(
+    faelligAm,
+    heuteDatum(ctx.uhr),
+    'faelligAm',
+    'Die Fälligkeit darf nicht in der Vergangenheit liegen.',
+  );
   return aendere(ctx, async (tx, zeitpunkt) => {
     const f = await ladeZumAendern(ctx, mandantId, e.feststellungId);
     if (f.status !== 'MASSNAHMEN_OFFEN' && f.status !== 'NACHKONTROLLE') {
@@ -622,8 +677,11 @@ export async function beantrageFeststellungVerwerfen(
   pruefeKanzleiZugriff(ctx, mandantId);
   return aendere(ctx, async (tx) => {
     const f = await ladeZumAendern(ctx, mandantId, e.feststellungId);
-    if (f.verwerfenBeantragtVon && !f.verwerfenBestaetigtVon) {
+    if (verwerfenOffen(f)) {
       throw new DienstFehler('KONFLIKT', 'Das Verwerfen ist bereits beantragt.');
+    }
+    if (f.massnahmen.some((m) => m.status === 'OFFEN')) {
+      throw new DienstFehler('KONFLIKT', MASSNAHMEN_OFFEN_VERWERFEN);
     }
     await tx.feststellung.update({
       where: { id: f.id },
@@ -631,6 +689,8 @@ export async function beantrageFeststellungVerwerfen(
         verwerfenBegruendung: e.begruendung,
         verwerfenBeantragtVon: ctx.akteur.id,
         verwerfenBestaetigtVon: null,
+        // Neue Kennung je Antrag: Die Bestätigung bindet sich an den gesehenen Antrag.
+        verwerfenAntragId: randomUUID(),
       },
     });
     return {
@@ -650,13 +710,16 @@ export async function beantrageFeststellungVerwerfen(
  * Bestätigt das Verwerfen. Antragsteller:in und Auswirkung werden aus der
  * gesperrten Zeile gelesen; bestätigen darf nur eine zweite Person (AGENTS.md
  * Regel 4), bei Auswirkung „JA" oder „UNKLAR" nur mit `kannWuerdigen`
- * (Regel 5, `kannVerwerfenBestaetigen`).
+ * (Regel 5, `kannVerwerfenBestaetigen`). Die Bestätigung gilt nur für den
+ * gesehenen Antrag (`antragId`) und die gesehene Auswirkung; weicht eines ab
+ * (Antrag zurückgezogen und neu gestellt, Auswirkung geändert) → KONFLIKT.
+ * Offene Maßnahmen schließen das Verwerfen aus (sie blieben unerledigbar).
  */
 export async function bestaetigeFeststellungVerwerfen(
   ctx: DienstKontext,
-  eingabe: FeststellungAktion,
+  eingabe: FeststellungVerwerfenBestaetigen,
 ): Promise<FeststellungErgebnis> {
-  const e = pruefe(FeststellungAktionSchema, eingabe);
+  const e = pruefe(FeststellungVerwerfenBestaetigenSchema, eingabe);
   const mandantId = e.mandantId.toLowerCase();
   pruefeKanzleiZugriff(ctx, mandantId);
   return aendere(ctx, async (tx) => {
@@ -673,10 +736,17 @@ export async function bestaetigeFeststellungVerwerfen(
       f.auswirkung,
     );
     if (!recht.erlaubt) throw nichtBerechtigt(recht.verweigerung, recht.grund);
-    await tx.feststellung.update({
-      where: { id: f.id },
+    if (!gleicheId(f.verwerfenAntragId, e.antragId) || f.auswirkung !== e.auswirkung) {
+      throw new DienstFehler('KONFLIKT', GEAENDERT);
+    }
+    if (f.massnahmen.some((m) => m.status === 'OFFEN')) {
+      throw new DienstFehler('KONFLIKT', MASSNAHMEN_OFFEN_VERWERFEN);
+    }
+    const n = await tx.feststellung.updateMany({
+      where: { id: f.id, status: f.status, verwerfenAntragId: f.verwerfenAntragId },
       data: { status: 'VERWORFEN', verwerfenBestaetigtVon: ctx.akteur.id },
     });
+    if (n.count !== 1) throw new DienstFehler('KONFLIKT', GEAENDERT);
     return {
       wert: ergebnis(f, 'VERWORFEN'),
       protokoll: {
@@ -689,6 +759,8 @@ export async function bestaetigeFeststellungVerwerfen(
           von: f.status,
           nach: 'VERWORFEN',
           beantragtVon: f.verwerfenBeantragtVon,
+          begruendung: f.verwerfenBegruendung,
+          auswirkung: f.auswirkung,
         },
       },
     };

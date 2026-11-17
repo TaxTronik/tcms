@@ -18,7 +18,7 @@ import {
   bestaetigeEreignisVerwerfen,
   legeEreignisAn,
 } from './ereignisse';
-import { ladeEreignisAnlagenJeDokument } from './ereignisse-lesen';
+import { ladeEreignis, ladeEreignisAnlagenJeDokument } from './ereignisse-lesen';
 import { ladeFeststellung } from './feststellungen-lesen';
 import { meldeEreignis } from './portal';
 import {
@@ -85,8 +85,15 @@ describe.skipIf(!AKTIV)('Ereignis-Anlagen je Dokument (Service, PostgreSQL)', ()
         begruendung: BEGRUENDUNG,
       }),
     );
+    const antrag = await im(A.zbt, (ctx) =>
+      ladeEreignis(ctx, { mandantId: w.mandant, ereignisId: e2.id }),
+    );
     await im(A.zbt, (ctx) =>
-      bestaetigeEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId: e2.id }),
+      bestaetigeEreignisVerwerfen(ctx, {
+        mandantId: w.mandant,
+        ereignisId: e2.id,
+        antragId: antrag.verwerfenAntrag!.antragId,
+      }),
     );
     const erwartet = {
       dokumentId: dok,

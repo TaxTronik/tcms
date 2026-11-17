@@ -49,6 +49,8 @@ import {
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 const BEGRUENDUNG = 'Meldung betrifft einen anderen Mandanten, irrtümlich gemeldet.';
+/** Kennung eines Antrags, die es nicht gibt (Zugriffsprüfungen vor dem Antrag). */
+const IRGENDEIN_ANTRAG = '00000000-0000-4000-8000-000000000001';
 
 describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
   let w: Welt;
@@ -96,6 +98,22 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
       w,
       (tx) => tx.ereignisFolge.create({ data: { ereignisId, art, ziel, text: 'Vorschlag' } }),
       tenant,
+    );
+  }
+
+  /** Kennung des offenen Antrags (wie `verwerfenAntrag.antragId` im Detail). */
+  async function antragVon(ereignisId: string): Promise<string> {
+    const e = await inTenant(w, (tx) =>
+      tx.ereignis.findUniqueOrThrow({ where: { id: ereignisId } }),
+    );
+    return e.verwerfenAntragId;
+  }
+
+  /** Bestätigt das Verwerfen mit der Kennung des aktuellen Antrags. */
+  async function bestaetige(a: Akteur, ereignisId: string) {
+    const antragId = await antragVon(ereignisId);
+    return im(a, (ctx) =>
+      bestaetigeEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId, antragId }),
     );
   }
 
@@ -157,7 +175,12 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
     },
     {
       name: 'Verwerfen bestätigen',
-      lauf: (ctx, id) => bestaetigeEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId: id }),
+      lauf: (ctx, id) =>
+        bestaetigeEreignisVerwerfen(ctx, {
+          mandantId: w.mandant,
+          ereignisId: id,
+          antragId: IRGENDEIN_ANTRAG,
+        }),
     },
     {
       name: 'Verwerfen ablehnen',
@@ -521,37 +544,80 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
       im(A.hb, (ctx) => schliesseEreignisAb(ctx, { mandantId: w.mandant, ereignisId: e.id }));
     expect((await fehlerVon(schliesse())).code).toBe('KONFLIKT');
     await im(A.hb, (ctx) =>
-      verwerfeFolge(ctx, {
+      legeFolgenAn(ctx, {
         mandantId: w.mandant,
         ereignisId: e.id,
-        folgeId: hinweis!.id,
-        begruendung: BEGRUENDUNG,
+        folgen: [{ folgeId: hinweis!.id }],
       }),
     );
-    const zweite = await fehlerVon(schliesse());
-    expect(zweite.message).toMatch(/zweite Person/);
-    const h = await folgeAn(e.id, 'HINWEIS');
+    await im(A.hb, (ctx) =>
+      erledigeFolge(ctx, { mandantId: w.mandant, ereignisId: e.id, folgeId: hinweis!.id }),
+    );
+    // Nur Hinweise, nichts verworfen: eine Person schließt ab.
+    await expect(schliesse()).resolves.toMatchObject({ status: 'ERLEDIGT' });
+    expect((await fehlerVon(schliesse())).code).toBe('KONFLIKT');
+    expect(await auditZahl(w, e.id, 'tcms.ereignis.abgeschlossen')).toBe(1);
+  });
+
+  it('abschließen: verworfene Folgen und nur eine selbst angelegte Hinweis-Folge erledigt → zweite Person (Verwerfen)', async () => {
+    // Katalogfolgen von T-02 (Profil, Risiko, Kontrolle …) einzeln verwerfen,
+    // einen Hinweis anhängen, anlegen und erledigen – alles eine Person.
+    const e = await neuesEreignis();
+    for (const f of e.folgenListe) {
+      await im(A.hb, (ctx) =>
+        verwerfeFolge(ctx, {
+          mandantId: w.mandant,
+          ereignisId: e.id,
+          folgeId: f.id,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+    }
+    const schliesse = () =>
+      im(A.hb, (ctx) => schliesseEreignisAb(ctx, { mandantId: w.mandant, ereignisId: e.id }));
+    const vorher = await fehlerVon(schliesse());
+    expect(vorher.message).toMatch(/zweite Person/);
+    const h = await im(A.hb, (ctx) =>
+      fuegeFolgeHinzu(ctx, {
+        mandantId: w.mandant,
+        ereignisId: e.id,
+        art: 'HINWEIS',
+        text: 'gesichtet',
+      }),
+    );
     await im(A.hb, (ctx) =>
       legeFolgenAn(ctx, { mandantId: w.mandant, ereignisId: e.id, folgen: [{ folgeId: h.id }] }),
     );
     await im(A.hb, (ctx) =>
       erledigeFolge(ctx, { mandantId: w.mandant, ereignisId: e.id, folgeId: h.id }),
     );
-    await expect(schliesse()).resolves.toMatchObject({ status: 'ERLEDIGT' });
-    expect((await fehlerVon(schliesse())).code).toBe('KONFLIKT');
-    expect(await auditZahl(w, e.id, 'tcms.ereignis.abgeschlossen')).toBe(1);
+    const x = await fehlerVon(schliesse());
+    expect(x.code).toBe('KONFLIKT');
+    expect(x.message).toMatch(/zweite Person/);
+    expect(await auditZahl(w, e.id, 'tcms.ereignis.abgeschlossen')).toBe(0);
+    // Der vorgesehene Weg bleibt offen: Verwerfen beantragen, zweite Person bestätigt.
+    await im(A.hb, (ctx) =>
+      beantrageEreignisVerwerfen(ctx, {
+        mandantId: w.mandant,
+        ereignisId: e.id,
+        begruendung: BEGRUENDUNG,
+      }),
+    );
+    await expect(bestaetige(A.zbt, e.id)).resolves.toMatchObject({ status: 'VERWORFEN' });
   });
 
   it('Rechte im Detail (abschließen, Verwerfen beantragen/bestätigen) = Ergebnis der Operation', async () => {
     type Schritt = 'abschliessen' | 'beantragen' | 'bestaetigen';
-    const op = (schritt: Schritt, a: Akteur, ereignisId: string) =>
-      im(a, (ctx) => {
+    const op = async (schritt: Schritt, a: Akteur, ereignisId: string) => {
+      const antragId = await antragVon(ereignisId);
+      return im(a, (ctx) => {
         const z = { mandantId: w.mandant, ereignisId };
         if (schritt === 'abschliessen') return schliesseEreignisAb(ctx, z);
         if (schritt === 'beantragen')
           return beantrageEreignisVerwerfen(ctx, { ...z, begruendung: BEGRUENDUNG });
-        return bestaetigeEreignisVerwerfen(ctx, z);
+        return bestaetigeEreignisVerwerfen(ctx, { ...z, antragId });
       });
+    };
     /** Liest das Kennzeichen, führt den Schritt aus und vergleicht: erlaubt ⇔ Erfolg, sonst 403 mit Grund bzw. 409. */
     const vergleiche = async (schritt: Schritt, a: Akteur, ereignisId: string) => {
       const d = await im(a, (ctx) => ladeEreignis(ctx, { mandantId: w.mandant, ereignisId }));
@@ -621,9 +687,9 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
       });
     }
 
-    // Abschließen erlaubt, sobald eine Folge erledigt und der Rest verworfen ist.
+    // Abschließen erlaubt, sobald eine Folge mit Wirkung erledigt und der Rest verworfen ist.
     const z = await neuesEreignis('SONST');
-    const h = await folgeAn(z.id, 'HINWEIS');
+    const k = await folgeAn(z.id, 'KONTROLLE_AUSSERPLANMAESSIG', 'K-EC-02');
     for (const f of z.folgenListe) {
       await im(A.hb, (ctx) =>
         verwerfeFolge(ctx, {
@@ -635,10 +701,23 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
       );
     }
     await im(A.hb, (ctx) =>
-      legeFolgenAn(ctx, { mandantId: w.mandant, ereignisId: z.id, folgen: [{ folgeId: h.id }] }),
+      legeFolgenAn(ctx, {
+        mandantId: w.mandant,
+        ereignisId: z.id,
+        folgen: [{ folgeId: k.id, frist: '2026-11-30' }],
+      }),
+    );
+    const angelegt = await inTenant(w, (tx) =>
+      tx.ereignisFolge.findUniqueOrThrow({ where: { id: k.id } }),
+    );
+    await inTenant(w, (tx) =>
+      tx.durchfuehrung.update({
+        where: { id: angelegt.objektId! },
+        data: { status: 'OHNE_BEFUND' },
+      }),
     );
     await im(A.hb, (ctx) =>
-      erledigeFolge(ctx, { mandantId: w.mandant, ereignisId: z.id, folgeId: h.id }),
+      erledigeFolge(ctx, { mandantId: w.mandant, ereignisId: z.id, folgeId: k.id }),
     );
     expect(await vergleiche('abschliessen', A.hb, z.id)).toEqual({
       erlaubt: true,
@@ -681,22 +760,14 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
     ).toBe('KONFLIKT');
     const gross = { ...A.hb, id: A.hb.id.toUpperCase() } as Akteur;
     for (const a of [A.hb, gross]) {
-      const x = await fehlerVon(
-        im(a, (ctx) =>
-          bestaetigeEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId: e.id }),
-        ),
-      );
+      const x = await fehlerVon(bestaetige(a, e.id));
       expect(x).toMatchObject({
         code: 'NICHT_BERECHTIGT',
         grund: 'VIER_AUGEN',
         message: 'Die Bestätigung muss durch eine zweite Person erfolgen.',
       });
     }
-    await expect(
-      im(A.zbt, (ctx) =>
-        bestaetigeEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId: e.id }),
-      ),
-    ).resolves.toMatchObject({
+    await expect(bestaetige(A.zbt, e.id)).resolves.toMatchObject({
       status: 'VERWORFEN',
     });
     const folgen = await inTenant(w, (tx) =>
@@ -710,8 +781,94 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
     );
     expect(audit).toMatchObject({
       actorId: w.p.zbt,
-      detail: expect.objectContaining({ beantragtVon: w.p.hb }),
+      detail: expect.objectContaining({ beantragtVon: w.p.hb, begruendung: BEGRUENDUNG }),
     });
+  });
+
+  it('Verwerfen: Bestätigung nur für den gesehenen Antrag (zurückgezogen und neu gestellt → KONFLIKT)', async () => {
+    const e = await neuesEreignis();
+    const beantrage = (begruendung: string) =>
+      im(A.hb, (ctx) =>
+        beantrageEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId: e.id, begruendung }),
+      );
+    await beantrage(BEGRUENDUNG);
+    const gesehen = await im(A.zbt, (ctx) =>
+      ladeEreignis(ctx, { mandantId: w.mandant, ereignisId: e.id }),
+    );
+    const antragId = gesehen.verwerfenAntrag!.antragId;
+    expect(antragId).toBe(await antragVon(e.id));
+    // Dieselbe Person zieht zurück und stellt einen Antrag mit anderer Begründung.
+    await im(A.hb, (ctx) =>
+      lehneEreignisVerwerfenAb(ctx, { mandantId: w.mandant, ereignisId: e.id }),
+    );
+    const anders = 'Doppelt erfasst, das Ereignis steht bereits als 2026-T-0001 im Eingang.';
+    await beantrage(anders);
+    const x = await fehlerVon(
+      im(A.zbt, (ctx) =>
+        bestaetigeEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId: e.id, antragId }),
+      ),
+    );
+    expect(x.code).toBe('KONFLIKT');
+    expect(
+      (await inTenant(w, (tx) => tx.ereignis.findUniqueOrThrow({ where: { id: e.id } }))).status,
+    ).not.toBe('VERWORFEN');
+    // Mit dem neuen Antrag bestätigt; das Audit nennt die bestätigte Begründung.
+    await expect(bestaetige(A.zbt, e.id)).resolves.toMatchObject({ status: 'VERWORFEN' });
+    const audit = await inTenant(w, (tx) =>
+      tx.auditEvent.findFirstOrThrow({
+        where: { objektId: e.id, aktion: 'tcms.ereignis.verwerfen_bestaetigt' },
+      }),
+    );
+    expect(audit.detail).toMatchObject({ begruendung: anders });
+  });
+
+  it('Verwerfen: ein offener Antrag friert die Folgen ein; die Bestätigung prüft angelegte Folgen erneut', async () => {
+    const e = await neuesEreignis();
+    const k = await folgeAn(e.id, 'KONTROLLE_AUSSERPLANMAESSIG', 'K-EC-02');
+    await im(A.hb, (ctx) =>
+      beantrageEreignisVerwerfen(ctx, {
+        mandantId: w.mandant,
+        ereignisId: e.id,
+        begruendung: BEGRUENDUNG,
+      }),
+    );
+    const anlegen = await fehlerVon(
+      im(A.zbt, (ctx) =>
+        legeFolgenAn(ctx, {
+          mandantId: w.mandant,
+          ereignisId: e.id,
+          folgen: [{ folgeId: k.id, frist: '2026-11-30' }],
+        }),
+      ),
+    );
+    expect(anlegen.code).toBe('KONFLIKT');
+    const hinzu = await fehlerVon(
+      im(A.zbt, (ctx) =>
+        fuegeFolgeHinzu(ctx, {
+          mandantId: w.mandant,
+          ereignisId: e.id,
+          art: 'HINWEIS',
+          text: 'Prüfen lassen',
+        }),
+      ),
+    );
+    expect(hinzu.code).toBe('KONFLIKT');
+    expect(await auditZahl(w, k.id, 'tcms.ereignis.folge_angelegt')).toBe(0);
+    // Eine Folge mit Wirkung, die (etwa aus Altbestand) neben dem Antrag angelegt
+    // ist, schließt die Bestätigung aus – geprüft unter der Sperre, nicht nur beim Antrag.
+    await inTenant(w, (tx) =>
+      tx.ereignisFolge.update({
+        where: { id: k.id },
+        data: { status: 'ANGELEGT', objektId: w.durchfuehrung },
+      }),
+    );
+    const best = await fehlerVon(bestaetige(A.zbt, e.id));
+    expect(best.code).toBe('KONFLIKT');
+    expect(best.message).toMatch(/Folgen angelegt/);
+    const d = await im(A.zbt, (ctx) =>
+      ladeEreignis(ctx, { mandantId: w.mandant, ereignisId: e.id }),
+    );
+    expect(d.rechte.verwerfen.bestaetigen).toEqual({ erlaubt: false, verweigerung: null });
   });
 
   it('Verwerfen: Antragsteller steht in der Zeile; ein späterer Audit-Eintrag eines Dritten ändert nichts', async () => {
@@ -739,11 +896,7 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
         detail: {},
       }),
     );
-    const x = await fehlerVon(
-      im(A.hb, (ctx) =>
-        bestaetigeEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId: e.id }),
-      ),
-    );
+    const x = await fehlerVon(bestaetige(A.hb, e.id));
     expect([x.code, x.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
     // Zurückziehen leert den Antrag samt Antragsteller.
     await im(A.hb, (ctx) =>
@@ -763,8 +916,11 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
         begruendung: BEGRUENDUNG,
       }),
     );
+    const antragId = await antragVon(e.id);
     const best = (a: Akteur) => () =>
-      im(a, (ctx) => bestaetigeEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId: e.id }));
+      im(a, (ctx) =>
+        bestaetigeEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId: e.id, antragId }),
+      );
     expect(genauEinerKonflikt(await gleichzeitig(best(A.zbt), best(A.admin)))).toBe(true);
     expect(await auditZahl(w, e.id, 'tcms.ereignis.verwerfen_bestaetigt')).toBe(1);
   });
@@ -788,43 +944,54 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
     });
     await beantrage(A.zbt);
     // Jetzt ist hb die zweite Person, zbt nicht mehr.
-    expect(
-      (
-        await fehlerVon(
-          im(A.zbt, (ctx) =>
-            bestaetigeEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId: e.id }),
-          ),
-        )
-      ).code,
-    ).toBe('NICHT_BERECHTIGT');
-    await expect(
-      im(A.hb, (ctx) =>
-        bestaetigeEreignisVerwerfen(ctx, { mandantId: w.mandant, ereignisId: e.id }),
-      ),
-    ).resolves.toMatchObject({
+    expect((await fehlerVon(bestaetige(A.zbt, e.id))).code).toBe('NICHT_BERECHTIGT');
+    await expect(bestaetige(A.hb, e.id)).resolves.toMatchObject({
       status: 'VERWORFEN',
     });
   });
 
-  it('Verwerfen beantragen: nicht mit angelegten Folgen', async () => {
+  it('Verwerfen beantragen: nicht mit angelegten Folgen mit Wirkung; Folgen ohne Wirkung werden mit verworfen', async () => {
     const e = await neuesEreignis();
-    const h = await folgeAn(e.id, 'HINWEIS');
+    const beantrage = () =>
+      im(A.hb, (ctx) =>
+        beantrageEreignisVerwerfen(ctx, {
+          mandantId: w.mandant,
+          ereignisId: e.id,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+    const k = await folgeAn(e.id, 'KONTROLLE_AUSSERPLANMAESSIG', 'K-EC-02');
     await im(A.hb, (ctx) =>
-      legeFolgenAn(ctx, { mandantId: w.mandant, ereignisId: e.id, folgen: [{ folgeId: h.id }] }),
+      legeFolgenAn(ctx, {
+        mandantId: w.mandant,
+        ereignisId: e.id,
+        folgen: [{ folgeId: k.id, frist: '2026-11-30' }],
+      }),
     );
-    expect(
-      (
-        await fehlerVon(
-          im(A.hb, (ctx) =>
-            beantrageEreignisVerwerfen(ctx, {
-              mandantId: w.mandant,
-              ereignisId: e.id,
-              begruendung: BEGRUENDUNG,
-            }),
-          ),
-        )
-      ).code,
-    ).toBe('KONFLIKT');
+    expect((await fehlerVon(beantrage())).code).toBe('KONFLIKT');
+
+    // Nur ein angelegter Hinweis (ohne Objekt): Verwerfen bleibt möglich und schließt ihn ein.
+    const z = await neuesEreignis('SONST');
+    const [hinweis] = z.folgenListe;
+    await im(A.hb, (ctx) =>
+      legeFolgenAn(ctx, {
+        mandantId: w.mandant,
+        ereignisId: z.id,
+        folgen: [{ folgeId: hinweis!.id }],
+      }),
+    );
+    await im(A.hb, (ctx) =>
+      beantrageEreignisVerwerfen(ctx, {
+        mandantId: w.mandant,
+        ereignisId: z.id,
+        begruendung: BEGRUENDUNG,
+      }),
+    );
+    await expect(bestaetige(A.zbt, z.id)).resolves.toMatchObject({ status: 'VERWORFEN' });
+    const folgen = await inTenant(w, (tx) =>
+      tx.ereignisFolge.findMany({ where: { ereignisId: z.id }, orderBy: { id: 'asc' } }),
+    );
+    expect(folgen.map((f) => f.status)).toEqual(folgen.map(() => 'VERWORFEN'));
   });
 
   // ---------------------------------------------------------------------------

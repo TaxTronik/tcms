@@ -255,7 +255,11 @@ describe.skipIf(!AKTIV)('Portfolio und Arbeitskorb gegen PostgreSQL', () => {
     it('Verwerfen vertraulicher Feststellungen ohne Titel und Begründung', async () => {
       const f = await mitTenant(DEMO_TENANT_ID, async (tx) => {
         const x = await tx.feststellung.findFirstOrThrow({
-          where: { programm: { mandantId: DEMO_IDS.talwind }, status: { not: 'VERWORFEN' } },
+          // Nur offene Feststellungen: auf geschlossenen ist ein Antrag nicht entscheidbar.
+          where: {
+            programm: { mandantId: DEMO_IDS.talwind },
+            status: { notIn: ['VERWORFEN', 'GESCHLOSSEN'] },
+          },
           orderBy: { nummer: 'asc' },
         });
         await tx.feststellung.update({
