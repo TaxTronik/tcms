@@ -89,8 +89,15 @@ pnpm install --frozen-lockfile --filter @tcms/api... --reporter=silent
 pnpm --filter @tcms/db generate >/dev/null
 TCMS_VERSION="$VERSION" pnpm --filter @tcms/api build
 pnpm --filter @tcms/api deploy --prod --no-optional "$ARBEIT/deploy" --reporter=silent
-node apps/api/scripts/laufzeit.mjs "$ARBEIT/deploy" \
-  --prisma-client node_modules/.prisma/client --bundle apps/api/dist
+# Erfolgszeile verlangt: Ein Skript, das gar nicht prüft (früher: Pfad mit
+# Leer-/Sonderzeichen), darf nicht als Erfolg durchgehen.
+laufzeit=$(node apps/api/scripts/laufzeit.mjs "$ARBEIT/deploy" \
+  --prisma-client node_modules/.prisma/client --bundle apps/api/dist)
+printf '%s\n' "$laufzeit"
+[[ $laufzeit == 'laufzeit: Baum geprüft '* ]] || {
+  echo 'simuliere-image: laufzeit.mjs hat den Laufzeitbaum nicht geprüft' >&2
+  exit 1
+}
 mkdir -p "$ARBEIT/app/dist"
 cp apps/api/dist/server.mjs apps/api/dist/server.mjs.map "$ARBEIT/app/dist/"
 cp apps/api/healthcheck.mjs "$ARBEIT/app/healthcheck.mjs"
