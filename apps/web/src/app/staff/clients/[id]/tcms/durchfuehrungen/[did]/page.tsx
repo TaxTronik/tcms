@@ -170,7 +170,7 @@ export default async function Kontrolldurchfuehrung({
       <EntwurfFormular
         action={speichereDurchfuehrung}
         formId={FORM_ID}
-        felder={felder}
+        felder={{ ...felder, bisher: d.inhalt }}
         einreichen="Zur Gegenzeichnung einreichen"
         links={entfallenDialog}
       />
@@ -212,7 +212,9 @@ export default async function Kontrolldurchfuehrung({
       </div>
     );
   } else if (fussStatus === 'ZUR_GEGENZEICHNUNG') {
-    const befundOhneFeststellung = d.ergebnis === 'MIT_BEFUND' && d.feststellungen.length === 0;
+    // Eine verworfene Feststellung deckt keinen Befund ab (wie der Service).
+    const befundOhneFeststellung =
+      d.ergebnis === 'MIT_BEFUND' && !d.feststellungen.some((f) => f.status !== 'VERWORFEN');
     fuss = (
       <div className="form-actions" style={{ alignItems: 'flex-start' }}>
         <button
@@ -532,7 +534,7 @@ export default async function Kontrolldurchfuehrung({
               )}
               <AktionsKnopf
                 action={gibEntfallenFrei}
-                felder={felder}
+                felder={{ ...felder, antrag: d.entfallenAntrag ?? '' }}
                 className="btn-primary btn-tiny"
                 disabled={!r.entfallenFreigeben.erlaubt}
                 title={r.entfallenFreigeben.grund ?? 'Als zweite Person freigeben'}

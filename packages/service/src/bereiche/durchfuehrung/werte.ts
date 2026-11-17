@@ -7,6 +7,36 @@
 // =============================================================================
 
 import { DF_MIN_BEFUND_KOMMENTAR } from '@tcms/contract';
+import { kanonisch, sha256 } from '@tcms/domain/audit';
+
+/** Gespeicherter Inhalt einer Durchführung (Zeile), wie er eingereicht und gegengezeichnet wird. */
+export interface GespeicherterInhalt {
+  kontrolleStandId: string;
+  schritte: unknown;
+  werte: unknown;
+  ergebnis: string | null;
+  ergebnisKommentar: string | null;
+}
+
+/** Kanonischer Inhalt (für das Audit beim Einreichen, Regel 1/3). */
+export function inhaltKanonisch(d: GespeicherterInhalt) {
+  return {
+    kontrolleStandId: d.kontrolleStandId,
+    schritte: d.schritte ?? [],
+    werte: d.werte ?? {},
+    ergebnis: d.ergebnis,
+    ergebnisKommentar: d.ergebnisKommentar,
+  };
+}
+
+/**
+ * Merkmal des gespeicherten Inhalts (SHA-256 über die kanonische Form):
+ * gesehener Stand beim Speichern und Einreichen (TS-05) und Bindung des
+ * eingereichten bzw. gegengezeichneten Inhalts im Audit.
+ */
+export function inhaltMerkmal(d: GespeicherterInhalt): string {
+  return sha256(kanonisch(inhaltKanonisch(d)));
+}
 
 export interface KennzahlDef {
   key: string;

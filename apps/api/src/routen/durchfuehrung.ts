@@ -55,7 +55,7 @@ export function registriereDurchfuehrung(r: Routen<Tx>): void {
     speichereDurchfuehrung(dienstKontext(c), { ...c.body, ...ziel(c) }),
   );
   r.endpunkt(ENDPUNKTE.durchfuehrungEinreichen, async (c) =>
-    reicheDurchfuehrungEin(dienstKontext(c), ziel(c)),
+    reicheDurchfuehrungEin(dienstKontext(c), { ...c.body, ...ziel(c) }),
   );
   r.endpunkt(ENDPUNKTE.nachweisAnhaengen, async (c) =>
     haengeNachweisAn(dienstKontext(c), { ...c.body, ...ziel(c) }),
@@ -73,7 +73,7 @@ export function registriereDurchfuehrung(r: Routen<Tx>): void {
     beantrageEntfallen(dienstKontext(c), { ...c.body, ...ziel(c) }),
   );
   r.endpunkt(ENDPUNKTE.entfallenFreigeben, async (c) =>
-    gibEntfallenFrei(dienstKontext(c), ziel(c)),
+    gibEntfallenFrei(dienstKontext(c), { ...c.body, ...ziel(c) }),
   );
   r.endpunkt(ENDPUNKTE.entfallenAblehnen, async (c) =>
     lehneEntfallenAb(dienstKontext(c), { ...c.body, ...ziel(c) }),
@@ -99,7 +99,7 @@ export function registriereDurchfuehrung(r: Routen<Tx>): void {
     speichereDurchfuehrung(dienstKontext(c), { ...c.body, ...ziel(c) }),
   );
   r.endpunkt(ENDPUNKTE.portalAufgabeEinreichen, async (c) =>
-    reicheDurchfuehrungEin(dienstKontext(c), ziel(c)),
+    reicheDurchfuehrungEin(dienstKontext(c), { ...c.body, ...ziel(c) }),
   );
   r.endpunkt(ENDPUNKTE.portalAnlageAnhaengen, async (c) =>
     haengeNachweisAn(dienstKontext(c), { ...c.body, ...ziel(c) }),

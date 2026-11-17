@@ -29,6 +29,7 @@ import {
   haengeNachweisAn,
   imDienst,
   keinPersonenVerzeichnis,
+  ladeDurchfuehrung,
   reicheDurchfuehrungEin,
   speichereDurchfuehrung,
   verweisAblage,
@@ -114,6 +115,13 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
         };
   const dienst = <T>(c: Partial<AkteurClaims>, fn: (ctx: DienstKontext) => Promise<T>) =>
     imDienst(alsAkteur(c), PORTS, fn);
+  /** Gesehener Stand wie im Detail: Merkmal des Inhalts bzw. des Entfallen-Antrags. */
+  const detail = (did: string) =>
+    dienst(C.bt, (ctx) => ladeDurchfuehrung(ctx, { mandantId: mandant, durchfuehrungId: did }));
+  const inhaltVon = async (did: string) => (await detail(did)).inhalt;
+  const antragVon = async (did: string) => (await detail(did)).entfallenAntrag ?? '';
+  /** Zuletzt angelegte Durchführung (für Bodys mit gesehenem Stand). */
+  let letzte = '';
 
   async function durchfuehrung(k: { id: string; standId: string }): Promise<string> {
     return mitTenant(tenant, async (tx) => {
@@ -127,6 +135,7 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
           faelligAm: tag('2026-12-31'),
         },
       });
+      letzte = d.id;
       return d.id;
     });
   }
@@ -134,9 +143,14 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
     const did = await durchfuehrung(k === 'k1' ? k1 : k2);
     const wer = k === 'k1' ? C.bearbeiter : C.ma;
     const z = { mandantId: mandant, durchfuehrungId: did };
-    await dienst(wer, (ctx) => speichereDurchfuehrung(ctx, { ...z, ...SPEICHERN } as never));
+    const bisher = await inhaltVon(did);
+    await dienst(wer, (ctx) =>
+      speichereDurchfuehrung(ctx, { ...z, ...SPEICHERN, bisher } as never),
+    );
     await dienst(wer, (ctx) => haengeNachweisAn(ctx, { ...z, verweis: verweis() }));
-    await dienst(wer, (ctx) => reicheDurchfuehrungEin(ctx, z));
+    const gespeichert = await inhaltVon(did);
+    await dienst(wer, (ctx) => reicheDurchfuehrungEin(ctx, { ...z, bisher: gespeichert }));
+    letzte = did;
     return did;
   }
 
@@ -232,6 +246,7 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
     /** Bereitet den Zustand vor und liefert den Pfad. */
     pfad: () => Promise<string>;
     wer: Partial<AkteurClaims>;
+    /** Body; als Funktion mit gesehenem Stand der zuletzt angelegten Durchführung. */
     body?: unknown;
     status: number;
     schema: { parse(v: unknown): unknown };
@@ -267,7 +282,7 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
       methode: 'POST',
       pfad: async () => `${D(await durchfuehrung(k1))}/speichern`,
       wer: C.bearbeiter,
-      body: SPEICHERN,
+      body: async () => ({ ...SPEICHERN, bisher: await inhaltVon(letzte) }),
       status: 200,
       schema: DurchfuehrungSpeichernErgebnisSchema,
       ungueltig: { ...SPEICHERN, mandantId: mandant },
@@ -278,13 +293,15 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
       pfad: async () => {
         const did = await durchfuehrung(k1);
         const z = { mandantId: mandant, durchfuehrungId: did };
+        const bisher = await inhaltVon(did);
         await dienst(C.bearbeiter, (ctx) =>
-          speichereDurchfuehrung(ctx, { ...z, ...SPEICHERN } as never),
+          speichereDurchfuehrung(ctx, { ...z, ...SPEICHERN, bisher } as never),
         );
         await dienst(C.bearbeiter, (ctx) => haengeNachweisAn(ctx, { ...z, verweis: verweis() }));
         return `${D(did)}/einreichen`;
       },
       wer: C.bearbeiter,
+      body: async () => ({ bisher: await inhaltVon(letzte) }),
       status: 200,
       schema: DurchfuehrungUebergangSchema,
       ungueltig: '{"stand":"2026-01-01"}',
@@ -359,6 +376,7 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
         return `${D(did)}/entfallen/freigeben`;
       },
       wer: C.bt,
+      body: async () => ({ antrag: await antragVon(letzte) }),
       status: 200,
       schema: DurchfuehrungUebergangSchema,
       ungueltig: '{}',
@@ -443,7 +461,7 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
       methode: 'POST',
       pfad: async () => `${P(await durchfuehrung(k2))}/speichern`,
       wer: C.ma,
-      body: SPEICHERN,
+      body: async () => ({ ...SPEICHERN, bisher: await inhaltVon(letzte) }),
       status: 200,
       schema: DurchfuehrungSpeichernErgebnisSchema,
       portal: true,
@@ -455,11 +473,15 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
       pfad: async () => {
         const did = await durchfuehrung(k2);
         const z = { mandantId: mandant, durchfuehrungId: did };
-        await dienst(C.ma, (ctx) => speichereDurchfuehrung(ctx, { ...z, ...SPEICHERN } as never));
+        const bisher = await inhaltVon(did);
+        await dienst(C.ma, (ctx) =>
+          speichereDurchfuehrung(ctx, { ...z, ...SPEICHERN, bisher } as never),
+        );
         await dienst(C.ma, (ctx) => haengeNachweisAn(ctx, { ...z, verweis: verweis() }));
         return `${P(did)}/einreichen`;
       },
       wer: C.ma,
+      body: async () => ({ bisher: await inhaltVon(letzte) }),
       status: 200,
       schema: DurchfuehrungUebergangSchema,
       portal: true,
@@ -531,8 +553,12 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
     },
   ];
 
+  const bodyVon = async (f: Fall) =>
+    typeof f.body === 'function' ? await (f.body as () => Promise<unknown>)() : f.body;
+
   it.each(faelle)('$name: Erfolg nach Vertrag', async (f) => {
-    const r = await senden(f.methode, await f.pfad(), f.wer, f.body);
+    const pfad = await f.pfad();
+    const r = await senden(f.methode, pfad, f.wer, await bodyVon(f));
     const b = await json(r);
     expect(r.status, JSON.stringify(b)).toBe(f.status);
     expect(r.headers.get('cache-control')).toBe('no-store');
@@ -547,13 +573,14 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
       f.wer.knd === 'MANDANT'
         ? kontakt(f.wer.sub!, mandantB)
         : { ...f.wer, cli: { ...f.wer.cli!, id: mandantB } };
-    const r = await senden(f.methode, pfad, fremd, f.body);
+    const r = await senden(f.methode, pfad, fremd, await bodyVon(f));
     expect(r.status).toBe(404);
     expect(await json(r)).toEqual({ ok: false, fehler: { code: 'NICHT_GEFUNDEN' } });
   });
 
   it.each(faelle.filter((f) => !f.portal))('$name: Mandantenperson → 404', async (f) => {
-    const r = await senden(f.methode, await f.pfad(), C.gv, f.body);
+    const pfad = await f.pfad();
+    const r = await senden(f.methode, pfad, C.gv, await bodyVon(f));
     expect(r.status).toBe(404);
     expect(await json(r)).toEqual({ ok: false, fehler: { code: 'NICHT_GEFUNDEN' } });
   });
@@ -618,10 +645,12 @@ describe.skipIf(!AKTIV)('Endpunkte durchfuehrung (HTTP, echte Datenbank)', () =>
   it('Portal-Aufgabe: berechnete Abweichung je Kennzahl in `pruefung` (wie die Einreichprüfung)', async () => {
     const did = await durchfuehrung(k2);
     const z = { mandantId: mandant, durchfuehrungId: did };
+    const bisher = await inhaltVon(did);
     await dienst(C.ma, (ctx) =>
       speichereDurchfuehrung(ctx, {
         ...z,
         ...SPEICHERN,
+        bisher,
         werte: [{ key: 'saldo', wert: 3.456, bemerkung: '', erklaert: false }],
       } as never),
     );

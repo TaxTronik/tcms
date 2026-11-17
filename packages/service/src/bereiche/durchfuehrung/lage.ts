@@ -6,21 +6,38 @@
 //   1. Eingabe strikt prüfen (Contract-Schema).
 //   2. Leserecht auf den Mandanten der Anfrage (`kannLesen`), sonst
 //      NICHT_GEFUNDEN – bevor irgendein Objekt gelesen wird.
-//   3. Zeile `SELECT … FOR UPDATE` sperren, nur wenn sie zum Programm dieses
-//      Mandanten gehört (RLS trennt nur Tenants, nicht Mandanten). Fremde,
-//      unbekannte und Objekte anderer Mandanten: dieselbe Antwort.
-//   4. Erst danach den Stand lesen (READ COMMITTED: jede Anweisung sieht den
+//   3. Sperren in der Ordnung Programm → Risiko → Kontrolle → Durchführung
+//      (AGENTS.md TS-05), nur Zeilen des Programms dieses Mandanten (RLS trennt
+//      nur Tenants, nicht Mandanten). Fremde, unbekannte und Objekte anderer
+//      Mandanten: dieselbe Antwort. Programm und Risiken nur, wo die Operation
+//      Zeilen mit Fremdschlüssel darauf anlegt (Feststellung der
+//      Gegenzeichnung): deren FK-Prüfung (FOR KEY SHARE) nach der Durchführung
+//      liefe sonst gegen die Sperre einer Neuplanung (Risiko/Programm → alle
+//      Durchführungen der Kontrolle). Die Kontrolle FOR SHARE: Ihr Stand (die
+//      Zuständigkeit) bleibt bis zum Commit, wie gelesen, und das Anlegen eines
+//      Nachtrags braucht keine weitere Sperre auf sie. Danach die Durchführung
+//      FOR UPDATE, dann ggf. eine Sperre der Operation auf Kindzeilen.
+//   4. Mandantenkontakte: `halteRollenFest` (Mandantenzeile FOR KEY SHARE) und
+//      Rollen neu lesen – eine in der Wartezeit entzogene Rolle zählt nicht
+//      mehr, und bis zum Commit wird keine entzogen (wie Freigaben, RT4-T-05).
+//   5. Erst danach den Stand lesen (READ COMMITTED: jede Anweisung sieht den
 //      Stand nach der Sperre), Portal-Sichtbarkeit prüfen, Beteiligte aus
 //      Durchführung, Nachweisen und Audit ermitteln, Rechte berechnen.
+//
+// Zuständigkeit offener Durchführungen aus dem aktuell gültigen Kontrollstand,
+// Inhalt (Schritte, Kennzahlen, Mindestnachweise) aus dem geplanten Stand der
+// Durchführung (`kern/zustaendigkeit.ts`, eine Regel für alle Lesepfade).
 // =============================================================================
 
 import { DienstFehler, nichtBerechtigt } from '@tcms/contract';
 import type { Prisma, Tx } from '@tcms/db';
 import { statusAm } from '@tcms/domain';
+import { kanonisch, sha256 } from '@tcms/domain/audit';
 import { heuteDatum } from '../../kern/zeit';
+import { zustaendigkeitAus, zustaendigkeitsStand } from '../../kern/zustaendigkeit';
 import type { DienstKontext } from '../../kontext';
 import { kannLesen, type KontaktRolle, type KontrollZustaendigkeit } from '../../rechte';
-import { ladeKontaktRollen } from '../../rollen';
+import { halteRollenFest, ladeKontaktRollen } from '../../rollen';
 import {
   darfPortalLesen,
   durchfuehrungsRechte,
@@ -49,6 +66,8 @@ export const LAGE_INCLUDE = {
       code: true,
       programmId: true,
       programm: { select: { mandantId: true } },
+      // Für die Zuständigkeit offener Durchführungen (aktuell gültiger Stand).
+      staende: { orderBy: [{ version: 'asc' }, { id: 'asc' }] },
     },
   },
   // Entfernte Verweise bleiben gespeichert, werden aber nie gelesen.
@@ -56,12 +75,15 @@ export const LAGE_INCLUDE = {
 } satisfies Prisma.DurchfuehrungInclude;
 
 export type DurchfuehrungRoh = Prisma.DurchfuehrungGetPayload<{ include: typeof LAGE_INCLUDE }>;
+export type KontrollStandRoh = DurchfuehrungRoh['kontrolleStand'];
 
 export interface Lage {
   d: DurchfuehrungRoh;
   mandantId: string;
   programmId: string;
   rollen: KontaktRolle[];
+  /** Kontrollstand der Zuständigkeit heute (offen: aktuell gültiger, sonst der eigene). */
+  zustaendigkeitsStand: KontrollStandRoh;
   zustaendigkeit: KontrollZustaendigkeit;
   beteiligte: string[];
   heute: Date;
@@ -77,6 +99,21 @@ interface Pruefbar<T> {
         success: false;
         error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] };
       };
+}
+
+/**
+ * Merkmal eines Entfallen-Antrags (SHA-256 über antragstellende Person und
+ * Begründung): Die Freigabe gilt nur dem gesehenen Antrag (TS-05). Ohne
+ * Antrag `null`.
+ */
+export function antragMerkmal(d: {
+  entfallenVon: string | null;
+  entfallenBegruendung: string | null;
+}): string | null {
+  if (!d.entfallenBegruendung) return null;
+  return sha256(
+    kanonisch({ von: d.entfallenVon?.toLowerCase() ?? null, begruendung: d.entfallenBegruendung }),
+  );
 }
 
 /** Prüft die Eingabe mit dem Contract-Schema; Feldfehler als `UNGUELTIG`. */
@@ -110,15 +147,50 @@ export async function pruefeLeserecht(
   return rollen;
 }
 
+/** Eltern, die eine Operation vor der Durchführung sperrt (Zeilen mit FK darauf, TS-05). */
+export interface ElternSperren {
+  /** Programm des Mandanten FOR KEY SHARE (neue Feststellung). */
+  programm?: boolean;
+  /** Risiken des Programms FOR KEY SHARE, nach ID (Risikobezüge einer neuen Feststellung). */
+  risikoIds?: readonly string[];
+}
+
 /**
- * Sperrt die Durchführung (TS-05), aber nur, wenn sie zum Programm des
+ * Sperrt in der Ordnung Programm → Risiko → Kontrolle → Durchführung (TS-05):
+ * die angegebenen Eltern FOR KEY SHARE, die Kontrolle der Durchführung FOR
+ * SHARE und die Durchführung FOR UPDATE – nur, wenn sie zum Programm des
  * Mandanten gehört. Parametrisiert; RLS begrenzt zusätzlich auf den Tenant.
  */
 export async function sperreDurchfuehrung(
   tx: Tx,
   durchfuehrungId: string,
   mandantId: string,
+  eltern: ElternSperren = {},
 ): Promise<void> {
+  if (eltern.programm) {
+    await tx.$queryRaw`
+      SELECT p.id FROM "TcmsProgramm" p
+       WHERE p."mandantId" = ${mandantId}::uuid
+         FOR KEY SHARE`;
+  }
+  const risikoIds = [...new Set(eltern.risikoIds ?? [])].sort();
+  if (risikoIds.length > 0) {
+    await tx.$queryRaw`
+      SELECT r.id
+        FROM "Risiko" r
+        JOIN "TcmsProgramm" p ON p.tenant_id = r.tenant_id AND p.id = r."programmId"
+       WHERE r.id = ANY(${risikoIds}::text[]) AND p."mandantId" = ${mandantId}::uuid
+       ORDER BY r.id
+         FOR KEY SHARE OF r`;
+  }
+  const kontrolle = await tx.$queryRaw<{ id: string }[]>`
+    SELECT k.id
+      FROM "Durchfuehrung" d
+      JOIN "Kontrolle" k ON k.tenant_id = d.tenant_id AND k.id = d."kontrolleId"
+      JOIN "TcmsProgramm" p ON p.tenant_id = k.tenant_id AND p.id = k."programmId"
+     WHERE d.id = ${durchfuehrungId} AND p."mandantId" = ${mandantId}::uuid
+       FOR SHARE OF k`;
+  if (kontrolle.length !== 1) throw new DienstFehler('NICHT_GEFUNDEN');
   const zeilen = await tx.$queryRaw<{ id: string }[]>`
     SELECT d.id
       FROM "Durchfuehrung" d
@@ -159,34 +231,49 @@ export async function ladeBeteiligte(
   return [...ids].sort();
 }
 
-export function zustaendigkeitVon(d: DurchfuehrungRoh): KontrollZustaendigkeit {
-  const ks = d.kontrolleStand;
-  return {
-    durchfuehrendId: ks.durchfuehrendId,
-    vertretungId: ks.vertretungId,
-    gegenzeichnerId: ks.gegenzeichnerId,
-    gegenzeichnungMandant: ks.gegenzeichnungMandant,
-    partei: ks.partei,
-  };
+/**
+ * Kontrollstand der Zuständigkeit zum Stichtag (`kern/zustaendigkeit.ts`):
+ * offene Durchführung → aktuell gültiger Stand der Kontrolle, abgeschlossene
+ * bzw. entfallene → ihr eigener.
+ */
+export function zustaendigkeitsStandVon(
+  d: DurchfuehrungRoh,
+  stichtag: Date,
+  heute: Date,
+): KontrollStandRoh {
+  return zustaendigkeitsStand(d, d.kontrolleStand, d.kontrolle.staende, stichtag, heute);
 }
 
 /**
  * Lädt den Lagestand einer Durchführung im Mandanten der Anfrage. Mit
- * `sperren` unter Zeilensperre (Operationen). Nicht sichtbar → NICHT_GEFUNDEN.
+ * `sperren` unter Zeilensperre (Operationen; `eltern` vorher, `danach` – etwa
+ * eine Sperre auf Kindzeilen – direkt nach der Durchführung, beides TS-05).
+ * Nicht sichtbar → NICHT_GEFUNDEN.
  */
 export async function ladeLage(
   ctx: DienstKontext,
   ziel: { mandantId: string; durchfuehrungId: string },
-  opts: { sperren: boolean },
+  opts: { sperren: boolean; eltern?: ElternSperren; danach?: (tx: Tx) => Promise<void> },
 ): Promise<Lage> {
-  const rollen = await pruefeLeserecht(ctx, ziel.mandantId);
-  if (opts.sperren) await sperreDurchfuehrung(ctx.tx, ziel.durchfuehrungId, ziel.mandantId);
+  // 404-Schranke vor jedem Objekt (TS-03).
+  let rollen = await pruefeLeserecht(ctx, ziel.mandantId);
+  if (opts.sperren) {
+    await sperreDurchfuehrung(ctx.tx, ziel.durchfuehrungId, ziel.mandantId, opts.eltern);
+    if (opts.danach) await opts.danach(ctx.tx);
+    if (ctx.akteur.art === 'MANDANT') {
+      // Rollen erst unter `halteRollenFest` gelten lassen (TS-05, RT4-T-05).
+      await halteRollenFest(ctx.tx, ziel.mandantId);
+      rollen = await pruefeLeserecht(ctx, ziel.mandantId);
+    }
+  }
   const d = await ctx.tx.durchfuehrung.findFirst({
     where: { id: ziel.durchfuehrungId, kontrolle: { programm: { mandantId: ziel.mandantId } } },
     include: LAGE_INCLUDE,
   });
   if (!d) throw new DienstFehler('NICHT_GEFUNDEN');
-  const zustaendigkeit = zustaendigkeitVon(d);
+  const heute = heuteDatum(ctx.uhr);
+  const zustaendigkeitsStand = zustaendigkeitsStandVon(d, heute, heute);
+  const zustaendigkeit = zustaendigkeitAus(zustaendigkeitsStand);
   // Mandantenkontakte sehen nur Aufgaben ihrer Seite, die ihnen offenstehen (P2).
   if (
     ctx.akteur.art === 'MANDANT' &&
@@ -195,7 +282,6 @@ export async function ladeLage(
     throw new DienstFehler('NICHT_GEFUNDEN');
   }
   const beteiligte = await ladeBeteiligte(ctx.tx, d);
-  const heute = heuteDatum(ctx.uhr);
   const rechteLage: RechteLage = {
     akteur: ctx.akteur,
     rollen,
@@ -216,6 +302,7 @@ export async function ladeLage(
     mandantId: ziel.mandantId,
     programmId: d.kontrolle.programmId,
     rollen,
+    zustaendigkeitsStand,
     zustaendigkeit,
     beteiligte,
     heute,

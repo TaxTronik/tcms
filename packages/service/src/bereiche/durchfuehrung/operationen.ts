@@ -15,21 +15,29 @@
 // =============================================================================
 
 import {
+  DF_MAX_NACHWEIS_VERWEISE,
+  DF_MAX_NACHWEISE,
   DF_MIN_BEGRUENDUNG,
   DienstFehler,
   DurchfuehrungBegruendungEingabeSchema,
+  DurchfuehrungEinreichenEingabeSchema,
   DurchfuehrungSpeichernEingabeSchema,
   DurchfuehrungZielSchema,
   EntfallenAblehnenEingabeSchema,
+  EntfallenFreigebenEingabeSchema,
   GegenzeichnenEingabeSchema,
   NachweisAnhaengenEingabeSchema,
   NachweisEntfernenEingabeSchema,
+  PORTAL_ANLAGE_MIME,
+  PORTAL_MAX_ANLAGE_BYTES,
   type DurchfuehrungBegruendungEingabe,
+  type DurchfuehrungEinreichenEingabe,
   type DurchfuehrungSpeichernEingabe,
   type DurchfuehrungSpeichernErgebnis,
   type DurchfuehrungUebergang,
   type DurchfuehrungZiel,
   type EntfallenAblehnenEingabe,
+  type EntfallenFreigebenEingabe,
   type GegenzeichnenEingabe,
   type GegenzeichnenErgebnis,
   type NachtragErgebnis,
@@ -44,10 +52,12 @@ import { mitAudit, type Protokoll } from '../../audit';
 import type { DienstKontext } from '../../kontext';
 import { gleicheId } from '../../rechte';
 import { legeFeststellungAn } from '../feststellungen-ereignisse/gemeinsam';
-import { ladeLage, pruefeEingabe, verlange, type Lage } from './lage';
+import { antragMerkmal, ladeLage, pruefeEingabe, verlange, type Lage } from './lage';
 import { nachweisAntwort } from './lesen';
 import { BEARBEITBAR, OFFEN } from './rechte';
 import {
+  inhaltKanonisch,
+  inhaltMerkmal,
   leseKennzahlen,
   leseSchrittAntworten,
   leseSchrittDefs,
@@ -57,6 +67,14 @@ import {
 } from './werte';
 
 const GEAENDERT = 'Der Status hat sich zwischenzeitlich geändert. Bitte neu laden.';
+const INHALT_GEAENDERT =
+  'Die Durchführung wurde inzwischen von einer anderen Person gespeichert. Bitte neu laden.';
+const ANTRAG_GEAENDERT = 'Der Antrag hat sich zwischenzeitlich geändert. Bitte neu laden.';
+
+/** Gesehener Stand des Inhalts (TS-05): sonst KONFLIKT statt eines stillen Überschreibens. */
+function verlangeInhalt(lage: Lage, bisher: string): void {
+  if (inhaltMerkmal(lage.d) !== bisher) throw new DienstFehler('KONFLIKT', INHALT_GEAENDERT);
+}
 const NACHTRAG_OFFEN: DurchfuehrungStatus[] = [
   'GEPLANT',
   'IN_DURCHFUEHRUNG',
@@ -183,6 +201,7 @@ export async function speichereDurchfuehrung(
   return ausfuehren(ctx, async (tx, zeitpunkt) => {
     const lage = await ladeLage(ctx, e, { sperren: true });
     verlange(lage.rechte.bearbeiten);
+    verlangeInhalt(lage, e.bisher);
     const ks = lage.d.kontrolleStand;
     const defs = leseSchrittDefs(ks.schritte);
     const kennzahlen = leseKennzahlen(ks.kennzahlen);
@@ -240,7 +259,17 @@ export async function speichereDurchfuehrung(
       ergebnisKommentar,
     });
     const status = lage.d.status === 'GEPLANT' ? 'IN_DURCHFUEHRUNG' : lage.d.status;
-    return { wert: { durchfuehrungId: lage.d.id, status, pruefung }, protokoll: protokolle };
+    const inhalt = inhaltMerkmal({
+      kontrolleStandId: lage.d.kontrolleStandId,
+      schritte: e.schritte,
+      werte,
+      ergebnis: e.ergebnis,
+      ergebnisKommentar,
+    });
+    return {
+      wert: { durchfuehrungId: lage.d.id, status, inhalt, pruefung },
+      protokoll: protokolle,
+    };
   });
 }
 
@@ -251,15 +280,16 @@ export async function speichereDurchfuehrung(
  */
 export async function reicheDurchfuehrungEin(
   ctx: DienstKontext,
-  eingabe: DurchfuehrungZiel,
+  eingabe: DurchfuehrungEinreichenEingabe,
 ): Promise<DurchfuehrungUebergang> {
-  const z = pruefeEingabe(DurchfuehrungZielSchema, eingabe);
+  const z = pruefeEingabe(DurchfuehrungEinreichenEingabeSchema, eingabe);
   return ausfuehren(ctx, async (tx, zeitpunkt) => {
     const lage = await ladeLage(ctx, z, { sperren: true });
     verlange(lage.rechte.bearbeiten);
     const d = lage.d;
     if (d.status === 'GEPLANT')
       throw new DienstFehler('KONFLIKT', 'Durchführung noch nicht begonnen');
+    verlangeInhalt(lage, z.bisher);
     const ks = d.kontrolleStand;
     const defs = leseSchrittDefs(ks.schritte);
     const kennzahlen = leseKennzahlen(ks.kennzahlen);
@@ -290,6 +320,10 @@ export async function reicheDurchfuehrungEin(
       protokoll: protokoll(lage, 'tcms.durchfuehrung.eingereicht', {
         ergebnis: d.ergebnis,
         kanal: kanal(ctx),
+        // Eingereichter Inhalt samt Merkmal: nach einer Zurückweisung wird die
+        // Zeile überschrieben, das Audit hält fest, was eingereicht war.
+        inhalt: inhaltMerkmal(d),
+        eingereicht: inhaltKanonisch(d),
         nachweise: d.nachweise.map((n) => ({
           id: n.id,
           dokumentId: n.dokumentId,
@@ -320,11 +354,39 @@ export async function haengeNachweisAn(
   const e = pruefeEingabe(NachweisAnhaengenEingabeSchema, eingabe);
   const verweis = await ctx.ablage.annehmen({ art: 'VERWEIS', verweis: e.verweis });
   const dokumentId = verweis.dokumentId.toLowerCase();
+  // Portal wie Portal-Meldungen: Positivliste der Dateitypen, Größengrenze.
+  if (ctx.akteur.art === 'MANDANT') {
+    const felder: Record<string, string[]> = {};
+    if (!PORTAL_ANLAGE_MIME.test(verweis.mime))
+      felder['verweis.mime'] = ['Dateityp nicht zulässig'];
+    if (verweis.groesse > PORTAL_MAX_ANLAGE_BYTES) felder['verweis.groesse'] = ['Datei zu groß'];
+    if (Object.keys(felder).length > 0)
+      throw new DienstFehler('UNGUELTIG', 'Nachweis-Verweis ungültig.', felder);
+  }
   return ausfuehren(ctx, async (tx, zeitpunkt) => {
-    const lage = await ladeLage(ctx, e, { sperren: true });
+    const lage = await ladeLage(ctx, e, {
+      sperren: true,
+      // Gleichzeitige Verwendung derselben Dokument-ID im Mandanten serialisieren
+      // (nach der Durchführung, vor den Rollen – TS-05).
+      danach: async (t) => {
+        await tenantSperre(t, `nachweis.dokument.${e.mandantId.toLowerCase()}.${dokumentId}`);
+      },
+    });
     verlange(lage.rechte.bearbeiten);
-    // Gleichzeitige Verwendung derselben Dokument-ID im Mandanten serialisieren.
-    await tenantSperre(tx, `nachweis.dokument.${lage.mandantId.toLowerCase()}.${dokumentId}`);
+    // Höchstzahlen unter der Zeilensperre (Kindzeilen entstehen nur unter ihr).
+    if (lage.d.nachweise.length >= DF_MAX_NACHWEISE) {
+      throw new DienstFehler(
+        'KONFLIKT',
+        `Höchstens ${DF_MAX_NACHWEISE} Nachweise je Durchführung.`,
+      );
+    }
+    const verweise = await tx.nachweis.count({ where: { durchfuehrungId: lage.d.id } });
+    if (verweise >= DF_MAX_NACHWEIS_VERWEISE) {
+      throw new DienstFehler(
+        'KONFLIKT',
+        'Für diese Durchführung können keine weiteren Nachweise angehängt werden.',
+      );
+    }
     // Nur Verweise dieses Mandanten (H3: kein Orakel über andere Mandanten); auch
     // entfernte zählen, die Bindung an den Inhalt bleibt.
     const gleiche = await tx.nachweis.findMany({
@@ -513,7 +575,13 @@ export async function gegenzeichneDurchfuehrung(
 ): Promise<GegenzeichnenErgebnis> {
   const e = pruefeEingabe(GegenzeichnenEingabeSchema, eingabe);
   return ausfuehren(ctx, async (tx, zeitpunkt) => {
-    const lage = await ladeLage(ctx, e, { sperren: true });
+    // Mit Feststellung entstehen Zeilen mit Fremdschlüssel auf Programm und
+    // Risiken: beide vor der Durchführung sperren (TS-05), sonst liefe deren
+    // FK-Prüfung gegen eine Neuplanung (Risiko/Programm → Durchführungen).
+    const lage = await ladeLage(ctx, e, {
+      sperren: true,
+      eltern: e.feststellung ? { programm: true, risikoIds: e.feststellung.risikoIds } : {},
+    });
     verlange(lage.rechte.gegenzeichnen);
     const d = lage.d;
     const ergebnis = d.ergebnis;
@@ -532,8 +600,9 @@ export async function gegenzeichneDurchfuehrung(
         });
       }
     } else {
+      // Eine verworfene Feststellung ist kein Befund (sie deckt keinen ab).
       const vorhanden = await tx.feststellung.findFirst({
-        where: { durchfuehrungId: d.id },
+        where: { durchfuehrungId: d.id, status: { not: 'VERWORFEN' } },
         select: { id: true, nummer: true },
         orderBy: { nummer: 'asc' },
       });
@@ -600,12 +669,14 @@ export async function gegenzeichneDurchfuehrung(
       d.id,
       ['ZUR_GEGENZEICHNUNG'],
       { status: ergebnis, gegengezeichnetVon: ctx.akteur.id, abgeschlossenAm: zeitpunkt },
-      d.kontrolleStand.gegenzeichnungMandant ? { mandantBestaetigtVon: { not: null } } : {},
+      lage.zustaendigkeit.gegenzeichnungMandant ? { mandantBestaetigtVon: { not: null } } : {},
     );
     await sperreNachweise(tx, d.id, true);
     protokolle.push(
       protokoll(lage, 'tcms.durchfuehrung.gegengezeichnet', {
         ergebnis,
+        // Bindet den gegengezeichneten Inhalt (wie beim Einreichen).
+        inhalt: inhaltMerkmal(d),
         durchgefuehrtVon: d.durchgefuehrtVon,
         mandantBestaetigtVon: d.mandantBestaetigtVon,
         feststellung: feststellung?.nummer ?? null,
@@ -652,19 +723,24 @@ export async function beantrageEntfallen(
  */
 export async function gibEntfallenFrei(
   ctx: DienstKontext,
-  eingabe: DurchfuehrungZiel,
+  eingabe: EntfallenFreigebenEingabe,
 ): Promise<DurchfuehrungUebergang> {
-  const z = pruefeEingabe(DurchfuehrungZielSchema, eingabe);
+  const z = pruefeEingabe(EntfallenFreigebenEingabeSchema, eingabe);
   return ausfuehren(ctx, async (tx, zeitpunkt) => {
     const lage = await ladeLage(ctx, z, { sperren: true });
     verlange(lage.rechte.entfallenFreigeben);
     const d = lage.d;
+    // Nur der gesehene Antrag (Person und Begründung) wird freigegeben (TS-05).
+    if (antragMerkmal(d) !== z.antrag) throw new DienstFehler('KONFLIKT', ANTRAG_GEAENDERT);
     await uebergang(
       tx,
       d.id,
       OFFEN,
       { status: 'ENTFALLEN', entfallenAm: zeitpunkt },
-      { entfallenBegruendung: { not: null }, entfallenVon: d.entfallenVon },
+      {
+        entfallenBegruendung: d.entfallenBegruendung,
+        entfallenVon: d.entfallenVon ?? { not: null },
+      },
     );
     await sperreNachweise(tx, d.id, true);
     return {
@@ -672,6 +748,7 @@ export async function gibEntfallenFrei(
       protokoll: protokoll(lage, 'tcms.durchfuehrung.entfallen', {
         begruendung: d.entfallenBegruendung,
         beantragtVon: d.entfallenVon,
+        antrag: z.antrag,
       }),
     };
   });

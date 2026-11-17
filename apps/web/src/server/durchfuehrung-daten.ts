@@ -171,6 +171,8 @@ export interface DurchfuehrungDetail {
   anzeige: AnzeigeStatus;
   ausserplanmaessig: boolean;
   anlass: string | null;
+  /** Merkmal des gespeicherten Inhalts (gesehener Stand beim Speichern und Einreichen). */
+  inhalt: string;
   schritte: SchrittZeile[];
   kennzahlen: KennzahlDef[];
   werte: Werte;
@@ -188,6 +190,8 @@ export interface DurchfuehrungDetail {
   zurueckweisungsgrund: string | null;
   entfallenBegruendung: string | null;
   entfallenVon: string | null;
+  /** Merkmal des offenen Entfallen-Antrags (gesehener Antrag beim Freigeben). */
+  entfallenAntrag: string | null;
   entfallenAm: Date | null;
   entfallenFreigegebenVon: string | null;
   nachtragZuId: string | null;
@@ -273,6 +277,7 @@ function alsDetail(d: DienstDetail | DienstAufgabe): DurchfuehrungDetail {
     anzeige: d.anzeige,
     ausserplanmaessig: d.ausserplanmaessig,
     anlass: kanzlei?.anlass ?? null,
+    inhalt: d.inhalt,
     schritte: d.schritte,
     kennzahlen: d.kontrolle.kennzahlen,
     werte,
@@ -290,6 +295,7 @@ function alsDetail(d: DienstDetail | DienstAufgabe): DurchfuehrungDetail {
     zurueckweisungsgrund: d.zurueckweisungsgrund,
     entfallenBegruendung: d.entfallenBegruendung,
     entfallenVon: kanzlei?.entfallenVon ?? null,
+    entfallenAntrag: kanzlei?.entfallenAntrag ?? null,
     entfallenAm: zeitN(d.entfallenAm),
     entfallenFreigegebenVon: kanzlei?.entfallenFreigegebenVon ?? null,
     nachtragZuId: kanzlei?.nachtragZuId ?? null,
@@ -611,16 +617,29 @@ export async function speichernAls(h: Handlung, fd: FormData): Promise<Ergebnis>
   const ergebnis = e === 'OHNE_BEFUND' || e === 'MIT_BEFUND' ? e : null;
   const ergebnisKommentar = text(fd, 'ergebnisKommentar').trim().slice(0, 4000) || null;
 
+  // Gesehener Stand aus dem Formular (TS-05): Hat inzwischen jemand anderes
+  // gespeichert, meldet der Service einen Konflikt statt zu überschreiben.
+  const bisher = text(fd, 'bisher');
+  let inhalt = '';
   const gespeichert = await handeln(h, fd, async (ctx, ziel) => {
-    await dienstSpeichere(ctx, { ...ziel, schritte, werte, ergebnis, ergebnisKommentar });
+    const r = await dienstSpeichere(ctx, {
+      ...ziel,
+      schritte,
+      werte,
+      ergebnis,
+      ergebnisKommentar,
+      bisher,
+    });
+    inhalt = r.inhalt;
     return { ok: 'Entwurf gespeichert.' };
   });
   if (!einreichen || gespeichert?.fehler) return gespeichert;
 
-  // Einreichen in eigener Transaktion: Der gespeicherte Entwurf bleibt bei Mängeln erhalten.
+  // Einreichen in eigener Transaktion: Der gespeicherte Entwurf bleibt bei Mängeln erhalten;
+  // eingereicht wird genau der eben gespeicherte Stand.
   try {
     await imDemoDienst(h.akteur, (ctx) =>
-      dienstReicheEin(ctx, { mandantId: h.mandantId, durchfuehrungId: d.id }),
+      dienstReicheEin(ctx, { mandantId: h.mandantId, durchfuehrungId: d.id, bisher: inhalt }),
     );
   } catch (err) {
     if (err instanceof DienstFehler && err.code === 'UNGUELTIG' && err.felder?.['maengel']) {

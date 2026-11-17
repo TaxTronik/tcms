@@ -102,7 +102,8 @@ export async function beantrageEntfallen(_prev: Ergebnis, fd: FormData): Promise
 
 export async function gibEntfallenFrei(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
   return handeln(await kanzleiHandlung(fd), fd, async (ctx, ziel) => {
-    await dienstGibEntfallenFrei(ctx, ziel);
+    // Nur der gesehene Antrag wird freigegeben (TS-05).
+    await dienstGibEntfallenFrei(ctx, { ...ziel, antrag: text(fd, 'antrag') });
     return { ok: 'Entfallen freigegeben. Die Durchführung zählt nicht als „ohne Befund“.' };
   });
 }

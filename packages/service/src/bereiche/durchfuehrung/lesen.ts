@@ -34,9 +34,18 @@ import { addTage, fmtDatum, isoDatum, statusAm, type AnzeigeStatus } from '@tcms
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { beteiligteVon, gleicheId, kannVertraulichLesen } from '../../rechte';
-import { ladeLage, pruefeEingabe, pruefeLeserecht, type Lage } from './lage';
-import { darfPortalLesen, durchfuehrungsRechte, rechteFlags } from './rechte';
+import { zustaendigkeitsStand } from '../../kern/zustaendigkeit';
 import {
+  antragMerkmal,
+  ladeLage,
+  pruefeEingabe,
+  pruefeLeserecht,
+  zustaendigkeitsStandVon,
+  type Lage,
+} from './lage';
+import { ABGESCHLOSSEN, darfPortalLesen, durchfuehrungsRechte, rechteFlags } from './rechte';
+import {
+  inhaltMerkmal,
   leseKennzahlen,
   leseSchrittAntworten,
   leseSchrittDefs,
@@ -118,9 +127,32 @@ interface Gemeinsam {
   audit: { pos: number; at: Date; actorId: string | null; aktion: string; detail: unknown }[];
   ende: Date;
   personen: Set<string>;
+  /** Entfallen-Antrag bzw. -Freigabe zum Stichtag (antragstellende Person); Kanzlei-Sicht. */
+  entfallenVon: string | null;
+  /** Kontrollstand der Zuständigkeit zum Stichtag. */
+  zustaendig: Lage['zustaendigkeitsStand'];
 }
 
-/** Felder, die Kanzlei-Detail und Portal-Aufgabe teilen, zum Stichtag. */
+const ENTFALLEN_AKTIONEN = new Set([
+  'tcms.durchfuehrung.entfallen_beantragt',
+  'tcms.durchfuehrung.entfallen_abgelehnt',
+  'tcms.durchfuehrung.entfallen',
+]);
+
+function detailText(detail: unknown, schluessel: string): string | null {
+  if (!detail || typeof detail !== 'object') return null;
+  const v = (detail as Record<string, unknown>)[schluessel];
+  return typeof v === 'string' ? v : null;
+}
+
+/**
+ * Felder, die Kanzlei-Detail und Portal-Aufgabe teilen, zum Stichtag. Inhalt
+ * (Schritte, Kennzahlen, Mindestnachweise) aus dem geplanten Stand der
+ * Durchführung, Zuständigkeit aus dem Stand zum Stichtag (`kern/zustaendigkeit.ts`).
+ * Im historischen Stand nur, was zum Stichtag schon bestand (Inhalte erst ab
+ * Beginn, Zurückweisung und Entfallen nach dem Audit). Die Begründung eines
+ * offenen Entfallen-Antrags ist ein Kanzlei-Vorgang.
+ */
 async function gemeinsam(
   ctx: DienstKontext,
   lage: Lage,
@@ -128,7 +160,9 @@ async function gemeinsam(
   historisch: boolean,
 ): Promise<Gemeinsam> {
   const { d, heute } = lage;
+  const kanzlei = ctx.akteur.art === 'KANZLEI';
   const ks = d.kontrolleStand;
+  const zk = historisch ? zustaendigkeitsStandVon(d, stand, heute) : lage.zustaendigkeitsStand;
   const ende = tagesende(stand);
   const audit = await ctx.tx.auditEvent.findMany({
     where: {
@@ -148,10 +182,38 @@ async function gemeinsam(
   const bestaetigt = letztes('tcms.durchfuehrung.mandant_bestaetigt');
   const zurueck = letztes('tcms.durchfuehrung.zurueckgewiesen');
 
+  // Inhalte nur, wenn die Durchführung zum Stichtag begonnen war (zuletzt
+  // gespeicherte Fassung, Zwischenstände werden nicht versioniert).
+  const begonnen = !historisch || vorStand(d.begonnenAm, ende) !== null;
   const defs = leseSchrittDefs(ks.schritte);
-  const antworten = leseSchrittAntworten(d.schritte, defs.length);
+  const antworten = leseSchrittAntworten(begonnen ? d.schritte : [], defs.length);
   const kennzahlen = leseKennzahlen(ks.kennzahlen);
-  const werte = leseWerte(d.werte, kennzahlen);
+  const werte = leseWerte(begonnen ? d.werte : {}, kennzahlen);
+  const ergebnis = begonnen ? d.ergebnis : null;
+  const ergebnisKommentar = begonnen ? d.ergebnisKommentar : null;
+  const durchgefuehrtVon = !historisch
+    ? d.durchgefuehrtVon
+    : (letztes('tcms.durchfuehrung.eingereicht')?.actorId ??
+      letztes('tcms.durchfuehrung.begonnen')?.actorId ??
+      (begonnen ? d.durchgefuehrtVon : null));
+
+  // Entfallen: Freigabe (alle) bzw. offener Antrag (nur Kanzlei), zum Stichtag.
+  const entfallen = ((): { begruendung: string | null; von: string | null } => {
+    const keiner = { begruendung: null, von: null };
+    if (historisch) {
+      const e = imStand.find((x) => ENTFALLEN_AKTIONEN.has(x.aktion));
+      if (e?.aktion === 'tcms.durchfuehrung.entfallen')
+        return { begruendung: d.entfallenBegruendung, von: d.entfallenVon };
+      if (e?.aktion === 'tcms.durchfuehrung.entfallen_beantragt' && kanzlei)
+        return { begruendung: detailText(e.detail, 'begruendung'), von: e.actorId };
+      return keiner;
+    }
+    if (d.status === 'ENTFALLEN')
+      return { begruendung: d.entfallenBegruendung, von: d.entfallenVon };
+    if (kanzlei && !ABGESCHLOSSEN.includes(d.status))
+      return { begruendung: d.entfallenBegruendung, von: d.entfallenVon };
+    return keiner;
+  })();
   const toleranzEur = ks.toleranzEur == null ? null : Number(ks.toleranzEur);
   const nachweiseImStand = d.nachweise.filter((n) => n.hochgeladenAm.getTime() <= ende.getTime());
   const original = d.nachtragZuId
@@ -171,6 +233,7 @@ async function gemeinsam(
     status: d.status,
     anzeige: statusAm(d, stand),
     ausserplanmaessig: d.ausserplanmaessig,
+    inhalt: inhaltMerkmal(d),
     schritte: defs.map((s, i) => ({
       titel: s.titel,
       hinweis: s.hinweis,
@@ -180,9 +243,9 @@ async function gemeinsam(
     werte: kennzahlen
       .filter((k) => werte[k.key] !== undefined)
       .map((k) => ({ key: k.key, ...werte[k.key]! })),
-    ergebnis: d.ergebnis,
-    ergebnisKommentar: d.ergebnisKommentar,
-    durchgefuehrtVon: d.durchgefuehrtVon,
+    ergebnis,
+    ergebnisKommentar,
+    durchgefuehrtVon,
     begonnenAm: isoN(historisch ? vorStand(d.begonnenAm, ende) : d.begonnenAm),
     eingereichtAm: isoN(historisch ? vorStand(d.eingereichtAm, ende) : d.eingereichtAm),
     mandantBestaetigtVon: bestaetigt || !historisch ? d.mandantBestaetigtVon : null,
@@ -190,10 +253,14 @@ async function gemeinsam(
     gegengezeichnetVon:
       historisch && !vorStand(d.abgeschlossenAm, ende) ? null : d.gegengezeichnetVon,
     abgeschlossenAm: isoN(historisch ? vorStand(d.abgeschlossenAm, ende) : d.abgeschlossenAm),
-    zurueckgewiesenVon: d.zurueckgewiesenVon,
+    zurueckgewiesenVon: historisch ? (zurueck?.actorId ?? null) : d.zurueckgewiesenVon,
     zurueckgewiesenAm: isoN(zurueck?.at),
-    zurueckweisungsgrund: d.zurueckweisungsgrund,
-    entfallenBegruendung: d.entfallenBegruendung,
+    zurueckweisungsgrund: historisch
+      ? zurueck
+        ? detailText(zurueck.detail, 'begruendung')
+        : null
+      : d.zurueckweisungsgrund,
+    entfallenBegruendung: entfallen.begruendung,
     entfallenAm: isoN(historisch ? vorStand(d.entfallenAm, ende) : d.entfallenAm),
     createdAt: iso(d.createdAt),
     vorhandenZumStand: !(d.ausserplanmaessig && d.createdAt.getTime() > ende.getTime()),
@@ -207,8 +274,8 @@ async function gemeinsam(
       toleranzEur,
       nachweise: nachweiseImStand.length,
       mindestNachweise: ks.mindestNachweise,
-      ergebnis: d.ergebnis,
-      ergebnisKommentar: d.ergebnisKommentar,
+      ergebnis,
+      ergebnisKommentar,
     }),
     heute: isoDatum(heute),
     stand: isoDatum(stand),
@@ -224,23 +291,24 @@ async function gemeinsam(
     ziel: ks.ziel,
     art: ks.art,
     ausfuehrung: ks.ausfuehrung,
-    partei: ks.partei,
+    partei: zk.partei,
     schluessel: ks.schluessel,
     nachweis: ks.nachweis,
     mindestNachweise: ks.mindestNachweise,
     toleranzEur,
     faelligNachTagen: ks.faelligNachTagen,
-    durchfuehrendId: ks.durchfuehrendId,
-    vertretungId: ks.vertretungId,
-    gegenzeichnerId: ks.gegenzeichnerId,
-    gegenzeichnungMandant: ks.gegenzeichnungMandant,
+    // Zuständigkeit zum Stichtag (offen: aktuell gültiger Stand der Kontrolle).
+    durchfuehrendId: zk.durchfuehrendId,
+    vertretungId: zk.vertretungId,
+    gegenzeichnerId: zk.gegenzeichnerId,
+    gegenzeichnungMandant: zk.gegenzeichnungMandant,
     kennzahlen,
   };
   const personen = new Set<string>();
   for (const id of [
-    ks.durchfuehrendId,
-    ks.vertretungId,
-    ks.gegenzeichnerId,
+    zk.durchfuehrendId,
+    zk.vertretungId,
+    zk.gegenzeichnerId,
     felder.durchgefuehrtVon,
     felder.mandantBestaetigtVon,
     felder.gegengezeichnetVon,
@@ -249,7 +317,15 @@ async function gemeinsam(
   ]) {
     if (id) personen.add(id);
   }
-  return { felder, kontrolle, audit: imStand, ende, personen };
+  return {
+    felder,
+    kontrolle,
+    audit: imStand,
+    ende,
+    personen,
+    entfallenVon: entfallen.von,
+    zustaendig: zk,
+  };
 }
 
 async function namenAufloesen(
@@ -287,7 +363,7 @@ export async function ladeDurchfuehrung(
   const { stand, historisch } = leseStand(e.stand, heute);
   const g = await gemeinsam(ctx, lage, stand, historisch);
   const ks = d.kontrolleStand;
-  const partei = ks.partei;
+  const partei = g.zustaendig.partei;
 
   const verlauf: DurchfuehrungDetail['verlauf'] = g.audit.map((x) => ({
     pos: x.pos,
@@ -404,7 +480,7 @@ export async function ladeDurchfuehrung(
   const personen = g.personen;
   for (const id of [
     ks.designVon,
-    d.entfallenVon,
+    g.entfallenVon,
     entfallenFrei?.actorId,
     ...lage.beteiligte,
     ...verlauf.map((v) => v.actorId),
@@ -423,7 +499,12 @@ export async function ladeDurchfuehrung(
       designAm: isoN(ks.designAm),
     },
     anlass: d.anlass,
-    entfallenVon: d.entfallenVon,
+    entfallenVon: g.entfallenVon,
+    // Merkmal nur für einen offenen Antrag im aktuellen Stand (Freigabe, TS-05).
+    entfallenAntrag:
+      !historisch && d.status !== 'ENTFALLEN' && g.felder.entfallenBegruendung
+        ? antragMerkmal(d)
+        : null,
     entfallenFreigegebenVon: entfallenFrei?.actorId ?? null,
     nachtragZuId: d.nachtragZuId,
     feststellungen,
@@ -486,15 +567,24 @@ export async function listeKontrollaufgaben(
   const heute = heuteDatum(ctx.uhr);
   const ende = tagesende(heute);
   const horizont = addTage(heute, 30);
+  // Partei und Zuständigkeit offener Durchführungen aus dem aktuell gültigen
+  // Kontrollstand (`kern/zustaendigkeit.ts`), Titel und Mindestnachweise aus dem
+  // geplanten.
   const zeilen = await ctx.tx.durchfuehrung.findMany({
     where: {
       kontrolle: { programm: { mandantId } },
-      kontrolleStand: { partei: 'MANDANT' },
       status: { in: ['GEPLANT', 'IN_DURCHFUEHRUNG', 'ZURUECKGEWIESEN', 'ZUR_GEGENZEICHNUNG'] },
     },
     include: {
       kontrolleStand: true,
-      kontrolle: { select: { code: true, aktivAb: true, entfallenAb: true } },
+      kontrolle: {
+        select: {
+          code: true,
+          aktivAb: true,
+          entfallenAb: true,
+          staende: { orderBy: [{ version: 'asc' }, { id: 'asc' }] },
+        },
+      },
       _count: { select: { nachweise: { where: { entferntAm: null } } } },
     },
     orderBy: [{ faelligAm: 'asc' }, { id: 'asc' }],
@@ -504,14 +594,9 @@ export async function listeKontrollaufgaben(
     const k = d.kontrolle;
     if (k.aktivAb.getTime() > ende.getTime()) continue;
     if (k.entfallenAb && k.entfallenAb.getTime() <= ende.getTime()) continue;
-    const ks = d.kontrolleStand;
-    const zustaendigkeit = {
-      partei: ks.partei,
-      durchfuehrendId: ks.durchfuehrendId,
-      vertretungId: ks.vertretungId,
-      gegenzeichnerId: ks.gegenzeichnerId,
-    };
-    if (!darfPortalLesen(a, mandantId, rollen, zustaendigkeit)) continue;
+    const ks = zustaendigkeitsStand(d, d.kontrolleStand, k.staende, heute, heute);
+    if (ks.partei !== 'MANDANT') continue;
+    if (!darfPortalLesen(a, mandantId, rollen, ks)) continue;
     const anzeige = statusAm(d, heute);
     const bald =
       anzeige === 'GEPLANT' &&
@@ -535,7 +620,7 @@ export async function listeKontrollaufgaben(
     aufgaben.push({
       id: d.id,
       kontrolleCode: k.code,
-      titel: ks.titel,
+      titel: d.kontrolleStand.titel,
       periodeLabel: d.periodeLabel,
       periodeBis: isoDatum(d.periodeBis),
       faelligAm: isoDatum(d.faelligAm),
@@ -545,7 +630,7 @@ export async function listeKontrollaufgaben(
       eigene,
       durchfuehrendId: ks.durchfuehrendId,
       nachweise: d._count.nachweise,
-      mindestNachweise: ks.mindestNachweise,
+      mindestNachweise: d.kontrolleStand.mindestNachweise,
     });
   }
   const prio = (x: (typeof aufgaben)[number]) =>
@@ -613,18 +698,23 @@ export async function ladeNachweis(
       entferntAm: null,
       durchfuehrung: { kontrolle: { programm: { mandantId } } },
     },
-    include: { durchfuehrung: { include: { kontrolleStand: true } } },
+    include: {
+      durchfuehrung: {
+        include: {
+          kontrolleStand: true,
+          kontrolle: { select: { staende: { orderBy: [{ version: 'asc' }, { id: 'asc' }] } } },
+        },
+      },
+    },
   });
   if (!n) throw new DienstFehler('NICHT_GEFUNDEN');
   if (ctx.akteur.art === 'MANDANT') {
-    const ks = n.durchfuehrung.kontrolleStand;
-    const sichtbar = darfPortalLesen(ctx.akteur, mandantId, rollen, {
-      partei: ks.partei,
-      durchfuehrendId: ks.durchfuehrendId,
-      vertretungId: ks.vertretungId,
-      gegenzeichnerId: ks.gegenzeichnerId,
-    });
-    if (!sichtbar) throw new DienstFehler('NICHT_GEFUNDEN');
+    // Sichtbarkeit wie die Aufgabe selbst (Zuständigkeit zum heutigen Tag).
+    const d = n.durchfuehrung;
+    const h = heuteDatum(ctx.uhr);
+    const ks = zustaendigkeitsStand(d, d.kontrolleStand, d.kontrolle.staende, h, h);
+    if (!darfPortalLesen(ctx.akteur, mandantId, rollen, ks))
+      throw new DienstFehler('NICHT_GEFUNDEN');
   }
   return { durchfuehrungId: n.durchfuehrungId, nachweis: nachweisAntwort(n) };
 }

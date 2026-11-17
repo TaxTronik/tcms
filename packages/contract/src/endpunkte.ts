@@ -36,12 +36,14 @@ import { FehlerSchema, KONFLIKT_GRUENDE, type KonfliktGrund } from './fehler';
 import {
   DurchfuehrungBegruendungBodySchema,
   DurchfuehrungDetailSchema,
+  DurchfuehrungEinreichenBodySchema,
   DurchfuehrungSpeichernBodySchema,
   DurchfuehrungSpeichernErgebnisSchema,
   DurchfuehrungStandQuerySchema,
   DurchfuehrungUebergangSchema,
   DurchfuehrungZielSchema,
   EntfallenAblehnenBodySchema,
+  EntfallenFreigebenBodySchema,
   GegenzeichnenBodySchema,
   GegenzeichnenErgebnisSchema,
   KontrollaufgabeSchema,
@@ -587,6 +589,7 @@ export const ENDPUNKTE = register({
     methode: 'POST',
     pfad: `${D}/einreichen`,
     params: DurchfuehrungZielSchema,
+    body: DurchfuehrungEinreichenBodySchema,
     antwort: DurchfuehrungUebergangSchema,
   },
   nachweisAnhaengen: {
@@ -628,6 +631,7 @@ export const ENDPUNKTE = register({
     methode: 'POST',
     pfad: `${D}/entfallen/freigeben`,
     params: DurchfuehrungZielSchema,
+    body: EntfallenFreigebenBodySchema,
     antwort: DurchfuehrungUebergangSchema,
   },
   entfallenAblehnen: {
@@ -689,6 +693,7 @@ export const ENDPUNKTE = register({
     pfad: `${P}/:durchfuehrungId/einreichen`,
     akteure: NUR_MANDANT,
     params: DurchfuehrungZielSchema,
+    body: DurchfuehrungEinreichenBodySchema,
     antwort: DurchfuehrungUebergangSchema,
   },
   portalAnlageAnhaengen: {
