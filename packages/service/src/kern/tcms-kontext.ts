@@ -48,6 +48,7 @@ import {
   summeEur,
   ueber,
   type Abschnitt,
+  type DurchfuehrungImBetrieb,
   type AnzeigeStatus,
   type BetriebsStand,
   type Design,
@@ -717,7 +718,7 @@ function berechne(
 
   const alleDurchf: (DurchfuehrungView & {
     periodeVonRaw: Date;
-    zeit: Parameters<typeof statusAm>[0];
+    zeit: DurchfuehrungImBetrieb;
   })[] = [];
   for (const k of programm.kontrollen) {
     const ks = kontrollStandJe.get(k.id);
@@ -727,7 +728,11 @@ function berechne(
         ausgeblendet++;
         continue;
       }
-      const zeit = {
+      const zeit: DurchfuehrungImBetrieb = {
+        id: d.id,
+        nachtragZuId: d.nachtragZuId,
+        angelegtAm: d.createdAt,
+        periodeVon: d.periodeVon,
         status: d.status,
         periodeBis: d.periodeBis,
         faelligAm: d.faelligAm,
@@ -825,8 +830,9 @@ function berechne(
     const frequenz = abweichung?.freigegebenVon ? abweichung.frequenz : ableitung.effektiv;
     const eigene = alleDurchf.filter((d) => d.kontrolleId === k.id);
     for (const d of eigene) d.gt = ableitung.gt;
+    // Reihenfolge legt die Domain fest (Periode, Nachtrag vor Original, Anlage, ID).
     const betrieb = betriebsStand(
-      eigene.map((d) => ({ ...d.zeit, periodeVon: d.periodeVonRaw })),
+      eigene.map((d) => d.zeit),
       stand,
     );
     const sortiert = [...eigene].sort((a, b) => a.faelligAm.getTime() - b.faelligAm.getTime());

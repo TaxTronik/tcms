@@ -1085,6 +1085,54 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       expect(ev[0]!.detail).toMatchObject({ nachtragZuId: did });
     });
 
+    it('Betriebsstand der Kontrolle: der Nachtrag derselben Periode geht dem Original vor (Befund 6)', async () => {
+      // Eigener Fall: nur die Durchführungen dieses Tests an K1.
+      const g = await baueFall();
+      const b = akteure(g);
+      const zielG = (durchfuehrungId: string) => ({ mandantId: g.mandant, durchfuehrungId });
+      const abschliessen = async (did: string, ergebnis: 'OHNE_BEFUND' | 'MIT_BEFUND') => {
+        await g.dienst(b.bearbeiter, (ctx) =>
+          speichereDurchfuehrung(ctx, { ...zielG(did), ...vollstaendig(ergebnis) }),
+        );
+        await g.dienst(b.bearbeiter, (ctx) =>
+          haengeNachweisAn(ctx, { ...zielG(did), verweis: verweis() }),
+        );
+        await g.dienst(b.bearbeiter, (ctx) => reicheDurchfuehrungEin(ctx, zielG(did)));
+        await g.dienst(b.pruefer, (ctx) =>
+          gegenzeichneDurchfuehrung(ctx, {
+            ...zielG(did),
+            ...(ergebnis === 'MIT_BEFUND'
+              ? {
+                  feststellung: {
+                    titel: 'Differenz Clearingkonto',
+                    sachverhalt: 'Das Clearingkonto weist eine ungeklärte Differenz aus.',
+                    klasse: 'DURCHFUEHRUNGSMANGEL' as const,
+                    schwere: 'MITTEL' as const,
+                    auswirkung: 'UNKLAR' as const,
+                    risikoIds: [g.risiko],
+                  },
+                }
+              : {}),
+          }),
+        );
+      };
+      const betrieb = async () => {
+        const k = await g.dienst(b.bt, (ctx) => ladeKontext(ctx, { mandantId: g.mandant }));
+        return k?.kontrollen.find((x) => x.id === g.k1.id)?.betrieb;
+      };
+      const original = await g.durchfuehrung('k1');
+      await abschliessen(original, 'OHNE_BEFUND');
+      expect(await betrieb()).toBe('OK');
+      const r = await g.dienst(b.bearbeiter, (ctx) =>
+        legeNachtragAn(ctx, { ...zielG(original), begruendung: BEGRUENDUNG }),
+      );
+      // Offener, noch nicht fälliger Nachtrag: das Original bleibt maßgeblich.
+      expect(await betrieb()).toBe('OK');
+      await abschliessen(r.durchfuehrungId, 'MIT_BEFUND');
+      // Vorher ignoriert: Das Original (gleiche Periode, zuerst geladen) gewann.
+      expect(await betrieb()).toBe('MIT_BEFUND');
+    });
+
     it('nur zu abgeschlossenen; nicht durch Mandantenkontakte oder Kollegen ohne Recht', async () => {
       const offen = await f.durchfuehrung('k1');
       const e1 = await fehlerVon(

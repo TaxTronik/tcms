@@ -115,19 +115,50 @@ export function istAbgeschlossen(s: AnzeigeStatus): boolean {
   return s === 'OHNE_BEFUND' || s === 'MIT_BEFUND';
 }
 
+/** Durchführung mit den Feldern, die ihre Reihenfolge im Betriebsstand festlegen. */
+export interface DurchfuehrungImBetrieb extends DurchfuehrungZeit {
+  id: string;
+  periodeVon: Date;
+  /** Durchführung, die dieser Nachtrag korrigiert (AGENTS.md Regel 3), sonst `null`. */
+  nachtragZuId: string | null;
+  /** Zeitpunkt der Anlage. */
+  angelegtAm: Date;
+}
+
 /**
  * Betriebsstand einer Kontrolle für Netto (Betrieb): maßgeblich ist die
  * jüngste Durchführung, die entweder abgeschlossen oder überfällig ist.
  * Eingereichte, noch nicht fällige Durchführungen werden übersprungen.
+ * „Jüngste" = späteste Periode; in derselben Periode geht ein Nachtrag seinem
+ * Original vor (Korrektur, AGENTS.md Regel 3; auch Nachträge zu Nachträgen),
+ * danach die zuletzt angelegte, zuletzt die ID – das Ergebnis hängt nie von der
+ * Reihenfolge der Eingabe ab.
  */
 export function betriebsStand(
-  durchfuehrungen: readonly (DurchfuehrungZeit & { periodeVon: Date })[],
+  durchfuehrungen: readonly DurchfuehrungImBetrieb[],
   stand: Date,
 ): BetriebsStand {
+  const jeId = new Map(durchfuehrungen.map((d) => [d.id, d]));
+  /** Zahl der Nachtragsstufen bis zum Original (begrenzt, falls Daten einen Kreis bilden). */
+  const stufe = (d: DurchfuehrungImBetrieb): number => {
+    let n = 0;
+    for (let x = d; x.nachtragZuId && n < jeId.size; n++) {
+      const original = jeId.get(x.nachtragZuId);
+      if (!original) return n + 1;
+      x = original;
+    }
+    return n;
+  };
   const relevante = durchfuehrungen
-    .map((d) => ({ d, s: statusAm(d, stand) }))
+    .map((d) => ({ d, s: statusAm(d, stand), stufe: stufe(d) }))
     .filter(({ s }) => s === 'OHNE_BEFUND' || s === 'MIT_BEFUND' || s === 'UEBERFAELLIG')
-    .sort((a, b) => b.d.periodeVon.getTime() - a.d.periodeVon.getTime());
+    .sort(
+      (a, b) =>
+        b.d.periodeVon.getTime() - a.d.periodeVon.getTime() ||
+        b.stufe - a.stufe ||
+        b.d.angelegtAm.getTime() - a.d.angelegtAm.getTime() ||
+        (a.d.id < b.d.id ? 1 : a.d.id > b.d.id ? -1 : 0),
+    );
   const letzte = relevante[0];
   if (!letzte) return 'KEINE';
   if (letzte.s === 'OHNE_BEFUND') return 'OK';

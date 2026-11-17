@@ -142,6 +142,9 @@ describe('Abgeleiteter Status nach Zurückweisung', () => {
 describe('Betriebsstand einer Kontrolle', () => {
   it('nimmt die jüngste abgeschlossene oder überfällige Durchführung', () => {
     const aug = {
+      id: 'a',
+      angelegtAm: utc(2026, 7, 1),
+      nachtragZuId: null,
       periodeVon: utc(2026, 8, 1),
       periodeBis: utc(2026, 8, 31),
       faelligAm: utc(2026, 9, 10),
@@ -149,10 +152,89 @@ describe('Betriebsstand einer Kontrolle', () => {
       status: 'OHNE_BEFUND' as const,
       abgeschlossenAm: utc(2026, 9, 9),
     };
-    const sep = { ...basis, status: 'GEPLANT' as const };
+    const sep = {
+      ...basis,
+      id: 's',
+      nachtragZuId: null,
+      angelegtAm: utc(2026, 7, 1),
+      status: 'GEPLANT' as const,
+    };
     expect(betriebsStand([aug, sep], utc(2026, 10, 5))).toBe('OK');
     expect(betriebsStand([aug, sep], utc(2026, 10, 16))).toBe('UEBERFAELLIG');
     expect(betriebsStand([], utc(2026, 10, 16))).toBe('KEINE');
+  });
+
+  // September ohne Befund abgeschlossen, danach Nachtrag derselben Periode.
+  const original = {
+    ...basis,
+    id: 'z-original',
+    nachtragZuId: null,
+    angelegtAm: new Date('2026-08-01T08:00:00Z'),
+    status: 'OHNE_BEFUND' as const,
+    eingereichtAm: utc(2026, 10, 5),
+    abgeschlossenAm: utc(2026, 10, 8),
+  };
+  const nachtrag = {
+    ...basis,
+    id: 'a-nachtrag',
+    nachtragZuId: 'z-original',
+    angelegtAm: new Date('2026-10-20T08:00:00Z'),
+    faelligAm: utc(2026, 11, 3),
+    status: 'MIT_BEFUND' as const,
+    eingereichtAm: utc(2026, 10, 25),
+    abgeschlossenAm: utc(2026, 10, 27),
+  };
+
+  it('ein Nachtrag mit Befund geht vor sein Original – unabhängig von der Eingabereihenfolge', () => {
+    expect(betriebsStand([original, nachtrag], utc(2026, 10, 28))).toBe('MIT_BEFUND');
+    expect(betriebsStand([nachtrag, original], utc(2026, 10, 28))).toBe('MIT_BEFUND');
+    // Vor dem Abschluss des Nachtrags gilt das Original.
+    expect(betriebsStand([original, nachtrag], utc(2026, 10, 21))).toBe('OK');
+  });
+
+  it('ein überfälliger Nachtrag wirkt wie jede überfällige Durchführung', () => {
+    const offen = {
+      ...nachtrag,
+      status: 'IN_DURCHFUEHRUNG' as const,
+      eingereichtAm: null,
+      abgeschlossenAm: null,
+    };
+    expect(betriebsStand([original, offen], utc(2026, 11, 4))).toBe('UEBERFAELLIG');
+    expect(betriebsStand([offen, original], utc(2026, 11, 4))).toBe('UEBERFAELLIG');
+  });
+
+  it('der Nachtrag geht vor, auch wenn sein Anlagezeitpunkt älter erscheint (andere Uhr)', () => {
+    const frueh = { ...nachtrag, angelegtAm: new Date('2026-07-01T08:00:00Z') };
+    expect(betriebsStand([original, frueh], utc(2026, 10, 28))).toBe('MIT_BEFUND');
+    expect(betriebsStand([frueh, original], utc(2026, 10, 28))).toBe('MIT_BEFUND');
+  });
+
+  it('Nachtrag zum Nachtrag: die letzte Korrektur zählt', () => {
+    const zweiter = {
+      ...nachtrag,
+      id: '0-zweiter',
+      nachtragZuId: nachtrag.id,
+      angelegtAm: new Date('2026-07-01T08:00:00Z'),
+      status: 'OHNE_BEFUND' as const,
+    };
+    for (const xs of [
+      [original, nachtrag, zweiter],
+      [zweiter, nachtrag, original],
+      [nachtrag, zweiter, original],
+    ]) {
+      expect(betriebsStand(xs, utc(2026, 10, 28))).toBe('OK');
+    }
+  });
+
+  it('gleiche Periode ohne Nachtrag, gleicher Anlagezeitpunkt: die ID entscheidet, nicht die Reihenfolge', () => {
+    const a = { ...original, id: 'a' };
+    const b = { ...nachtrag, id: 'b', nachtragZuId: null, angelegtAm: original.angelegtAm };
+    expect(betriebsStand([a, b], utc(2026, 10, 28))).toBe('MIT_BEFUND');
+    expect(betriebsStand([b, a], utc(2026, 10, 28))).toBe('MIT_BEFUND');
+    // Später angelegt geht vor (außerplanmäßige Durchführung derselben Periode).
+    const spaeter = { ...a, angelegtAm: new Date('2026-09-02T08:00:00Z') };
+    expect(betriebsStand([spaeter, b], utc(2026, 10, 28))).toBe('OK');
+    expect(betriebsStand([b, spaeter], utc(2026, 10, 28))).toBe('OK');
   });
 });
 
