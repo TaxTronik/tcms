@@ -38,11 +38,26 @@ für KI-Werkzeuge.
   (`kern/zustellung.ts`). Regeln, die mehrere Bereiche brauchen, gibt es nur
   einmal. Änderungen hier brauchen Tests (`pnpm --filter @tcms/service test`).
   Bereiche unter `src/bereiche/<bereich>` (z. B. `risiken-kontrollen`: Risiken,
-  Kontrollen, Geschäftsprofil). TS-05 dort: Zeile in der Transaktion sperren
-  (Reihenfolge Programm → Risiko → Kontrolle → Durchführung, je nach ID),
+  Kontrollen, Geschäftsprofil). TS-05 dort: Zeile in der Transaktion sperren,
   Zustand unter der Sperre lesen, versionierte Änderungen nur auf dem
   gesehenen Stand (`standId`/`profilStandId`, sonst `KONFLIKT`), bedingte
   Updates; Neuplanung löscht nur unberührte geplante Durchführungen.
+  Sperrreihenfolge (verbindlich für alle Bereiche; Kopf von
+  `bereiche/risiken-kontrollen/gemeinsam.ts`): Idempotenz-/Anker-Advisory-Locks
+  → Programm → Ereignis → Feststellung → Freigabe/BeschreibungVersion → Risiko
+  → Kontrolle → Durchführung (mehrere Zeilen je nach ID) → Kindzeilen (Folge,
+  Maßnahme, Nachweis) → Nummernkreis-Advisory-Locks → Mandant FOR KEY SHARE
+  (`halteRollenFest`) → Audit-Lock (immer zuletzt, `mitAudit`). Implizite
+  Sperren zählen mit (INSERT mit Fremdschlüssel: FOR KEY SHARE auf die
+  Elternzeile). Elternzeilen, an denen nur Nicht-Schlüsselspalten geändert
+  werden, werden mit `FOR NO KEY UPDATE` gesperrt, damit FK-Prüfungen beim
+  Anlegen von Kindzeilen nicht auf sie warten; `FOR UPDATE` nur, wo Zeilen
+  gelöscht werden (Neuplanung) oder bestehende Regeln es verlangen
+  (Mandantenzeile der Rollenpflege). Eine Verklemmung (40P01),
+  Serialisierungsfehler (40001) oder Eindeutigkeitsverletzung (23505) ergibt
+  `KONFLIKT` nur über die eine Abbildung `kern/konflikt.ts`
+  (`konfliktSicher`/`alsKonflikt`, SQLSTATE über `konfliktFehlercode` aus
+  `@tcms/db`); kein Bereich prüft Fehlercodes selbst.
   Reihenfolge: Jede Listenabfrage (`findMany`) und jede Listenrelation in
   `include`/`select` trägt ein `orderBy` (fachlich, z. B. Code, Version,
   Nummer, Zeitpunkt) mit der `id` als letzter Stufe (Verknüpfungstabellen: ihr

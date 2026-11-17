@@ -6,10 +6,12 @@
 // `@tcms/domain`, Kontrollvorlagen aus `kern/kontroll-vorlage.ts`.
 //
 // TS-05: Beide Operationen sperren zuerst das Programm des Mandanten
-// (SELECT … FOR UPDATE), dann betroffene Risiken und Kontrollen (Reihenfolge
-// Programm → Risiken → Kontrollen → Durchführungen). Der offene Profilstand
-// wird bedingt geschlossen; „ein offener Stand je Programm" und
-// (programmId, version) sind eindeutig – eine Gabelung ist unmöglich.
+// (SELECT … FOR NO KEY UPDATE), dann betroffene Risiken und Kontrollen
+// (Ordnung im Kopf von `gemeinsam.ts`: Programm → Risiken → Kontrollen →
+// Durchführungen → Nummernkreise). `profilAendern` sperrt alle Risiken des
+// Programms, bevor es das Kennzeichen „neu bewerten“ liest und setzt. Der
+// offene Profilstand wird bedingt geschlossen; „ein offener Stand je Programm"
+// und (programmId, version) sind eindeutig – eine Gabelung ist unmöglich.
 // =============================================================================
 
 import {
@@ -186,8 +188,21 @@ export async function profilAendern(
       });
 
       const diff = profilDiff(alt, profil);
-      const risiken = await tx.risiko.findMany({
+      // TS-05: Risiken des Programms sperren (Programm → Risiken nach ID) und das
+      // Kennzeichen „neu bewerten“ erst unter der Sperre lesen – eine parallele
+      // Neubewertung setzt es sonst nach unserem Lesen zurück.
+      const refs = await tx.risiko.findMany({
         where: { programmId: programm.id },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+      });
+      await sperreRisiken(
+        tx,
+        programm.id,
+        refs.map((r) => r.id),
+      );
+      const risiken = await tx.risiko.findMany({
+        where: { programmId: programm.id, id: { in: refs.map((r) => r.id) } },
         select: { id: true, code: true, entscheidung: true, inaktivAb: true, neuBewerten: true },
         orderBy: { id: 'asc' },
       });
@@ -223,7 +238,12 @@ export async function profilAendern(
         });
       }
 
-      const nummern = await naechsteEreignisnummern(tx, zeitpunkt.getUTCFullYear(), typen.length);
+      // Den Nummernkreis nur sperren, wenn Ereignisse entstehen (Ordnung: Nummernkreise
+      // nach den Zeilensperren).
+      const nummern =
+        typen.length > 0
+          ? await naechsteEreignisnummern(tx, zeitpunkt.getUTCFullYear(), typen.length)
+          : [];
       const ereignisse: string[] = [];
       for (const [i, t] of typen.entries()) {
         const kat = ereignistyp(t.typ);

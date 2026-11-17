@@ -176,10 +176,15 @@ export async function sperreMassnahme(
   return feststellungId;
 }
 
-/** Sperrt das Programm des Mandanten (serialisiert z. B. Länderstände je Programm). */
+/**
+ * Sperrt das Programm des Mandanten (serialisiert z. B. Länderstände je
+ * Programm). FOR NO KEY UPDATE (Sperrordnung, AGENTS.md TS-05): Das Anlegen
+ * eines Ereignisses mit Nummernkreis-Lock wartet in seiner FK-Prüfung nicht
+ * auf diese Sperre (keine Verklemmung Programm ↔ `nummer.ereignis`).
+ */
 export async function sperreProgramm(tx: Tx, mandantId: string): Promise<string> {
   const zeilen = await tx.$queryRaw<{ id: string }[]>`
-    SELECT id FROM "TcmsProgramm" WHERE "mandantId" = ${mandantId}::uuid FOR UPDATE`;
+    SELECT id FROM "TcmsProgramm" WHERE "mandantId" = ${mandantId}::uuid FOR NO KEY UPDATE`;
   const id = zeilen[0]?.id;
   if (zeilen.length !== 1 || !id) throw new DienstFehler('NICHT_GEFUNDEN', KEIN_PROGRAMM);
   return id;

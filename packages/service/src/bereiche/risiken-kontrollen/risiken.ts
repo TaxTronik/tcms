@@ -7,9 +7,12 @@
 // - Neubewertung schließt den Risikostand und legt einen neuen an (Regel 3).
 // - Übersteuerung, Inventarfreigabe und Zurückweisung im Vier-Augen-Prinzip
 //   (Regel 4); Entscheidungen nur aus dem erwarteten Status.
-// - TS-05: Jede Operation sperrt das Risiko (SELECT … FOR UPDATE) in der
-//   Transaktion von `mitAudit` und liest den Zustand erst unter der Sperre;
-//   Zustandswechsel zusätzlich als bedingtes Update mit count-Prüfung.
+// - TS-05: Jede Operation sperrt das Risiko (SELECT … FOR NO KEY UPDATE) in
+//   der Transaktion von `mitAudit` und liest den Zustand erst unter der Sperre;
+//   Zustandswechsel zusätzlich als bedingtes Update mit count-Prüfung. Die
+//   Neubewertung sperrt vorher die Ereignisse mit offenen Folgen „Risiko neu
+//   bewerten" (Ordnung Ereignis → Risiko → Kontrollen → Durchführungen, Kopf
+//   von `gemeinsam.ts`).
 // =============================================================================
 
 import {
@@ -124,24 +127,72 @@ async function aktuelleSicht(ctx: DienstKontext, mandantId: string, risikoId: st
   return { k, risiko };
 }
 
-/** Ereignisfolgen „Risiko neu bewerten" (in der Triage angelegt) mit der Neubewertung erledigen. */
+/** Offene Ereignisfolgen „Risiko neu bewerten" eines Risikos (Code), wahlweise nur bestimmter Ereignisse. */
+function offeneNeubewertungsFolgen(
+  tx: Tx,
+  programmId: string,
+  code: string,
+  ereignisIds?: readonly string[],
+) {
+  return tx.ereignisFolge.findMany({
+    where: {
+      art: 'RISIKO_NEU_BEWERTEN',
+      ziel: code,
+      status: 'ANGELEGT',
+      ...(ereignisIds ? { ereignisId: { in: [...ereignisIds] } } : {}),
+      ereignis: { programmId, status: { in: ['NEU', 'IN_TRIAGE'] } },
+    },
+    select: { id: true, ereignisId: true },
+    orderBy: { id: 'asc' },
+  });
+}
+
+/**
+ * Sperrt die Ereignisse mit offenen Folgen „Risiko neu bewerten" für dieses
+ * Risiko – vor dem Risiko (Sperrordnung Ereignis → Risiko → Folge, wie
+ * „Folge hinzufügen", „Folge erledigen" und „Markierung freigeben"). Der Code
+ * eines Risikos ändert sich nie; er darf vor der Risikosperre gelesen werden.
+ * Liefert die gesperrten Ereignis-IDs.
+ */
+async function sperreBetroffeneEreignisse(
+  tx: Tx,
+  mandantId: string,
+  risikoId: string,
+): Promise<string[]> {
+  const programm = await programmDes(tx, mandantId);
+  const r = await tx.risiko.findFirst({
+    where: { id: risikoId, programmId: programm.id },
+    select: { code: true },
+  });
+  if (!r) throw new DienstFehler('NICHT_GEFUNDEN');
+  const folgen = await offeneNeubewertungsFolgen(tx, programm.id, r.code);
+  const ids = [...new Set(folgen.map((f) => f.ereignisId))].sort();
+  if (ids.length === 0) return [];
+  const gesperrt = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "Ereignis"
+    WHERE "programmId" = ${programm.id} AND "id" = ANY(${ids}::text[])
+    ORDER BY "id" FOR NO KEY UPDATE`;
+  return gesperrt.map((z) => z.id);
+}
+
+/**
+ * Ereignisfolgen „Risiko neu bewerten" (in der Triage angelegt) mit der
+ * Neubewertung erledigen – nur an den vorher gesperrten Ereignissen. Ein
+ * Ereignis in der Triage, dessen Folgen danach alle erledigt oder verworfen
+ * sind, wird unter seiner Sperre abgeschlossen (Folgen unter der Sperre
+ * gelesen; ein offener Antrag auf Verwerfen erledigt sich wie bei
+ * `schliesseEreignisAb`).
+ */
 async function erledigeEreignisFolgen(
   tx: Tx,
   programmId: string,
   code: string,
   standId: string,
   zeitpunkt: Date,
+  ereignisIds: readonly string[],
 ): Promise<Protokoll[]> {
-  const folgen = await tx.ereignisFolge.findMany({
-    where: {
-      art: 'RISIKO_NEU_BEWERTEN',
-      ziel: code,
-      status: 'ANGELEGT',
-      ereignis: { programmId, status: { in: ['NEU', 'IN_TRIAGE'] } },
-    },
-    select: { id: true, ereignisId: true },
-    orderBy: { id: 'asc' },
-  });
+  if (ereignisIds.length === 0) return [];
+  const folgen = await offeneNeubewertungsFolgen(tx, programmId, code, ereignisIds);
   const erledigt: typeof folgen = [];
   for (const f of folgen) {
     // Bedingt: eine parallel verworfene oder erledigte Folge bleibt unberührt.
@@ -168,7 +219,7 @@ async function erledigeEreignisFolgen(
     if (e.status === 'IN_TRIAGE' && ereignisErledigt(e.folgen)) {
       const u = await tx.ereignis.updateMany({
         where: { id: e.id, status: 'IN_TRIAGE' },
-        data: { status: 'ERLEDIGT' },
+        data: { status: 'ERLEDIGT', verwerfenBegruendung: null, verwerfenBeantragtVon: null },
       });
       if (u.count === 1)
         protokolle.push({
@@ -176,7 +227,13 @@ async function erledigeEreignisFolgen(
           objektTyp: 'Ereignis',
           objektId: e.id,
           programmId,
-          detail: { nummer: e.nummer, grund: 'alle Folgen erledigt oder verworfen' },
+          detail: {
+            nummer: e.nummer,
+            grund: 'alle Folgen erledigt oder verworfen',
+            ...(e.verwerfenBeantragtVon
+              ? { verwerfenAntragErledigt: { beantragtVon: e.verwerfenBeantragtVon } }
+              : {}),
+          },
         });
     }
   }
@@ -203,6 +260,8 @@ async function bewerte(
   begruendung: string,
 ): Promise<NeuBewertungErgebnis> {
   return mitAudit(ctx, async (tx, zeitpunkt) => {
+    // Sperrordnung: betroffene Ereignisse → Risiko → Kontrollen → Durchführungen.
+    const ereignisIds = await sperreBetroffeneEreignisse(tx, mandantId, risikoId);
     const risiko = await risikoUnterSperre(tx, mandantId, risikoId);
     pruefeAktiv(risiko, zeitpunkt);
     const alt = risiko.staende[0];
@@ -309,7 +368,14 @@ async function bewerte(
       },
     });
     protokolle.push(
-      ...(await erledigeEreignisFolgen(tx, programm.id, risiko.code, neu.id, zeitpunkt)),
+      ...(await erledigeEreignisFolgen(
+        tx,
+        programm.id,
+        risiko.code,
+        neu.id,
+        zeitpunkt,
+        ereignisIds,
+      )),
     );
 
     // Folgen für die Kontrollhäufigkeit (GT × Bruttoklasse).
