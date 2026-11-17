@@ -28,7 +28,7 @@ pnpm env:lokal                       # .env aus .env.example, Geheimnisse zufäl
 pnpm db:generate                     # Prisma-Client erzeugen
 pnpm db:deploy                       # Migration einspielen (als tcms_owner, DATABASE_OWNER_URL)
 pnpm db:seed                         # Demodaten im Demo-Tenant (Stichtag 16.10.2026)
-pnpm dev                             # http://localhost:3100
+pnpm dev                             # http://127.0.0.1:3100 (nur lokal erreichbar)
 ```
 
 `pnpm env:lokal` legt die `.env` im Repo-Root aus `.env.example` an (bzw. ergänzt eine vorhandene)
@@ -52,7 +52,10 @@ Anfrage einen `Akteur` wie aus der Akteursbestätigung der kanzleikonsole: Kanzl
 den Bezug (`cli`) zum Mandanten, um den es geht, mit Zuständigkeit (BT, Hauptbearbeitung) aus dem
 Verzeichnis; Rollen der Mandantenseite kommen aus `MandantKontaktRolle`. Mit `NODE_ENV=production`
 ist die Demo-Anmeldung immer verweigert (TS-01); `SESSION_SECRET` muss ein eigener Zufallswert
-sein (`pnpm env:lokal` erzeugt ihn), bekannte Platzhalter weist die Demo ab (TS-02).
+sein (`pnpm env:lokal` erzeugt ihn), bekannte Platzhalter weist die Demo ab (TS-02). Weil die
+Anmeldung kein Passwort kennt, lauschen `pnpm dev` und `pnpm start` nur auf `127.0.0.1` (wie die
+Datenbank, TS-11); die Demo nicht über `--hostname 0.0.0.0` im Netz freigeben. Sitzungen gelten nur im
+laufenden Prozess: Abmelden beendet die Sitzung serverseitig, ein Neustart beendet alle.
 
 | Person            | Rolle                                                | gut für                                                                |
 | ----------------- | ---------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -87,7 +90,7 @@ schreibgeschützt ansehen.
 | Befehl                | Zweck                                                                     |
 | --------------------- | ------------------------------------------------------------------------- |
 | `pnpm env:lokal`      | lokale `.env` anlegen bzw. ergänzen (Geheimnisse zufällig, Modus 0600)    |
-| `pnpm dev`            | Entwicklungsserver der Demo auf Port 3100                                 |
+| `pnpm dev`            | Entwicklungsserver der Demo auf 127.0.0.1:3100                            |
 | `pnpm build`          | Builds von `apps/web` (Next.js) und `apps/api` (Bundle `dist/server.mjs`) |
 | `pnpm start`          | Produktionsserver der Demo                                                |
 | `pnpm api`            | Dienst in der Entwicklung (tsx); Produktion: Image `tcms-api`             |
