@@ -24,6 +24,7 @@ import { legeProgrammAn } from './einrichtung';
 import { adressiereFreigabeNeu, erteileFreigabe, fordereFreigabeCodeAn } from './freigaben';
 import { bereiteVor, personen, richteEin } from './testprogramm';
 import {
+  gesehen,
   baueWelt,
   btFuer,
   im,
@@ -85,7 +86,9 @@ describe.skipIf(!AKTIV)('Freigaben: Rollen unter der Sperre der Rollenpflege', (
     );
     await im(bt, (ctx) => gibBeschreibungZurReview(ctx, ziel));
     // Review durch eine zweite Person (Vier-Augen).
-    await im({ ...bt, id: w.hb }, (ctx) => schliesseBeschreibungsreviewAb(ctx, ziel));
+    await im({ ...bt, id: w.hb }, async (ctx) =>
+      schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, ziel)),
+    );
     const e = await mitRollenentzugWaehrend({
       tenantId: w.tenantId,
       mandantId,

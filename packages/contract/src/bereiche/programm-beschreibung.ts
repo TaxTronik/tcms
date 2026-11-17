@@ -841,6 +841,12 @@ export const BeschreibungVersionViewSchema = z
     /** Status zum Stichtag (aus den Zeitstempeln abgeleitet; aktuell = status) */
     anzeige: beschreibungStatus,
     abschnitte: z.array(BeschreibungAbschnittSchema),
+    /**
+     * Nur im historischen Stand `true`: Die Abschnitte wurden nach dem Stichtag geändert;
+     * `abschnitte` zeigt den heutigen Text (der Text eines Entwurfs zum Stichtag ist nicht
+     * gespeichert). Eingefrorene Inhalte zum Stichtag stehen im `snapshot`.
+     */
+    abschnitteSpaeterGeaendert: z.boolean(),
     createdAt: isoZeit,
     erstelltVon: z.string().nullable(),
     reviewAngefordertVon: z.string().nullable(),
@@ -854,8 +860,18 @@ export const BeschreibungVersionViewSchema = z
     snapshotSha256: z.string().nullable(),
     /** SHA-256 des Snapshots stimmt (null: nichts zu prüfen). */
     snapshotGeprueft: z.boolean().nullable(),
-    /** Letzte bearbeitende Person (Vier-Augen der Kanzlei-Review). */
+    /** Letzte bearbeitende Person (Anzeige). */
     letzteBearbeitung: z.string().nullable(),
+    /**
+     * Alle Personen, die Abschnitte dieser Version geändert haben (ohne Änderung: wer sie
+     * angelegt hat). Keine von ihnen schließt die Kanzlei-Review ab (Vier-Augen).
+     */
+    bearbeitende: z.array(z.string()),
+    /**
+     * SHA-256 der Abschnitte, wie sie die Antwort zeigt (kanonisches JSON). Der Abschluss der
+     * Kanzlei-Review nennt ihn als gesehenen Stand (TS-05); im historischen Stand `null`.
+     */
+    abschnitteSha256: z.string().nullable(),
   })
   .strict();
 export type BeschreibungVersionView = z.infer<typeof BeschreibungVersionViewSchema>;
@@ -942,6 +958,18 @@ export const BeschreibungVersionAktionEingabeSchema = z.object(versionPfad).stri
 export type BeschreibungVersionAktionEingabe = z.infer<
   typeof BeschreibungVersionAktionEingabeSchema
 >;
+/**
+ * Kanzlei-Review abschließen: SHA-256 der gesehenen Abschnitte (`abschnitteSha256` aus dem
+ * Lesen). Unter der Sperre der Version verglichen; weicht der Text ab (z. B. zurückgewiesen,
+ * geändert und erneut zur Review gegeben), antwortet der Dienst `KONFLIKT`.
+ */
+export const ReviewAbschliessenBodySchema = z
+  .object({ abschnitteSha256: z.string().regex(/^[0-9a-f]{64}$/) })
+  .strict();
+export const ReviewAbschliessenEingabeSchema =
+  ReviewAbschliessenBodySchema.extend(versionPfad).strict();
+export type ReviewAbschliessenEingabe = z.infer<typeof ReviewAbschliessenEingabeSchema>;
+
 export const BeschreibungVersionAktionErgebnisSchema = z
   .object({ versionId: z.string(), nummer: z.string(), status: beschreibungStatus })
   .strict();

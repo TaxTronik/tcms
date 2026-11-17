@@ -12,6 +12,7 @@ export {
   speichereEinrichtungsschritt,
 } from './programm-beschreibung/einrichtung';
 export {
+  abschnitteSha256,
   fordereBeschreibungsfreigabeAn,
   gibBeschreibungZurReview,
   ladeBeschreibung,

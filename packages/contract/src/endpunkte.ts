@@ -156,6 +156,7 @@ import {
   PortalKenntnisnahmeErgebnisSchema,
   ProgrammAnlegenBodySchema,
   ProgrammAnlegenErgebnisSchema,
+  ReviewAbschliessenBodySchema,
   ReviewZurueckweisenBodySchema,
   ZieleFreigabeAnfordernBodySchema,
   ZieleFreigabeAnfordernErgebnisSchema,
@@ -1210,6 +1211,7 @@ export const ENDPUNKTE = register({
     methode: 'POST',
     pfad: `${VERSION}/review/abschliessen`,
     params: BeschreibungVersionAktionEingabeSchema,
+    body: ReviewAbschliessenBodySchema,
     antwort: BeschreibungVersionAktionErgebnisSchema,
   },
   beschreibungsreviewZurueckweisen: {

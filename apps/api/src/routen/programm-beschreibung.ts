@@ -92,7 +92,7 @@ export function registriereProgrammBeschreibung(r: Routen<Tx>, codes: CodeSchlue
     gibBeschreibungZurReview(dienstKontext(c), version(c)),
   );
   r.endpunkt(ENDPUNKTE.beschreibungsreviewAbschliessen, (c) =>
-    schliesseBeschreibungsreviewAb(dienstKontext(c), version(c)),
+    schliesseBeschreibungsreviewAb(dienstKontext(c), { ...c.body, ...version(c) }),
   );
   r.endpunkt(ENDPUNKTE.beschreibungsreviewZurueckweisen, (c) =>
     weiseBeschreibungsreviewZurueck(dienstKontext(c), { ...c.body, ...version(c) }),

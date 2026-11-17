@@ -44,15 +44,31 @@ describe.skipIf(!AKTIV)('Endpunkte CMS-Beschreibung und Freigaben (App + Postgre
       }),
     );
     await ok(await senden(w, 'POST', `${V}/review`, a.hb()));
-    // Vier-Augen über HTTP: 403 mit fachlichem Grund für die letzte Bearbeitung.
-    const selbst = await senden(w, 'POST', `${V}/review/abschliessen`, a.hb());
+    // Gesehener Text (TS-05): SHA-256 der Abschnitte aus dem Lesen.
+    const gelesen = await ok(await senden(w, 'GET', `${m(w.A)}/beschreibung`, a.bt()));
+    const gesehen = {
+      abschnitteSha256: (gelesen['versionen'] as { id: string; abschnitteSha256: string }[]).find(
+        (x) => x.id === v['versionId'],
+      )!.abschnitteSha256,
+    };
+    // Ohne gesehenen Text: 400; mit anderem Text: 409.
+    expect((await senden(w, 'POST', `${V}/review/abschliessen`, a.bt())).status).toBe(400);
+    expect(
+      (
+        await senden(w, 'POST', `${V}/review/abschliessen`, a.bt(), {
+          abschnitteSha256: '0'.repeat(64),
+        })
+      ).status,
+    ).toBe(409);
+    // Vier-Augen über HTTP: 403 mit fachlichem Grund für die Bearbeitung.
+    const selbst = await senden(w, 'POST', `${V}/review/abschliessen`, a.hb(), gesehen);
     expect(selbst.status).toBe(403);
     expect((await json(selbst))['fehler']).toMatchObject({
       code: 'NICHT_BERECHTIGT',
       grund: 'VIER_AUGEN',
       meldung: expect.stringContaining('zweite Person'),
     });
-    await ok(await senden(w, 'POST', `${V}/review/abschliessen`, a.bt()));
+    await ok(await senden(w, 'POST', `${V}/review/abschliessen`, a.bt(), gesehen));
     const fr = await ok(
       await senden(w, 'POST', `${V}/freigabe`, a.bt(), {
         empfaengerId: w.GV,
@@ -260,7 +276,8 @@ describe.skipIf(!AKTIV)('Endpunkte CMS-Beschreibung und Freigaben (App + Postgre
       name: 'Review abschließen',
       methode: 'POST',
       pfad: (x) => `${V(x)}/review/abschliessen`,
-      ungueltig: { body: { reviewVon: w.BT } },
+      body: { abschnitteSha256: '0'.repeat(64) },
+      ungueltig: { body: { abschnitteSha256: '0'.repeat(64), reviewVon: w.BT } },
     },
     {
       name: 'Review zurückweisen',

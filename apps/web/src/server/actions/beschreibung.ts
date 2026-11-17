@@ -8,6 +8,8 @@ import {
   fordereBeschreibungsfreigabeAn,
   gibBeschreibungZurReview,
   imDienst,
+  kannBearbeiten,
+  kannLesen,
   legeBeschreibungsversionAn,
   schliesseBeschreibungsreviewAb,
   speichereBeschreibungsabschnitt,
@@ -167,8 +169,13 @@ export async function zurReview(_prev: Ergebnis, fd: FormData): Promise<Ergebnis
 }
 
 export async function reviewAbschliessen(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
-  const p = Ids.safeParse({ mandantId: fd.get('mandantId'), versionId: fd.get('versionId') });
-  if (!p.success) return { fehler: 'Bitte die Eingaben prüfen.' };
+  // Der gesehene Text (SHA-256 der Abschnitte aus der Seite) bindet den Abschluss (TS-05).
+  const p = Ids.extend({ abschnitteSha256: z.string().regex(/^[0-9a-f]{64}$/) }).safeParse({
+    mandantId: fd.get('mandantId'),
+    versionId: fd.get('versionId'),
+    abschnitteSha256: fd.get('abschnitteSha256'),
+  });
+  if (!p.success) return { fehler: 'Bitte die Seite neu laden.' };
   const r = await imDemo(p.data.mandantId, (ctx) => schliesseBeschreibungsreviewAb(ctx, p.data));
   if ('fehler' in r) return { fehler: r.fehler };
   aktualisiereMandant(p.data.mandantId);
@@ -196,6 +203,14 @@ export async function freigabeAnfordern(_prev: Ergebnis, fd: FormData): Promise<
   const p = Ids.safeParse({ mandantId: fd.get('mandantId'), versionId: fd.get('versionId') });
   if (!p.success) return { fehler: 'Bitte die Eingaben prüfen.' };
   const { mandantId, versionId } = p.data;
+  // Sitzung und Recht zuerst (Befund 70): Ohne Anmeldung, als Mandantenkontakt oder ohne
+  // Bearbeitungsrecht liest die Action keine Kontaktrollen (kein Hinweis auf fremde Mandanten,
+  // keine Tenant-Transaktion). Der Service prüft danach erneut.
+  const akteur = await demoAkteur(mandantId);
+  if (!akteur) redirect('/anmelden');
+  if (akteur.art !== 'KANZLEI' || !kannLesen(akteur, mandantId))
+    return { fehler: 'Version nicht gefunden.' };
+  if (!kannBearbeiten(akteur, mandantId)) return { fehler: KEIN_RECHT };
   // Wie die kanzleikonsole: Empfänger (erste gesetzliche Vertretung), Zuständigkeit und Namen.
   const [gv] = await kontakteMitRolle(mandantId, 'GESETZLICHER_VERTRETER');
   if (!gv) return { fehler: 'Beim Mandanten ist keine gesetzliche Vertretung erfasst.' };

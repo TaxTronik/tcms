@@ -190,6 +190,39 @@ export async function konfliktBeiEindeutigkeit<T>(meldung: string, fn: () => Pro
 export const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
 export const isoTagVon = (d: Date): string => d.toISOString().slice(0, 10);
 
+/**
+ * Empfänger je Freigabe zum Stichtag: Eine Neuadressierung nach der Grenze überschreibt die
+ * Zeile, der frühere Empfänger steht im Audit (`tcms.freigabe.neu_adressiert`, `vorherId`).
+ * Je Freigabe zählt die erste Neuadressierung nach der Grenze; ohne sie der heutige Empfänger.
+ */
+export async function empfaengerZumStichtag(
+  tx: Tx,
+  freigaben: readonly { id: string; empfaengerId: string }[],
+  grenze: Date,
+  historisch: boolean,
+): Promise<Map<string, string>> {
+  const je = new Map(freigaben.map((f) => [f.id, f.empfaengerId]));
+  if (!historisch || freigaben.length === 0) return je;
+  const spaeter = await tx.auditEvent.findMany({
+    where: {
+      objektTyp: 'Freigabe',
+      objektId: { in: freigaben.map((f) => f.id) },
+      aktion: 'tcms.freigabe.neu_adressiert',
+      at: { gt: grenze },
+    },
+    orderBy: { pos: 'asc' },
+    select: { objektId: true, detail: true },
+  });
+  const gesehen = new Set<string>();
+  for (const a of spaeter) {
+    if (gesehen.has(a.objektId)) continue;
+    gesehen.add(a.objektId);
+    const vorher = (a.detail as Record<string, unknown> | null)?.['vorherId'];
+    if (typeof vorher === 'string') je.set(a.objektId, vorher);
+  }
+  return je;
+}
+
 /** Aktive Kontakte eines Mandanten mit Rolle (nach Anlage sortiert). */
 export async function aktiveKontakte(tx: Tx, mandantId: string) {
   return tx.mandantKontaktRolle.findMany({

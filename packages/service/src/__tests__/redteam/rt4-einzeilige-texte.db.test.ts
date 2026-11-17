@@ -41,6 +41,7 @@ import { ladePortalFreigaben } from '../../bereiche/programm-beschreibung/freiga
 import { ladeOffeneNachrichten } from '../../bereiche/programm-beschreibung/nachrichten';
 import { richteEin } from '../../bereiche/programm-beschreibung/testprogramm';
 import {
+  gesehen,
   baueWelt,
   btA,
   hbA,
@@ -134,7 +135,9 @@ describe.skipIf(!AKTIV)('RT4-T-03 Zeichenregel gilt nicht für einzeilige Titel 
       }),
     );
     await im(hbA(w), (ctx) => gibBeschreibungZurReview(ctx, ziel));
-    await im(btA(w), (ctx) => schliesseBeschreibungsreviewAb(ctx, ziel));
+    await im(btA(w), async (ctx) =>
+      schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, ziel)),
+    );
     // Angezeigt: „StB Dr. Anna Roth“; gespeichert und gehasht: ein anderer Text.
     const name = `StB Dr. Anna ${RLO}htoR${PDF}`;
     const e = await ausgang(

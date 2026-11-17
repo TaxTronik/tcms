@@ -146,7 +146,7 @@ export default async function BeschreibungSeite({
   };
 
   // Rechte und Sperrgründe
-  const letzte = v.letzteBearbeitung;
+  const selbstBearbeitet = v.bearbeitende.includes(nutzer.id);
   const bearbeitbar = darfBearbeiten && v.status === 'ENTWURF' && !ctx.historisch;
   const bearbeitenGrund = ctx.historisch
     ? NUR_AKTUELL
@@ -160,8 +160,8 @@ export default async function BeschreibungSeite({
     ? ctx.historisch
       ? NUR_AKTUELL
       : 'Nur zuständige Personen'
-    : letzte === nutzer.id
-      ? 'Die Review schließt eine zweite Person ab – Sie haben den Text zuletzt bearbeitet'
+    : selbstBearbeitet
+      ? 'Die Review schließt eine zweite Person ab – Sie haben den Text dieser Version bearbeitet'
       : null;
   const andereBeimMandanten = daten.versionen.filter(
     (x) => x.status === 'BEIM_MANDANTEN' && x.id !== v.id,
@@ -373,7 +373,9 @@ export default async function BeschreibungSeite({
                   ? `Änderungen werden in v${v.nummer} gespeichert und protokolliert.`
                   : `Änderungen erzeugen eine neue Version.`}
               {ctx.historisch && !eingefroren
-                ? ' Freitext im aktuellen Bearbeitungsstand; Entwürfe werden nicht je Tag versioniert.'
+                ? v.abschnitteSpaeterGeaendert
+                  ? ' Nach dem Stichtag geändert: Freitext im aktuellen Bearbeitungsstand; Entwürfe werden nicht je Tag versioniert.'
+                  : ' Freitext unverändert seit dem Stichtag.'
                 : ''}
             </span>
             {gesamt ? null : (
@@ -638,6 +640,7 @@ function Statusaktionen({
             style={{ alignItems: 'flex-end' }}
           >
             {id}
+            <input type="hidden" name="abschnitteSha256" value={v.abschnitteSha256 ?? ''} />
             <SubmitButton
               className="btn-secondary"
               disabled={!!reviewGrund}

@@ -87,11 +87,14 @@ describe.skipIf(!AKTIV)('Demo-Actions Einrichtung, Beschreibung, Freigaben', () 
     const v = await ladeEinrichtung(M);
     expect(v?.eingerichtet).toBe(false);
     const e = v!.entwurf!;
-    const schritt = (n: number, daten: unknown, ziel = 'weiter') =>
-      speichereSchritt(
+    // Wie die Seite: gesehener Stand des Entwurfs (TS-05) aus dem jeweils neuen Lesen.
+    const schritt = async (n: number, daten: unknown, ziel = 'weiter') => {
+      const gesehen = String((await ladeEinrichtung(M))?.entwurf?.stand ?? 0);
+      return speichereSchritt(
         null,
-        form({ mandantId: M, schritt: String(n), ziel, daten: JSON.stringify(daten) }),
+        form({ mandantId: M, schritt: String(n), ziel, daten: JSON.stringify(daten), gesehen }),
       );
+    };
     // Unvollständig: Meldung mit Prüfpunkten, kein Weiter.
     const kurz = await schritt(1, {
       teilbereich: { ...e.teilbereich, abgrenzung: 'kurz' },
@@ -154,11 +157,21 @@ describe.skipIf(!AKTIV)('Demo-Actions Einrichtung, Beschreibung, Freigaben', () 
     expect(await beschreibung.zurReview(null, form(ids))).toEqual({
       ok: 'v1.0 liegt zur Kanzlei-Review vor.',
     });
-    expect(await beschreibung.reviewAbschliessen(null, form(ids))).toMatchObject({
+    // Wie die Seite: der gesehene Text (SHA-256 der Abschnitte) aus dem Lesen.
+    const heute = new Date().toISOString().slice(0, 10);
+    const gesehen = (await ladeBeschreibungsDaten(M, heute))!.versionen.find(
+      (x) => x.id === versionId,
+    )!.abschnitteSha256!;
+    const abschluss = { ...ids, abschnitteSha256: gesehen };
+    expect(await beschreibung.reviewAbschliessen(null, form(abschluss))).toMatchObject({
       fehler: expect.stringContaining('zweite Person'),
     });
     als(DEMO_IDS.anna);
+    // Ohne gesehenen Text kein Abschluss.
     expect(await beschreibung.reviewAbschliessen(null, form(ids))).toEqual({
+      fehler: 'Bitte die Seite neu laden.',
+    });
+    expect(await beschreibung.reviewAbschliessen(null, form(abschluss))).toEqual({
       ok: 'Kanzlei-Review für v1.0 abgeschlossen.',
     });
     expect(await beschreibung.freigabeAnfordern(null, form(ids))).toMatchObject({
