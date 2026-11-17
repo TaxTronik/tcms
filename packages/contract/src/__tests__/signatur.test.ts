@@ -472,6 +472,57 @@ describe('pruefeAkteur – Payload und Claims', () => {
       );
     }
   });
+
+  // Befunde 12, 57, 89: `nam` steht als `actorName` in der Audit-Hashkette.
+  // Ein einzelnes Surrogat (per JSON-Escape signiert) speicherte der Treiber
+  // als U+FFFD – der Eintrag passte danach nie mehr zu seinem Hash.
+  const NAM_UNZULAESSIG: Record<string, string> = {
+    'einzelnes hohes Surrogat': 'Anna \ud83d',
+    'einzelnes tiefes Surrogat': 'Anna \ude00 Roth',
+    RLO: 'Jana \u202e RELLEW',
+    LF: 'Jana\nBcc: x',
+    CRLF: 'Jana\r\nBcc: x',
+    NUL: 'Anna\u0000Roth',
+    ESC: 'Anna\u001b[31m',
+    ZWSP: 'Anna\u200bRoth',
+    'Tag-Zeichen': 'Anna\u{e0041}',
+    'nur Braille-Leerzeichen': '\u2800\u2800',
+  };
+
+  it('weist nam mit Steuer-, Richtungs-, unsichtbaren Zeichen oder einzelnem Surrogat ab (CLAIMS)', () => {
+    const c = claims() as Record<string, unknown>;
+    for (const [fall, nam] of Object.entries(NAM_UNZULAESSIG)) {
+      // Prüfen: als JSON-Escape signiert, die Signatur ist gültig.
+      expect(grund(roh(HEADER, JSON.stringify({ ...c, nam }))), fall).toBe('CLAIMS');
+      // Signieren: dieselbe Regel, kein Token, das der Dienst abweisen müsste.
+      expect(() => token(claims({ nam })), fall).toThrow();
+    }
+  });
+
+  it('nimmt übliche Namen an (Umlaute, Akzente, Bindestrich, Emoji außerhalb der BMP)', () => {
+    for (const nam of [
+      'StB Dr. Anna Müller-Lüdenscheidt',
+      'Łukasz Żółć',
+      'Zustell-Worker \u{1f4ec}',
+      'x'.repeat(200),
+      '\u{1f600}'.repeat(200),
+    ]) {
+      const e = pruefe(token(claims({ nam })));
+      expect(e.ok, nam).toBe(true);
+    }
+  });
+
+  // Befund 45: Die Nil-UUID nimmt der Dienst nie als Tenant an (`mitTenant`);
+  // ohne Regel im Vertrag verbrauchte sie die jti und endete als 500 INTERN.
+  it('weist die Nil-UUID als tnt ab (CLAIMS) und signiert sie nicht', () => {
+    const nil = '00000000-0000-0000-0000-000000000000';
+    const c = claims() as Record<string, unknown>;
+    expect(grund(roh(HEADER, JSON.stringify({ ...c, tnt: nil })))).toBe('CLAIMS');
+    expect(() => token(claims({ tnt: nil }))).toThrow();
+    // Gegenprobe: eine gültige Tenant-UUID (auch die Max-UUID besteht `pruefeTenantId`).
+    const max = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+    expect(pruefe(token(claims({ tnt: max }))).ok).toBe(true);
+  });
 });
 
 describe('pruefeAkteur – Zeitfenster', () => {

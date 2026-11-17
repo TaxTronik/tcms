@@ -33,6 +33,9 @@ export interface AuditInput {
 /** Sperrbereich der Audit-Kette (siehe `tenantSperre`). */
 export const AUDIT_SPERRE = 'audit';
 
+/** Einzelnes Surrogat: Text nicht wohlgeformt (`String.prototype.isWellFormed`). */
+const EINZELNES_SURROGAT = /\p{Cs}/u;
+
 /**
  * Hängt einen Eintrag an die Kette des aktuellen Tenants. Der Zeitstempel ist
  * immer die echte Zeit (keine Demo-Uhr, Aufgabe tcms-data 3), genommen unter
@@ -75,6 +78,24 @@ async function haengeFolgeAn(
   glieder: readonly { input: AuditInput; at: Date | null }[],
 ): Promise<void> {
   if (glieder.length === 0) return;
+  // Vor Sperre und Hash: Texte der Kette nur wohlgeformt. Ein einzelnes
+  // Surrogat hasht als `\udXXX`, der Treiber speichert es aber als U+FFFD –
+  // der Eintrag wäre ab dem Schreiben nicht mehr prüfbar (fail closed). Das
+  // Detail prüft PostgreSQL selbst (JSONB weist einzelne Surrogate ab).
+  for (const { input } of glieder) {
+    for (const text of [
+      input.actorId,
+      input.actorName,
+      input.aktion,
+      input.objektTyp,
+      input.objektId,
+      input.programmId,
+    ]) {
+      if (typeof text === 'string' && EINZELNES_SURROGAT.test(text)) {
+        throw new Error('[db] Audit-Eintrag mit einzelnem Surrogat abgewiesen.');
+      }
+    }
+  }
   const tenantId = await tenantSperre(tx, AUDIT_SPERRE);
   const letzter = await tx.auditEvent.findFirst({
     where: { tenantId },

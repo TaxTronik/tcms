@@ -111,6 +111,12 @@ describe('normalisiereAkteur', () => {
     ['System: ID keine UUID', { ...SYSTEM, id: 'worker' }],
     ['System: Tenant keine UUID', { ...SYSTEM, tenantId: 'x' }],
     ['System: Name leer', { ...SYSTEM, name: ' ' }],
+    // Dieselbe Zeichenregel wie der Claim `nam` (Befunde 12, 57, 89).
+    ['Name mit einzelnem Surrogat', { ...AKTEUR, name: 'Anna \ud83d' }],
+    ['Name mit RLO', { ...AKTEUR, name: 'Jana \u202e RELLEW' }],
+    ['Name mit Zeilenumbruch', { ...AKTEUR, name: 'Jana\nBcc: x' }],
+    ['Name mit NUL', { ...AKTEUR, name: 'Anna\u0000Roth' }],
+    ['System: Name mit einzelnem Surrogat', { ...SYSTEM, name: 'Worker \ude00' }],
   ])('weist ab: %s', (_n, a) => {
     expect(() => normalisiereAkteur(a as Akteur)).toThrow(DienstFehler);
   });
@@ -296,6 +302,34 @@ describe('mitAudit', () => {
     const name = (aufrufe.schreibeAudit[2]![1] as { actorName: string }).actorName;
     expect(name.startsWith('System: ')).toBe(true);
     expect(name).toHaveLength(200);
+    // Befund 99: Zeichen außerhalb der BMP genau an der Grenze – nie ein
+    // einzelnes Surrogat (der Treiber speicherte U+FFFD, die Kette bräche).
+    for (const vorher of [190, 191, 192]) {
+      const emoji = {
+        ...sys,
+        akteur: systemAkteur({
+          ...SYSTEM,
+          name: `${'x'.repeat(vorher)}\u{1f600}${'y'.repeat(200 - vorher - 1)}`,
+        }),
+      };
+      await mitAudit(emoji, async () => ({
+        wert: null,
+        protokoll: { aktion: 'tcms.test.v', objektTyp: 'X', objektId: '8', programmId: null },
+      }));
+      const n = (aufrufe.schreibeAudit.at(-1)![1] as { actorName: string }).actorName;
+      expect(/\p{Cs}/u.test(n), `Emoji nach ${vorher} Zeichen`).toBe(false);
+      expect(Array.from(n).length, `Emoji nach ${vorher} Zeichen`).toBeLessThanOrEqual(200);
+      expect(n.startsWith('System: xxx')).toBe(true);
+    }
+  });
+
+  it('kuerzeAufZeichen kürzt nach Code Points, nie mitten im Surrogatpaar', async () => {
+    const { kuerzeAufZeichen } = await import('../audit');
+    const s = `${'x'.repeat(199)}\u{1f600}z`;
+    expect(s.slice(0, 200).endsWith('\ud83d')).toBe(true); // die frühere Kürzung
+    expect(kuerzeAufZeichen(s, 200)).toBe(`${'x'.repeat(199)}\u{1f600}`);
+    expect(kuerzeAufZeichen('abc', 200)).toBe('abc');
+    expect(kuerzeAufZeichen('\u{1f600}'.repeat(3), 2)).toBe('\u{1f600}'.repeat(2));
   });
 
   it('Personen tragen keine Systemkennzeichnung; eine Operation kann sie nicht setzen', async () => {
