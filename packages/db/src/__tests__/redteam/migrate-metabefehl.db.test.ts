@@ -3,9 +3,9 @@
 // Befund RT2-T-01.
 //
 // packages/db/betrieb/migrate.sh hängt jede migration.sql ungeprüft in das
-// psql-Skript (`cat "$MIGRATIONEN/.../migration.sql"`); psql führt darin
-// Metabefehle aus (\!, \getenv, \copy … from program, \o …). Als Schutz prüft
-// `pruefe_migration`:
+// psql-Skript (damals `cat "$MIGRATIONEN/.../migration.sql"`); psql führt darin
+// Metabefehle aus (\!, \getenv, \copy … from program, \o …). Als Schutz prüfte
+// `pruefe_migration` (heute `lies_migration`: jeder Backslash wird abgewiesen) damals nur:
 //     grep -Eq '^[[:space:]]*\\'   (psql-Metabefehle)
 // Dieses Muster ist an den ZEILENANFANG gebunden. psql erkennt Backslash-
 // Befehle aber auch MITTEN in einer Zeile (nach einem Teil der SQL-Anweisung).
@@ -17,7 +17,7 @@
 // Shell-/Superuser-Zugriff statt nur tcms_owner-DML.
 //
 // Der Test ist rot, solange der mitzeilige Metabefehl ausgeführt wird, und grün,
-// sobald `pruefe_migration` ihn ablehnt (die migration.sql also abgewiesen und
+// sobald `lies_migration` ihn ablehnt (die migration.sql also abgewiesen und
 // das Shell-Kommando nicht ausgeführt wird).
 //
 // Nur mit TCMS_MIGRATE_TESTS=1 und TCMS_MIGRATE_TEST_SUPERUSER_URL (Superuser,
@@ -152,7 +152,7 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate – mitzeilige psql-Metabefehle 
     // Kernaussage: Der Shell-Metabefehl darf nicht ausgeführt worden sein.
     expect(
       existsSync(markerDatei),
-      `psql-Metabefehl (\\!) in der Migration wurde ausgeführt – Lücke in pruefe_migration (migrate.sh). Läufer-Ausgabe:\n${r.stdout}\n${r.stderr}`,
+      `psql-Metabefehl (\\!) in der Migration wurde ausgeführt – Lücke in lies_migration (migrate.sh). Läufer-Ausgabe:\n${r.stdout}\n${r.stderr}`,
     ).toBe(false);
 
     // Der Läufer soll die Migration mit Metabefehl ablehnen (Exit 65), nicht anwenden.
