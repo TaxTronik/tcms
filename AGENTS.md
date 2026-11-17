@@ -63,7 +63,8 @@ für KI-Werkzeuge.
   (`routen.ts`, Mandantenbindung, Abgleich mit dem Endpunktregister),
   `erzeugeDienst` (`dienst.ts`, alle Routen wie in Produktion), jti-Speicher
   (`jti.ts`), Konfiguration (`konfiguration.ts`), Start (`server.ts`),
-  geordnetes Beenden (`beenden.ts`), Container-Healthcheck (`healthcheck.mjs`),
+  geordnetes Beenden (`beenden.ts`), Verbindungsgrenzen langsamer Clients
+  (`verbindung.ts`), Container-Healthcheck (`healthcheck.mjs`),
   Bundle (`scripts/build.mjs`) und Laufzeitbaum (`scripts/laufzeit.mjs`) des
   Images `tcms-api`. Keine Fachregeln: Routen rufen `packages/service`. Tests
   ohne Netz über `app.request(...)`, dazu Socket- und DB-Tests; jede Antwort
@@ -306,14 +307,21 @@ für KI-Werkzeuge.
   eine eigene Artprüfung in der Operation und den registerweiten Test
   (`apps/api/src/__tests__/systemakteur*.test.ts`) angepasst.
 - Jeder Text einer Eingabe weist NUL und einzelne Surrogate ab (`mitTextBasis`, `freitext`,
-  `einzeilig`; RT4-T-08), ebenso die expliziten Richtungssteuerzeichen U+202A–U+202E und
-  U+2066–U+2069 (Anzeigefälschung in Inhalten mit Beweiswert, tcms-s9); ZWJ,
-  Variantenselektoren und LRM/RLM/ALM bleiben in mehrzeiligen Texten erlaubt (Meldung
-  „Unzulässige Zeichen“). Scheitert trotzdem ein Text an der Datenbank (22021, 22P05,
+  `einzeilig`; RT4-T-08), ebenso die übrigen Steuerzeichen außer TAB/LF/CR (C0, DEL, C1), die
+  expliziten Richtungssteuerzeichen U+202A–U+202E und U+2066–U+2069 (Anzeigefälschung in
+  Inhalten mit Beweiswert, tcms-s9), Zeilen-/Absatztrenner, die veralteten Formatzeichen
+  U+206A–U+206F, BOM im Text, Interlinear-Anmerkungen und Tag-Zeichen außerhalb einer
+  Emoji-Flagge (`TEXT_UNZULAESSIG`); ZWSP, ZWJ, Variantenselektoren und LRM/RLM/ALM bleiben
+  in mehrzeiligen Texten erlaubt (Meldung „Unzulässige Zeichen“). Mindestlängen zählen
+  sichtbare Zeichen (`sichtbareLaenge`: ohne Unsichtbares und Platzhalter wie U+2800,
+  Leerraumfolgen einfach). Der Akteursname der Bestätigung (`nam`) folgt `einzeilig(1, 200)`
+  (`AkteurNameSchema`, auch in `normalisiereAkteur`). Scheitert trotzdem ein Text an der Datenbank (22021, 22P05,
   22P02, `eingabeFehlercode` aus `@tcms/db`), antworten Dienst (`fehlerAntwort`) und
   Dienstkern (`imDienst`, `imSystemdienst`) `UNGUELTIG`; ins Log nur der Code (`dbFehler`).
 - Logs: JSON-Zeilen ohne Header-Werte, Bodys, Namen und rohe Pfade, nur IDs
-  und Codes. Keine Secrets in Logs, Fehlermeldungen, Tests oder Commits.
+  und Codes; unbekannte Fehler (`500`) nur mit Name, Code und SQLSTATE aus den
+  strukturierten Feldern, nie mit Meldung oder Stack. Keine Secrets in Logs,
+  Fehlermeldungen, Tests oder Commits.
 - Jede Sicherheitsannahme hat einen Negativtest, der ohne die Schutzmaßnahme
   scheitert.
 - Abweisungen der Datenbank (Trigger, RLS, CHECK, eindeutige Schlüssel, Rechte) prüfen Tests nur
@@ -370,8 +378,10 @@ vorhandenen Tokens aufsetzen.
   Arbeitsbaum mit derselben Zeichenregel wie die Eingaben (`UNZULAESSIG_KLASSE`,
   ohne TAB und LF, RT4-T-02); Ausnahmen nur je Datei und Zeichen mit Begründung.
 - Einzeilige Texte und Dateinamen in Eingaben prüfen nur über die eine Regel
-  `UNZULAESSIGE_ZEICHEN` bzw. `DATEINAME_UNZULAESSIG`
-  (`packages/contract/src/bereiche/lesepfade.ts`); keine eigenen Zeichenklassen
+  `UNZULAESSIGE_ZEICHEN` bzw. `DATEINAME_UNZULAESSIG` (`packages/contract/src/zeichen.ts`,
+  weitergegeben über `bereiche/lesepfade.ts`); Dateinamen nur über `gueltigerDateiname`
+  (Nachweis, Anlage, `pruefeVerweis`: Rand, Punkt am Ende, Leerraumfolgen, Zeichenstapel,
+  Länge in UTF-16-Einheiten); keine eigenen Zeichenklassen
   in Vertrag, Dienst oder Demo. Jeder Titel und jeder Name einer Eingabe (auch
   Vorlagendaten der Nachrichten, Namen eingefrorener Beschreibungen,
   Teilbereich und Bezeichnungen des Geschäftsprofils, Steuerart, Land und Zeitraum
@@ -386,7 +396,8 @@ vorhandenen Tokens aufsetzen.
   (`eingabetexte.test.ts` prüft jedes Antwortschema). Einzige Ausnahme: gespeicherte Ereignis-Anlagen
   in Antworten (`DATEINAME_GESPEICHERT_UNZULAESSIG`, frühere Regel, weil das
   Meldungs-Audit unveränderlich ist). Die Regel folgt aus Unicode-Eigenschaften
-  (`UNZULAESSIG_KLASSE`: Cc, Cf, Zl, Zp, Default_Ignorable_Code_Point, Cs), nie
+  (`UNZULAESSIG_KLASSE`: Cc, Cf, Zl, Zp, Default_Ignorable_Code_Point, Cs, Co,
+  Noncharacter_Code_Point), nie
   aus einer Liste (RT4-T-01). `richtungszeichen.test.ts` (Vertrag) prüft sie für
   jeden Code Point gegen die einzeln abgefragten Eigenschaften und eine
   Pflichtliste, `packages/service/src/__tests__/ablage.test.ts` die BMP, die

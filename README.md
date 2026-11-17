@@ -229,7 +229,10 @@ Mandantenkontext setzt nur `mitTenant` aus `@tcms/db`; der Dienst nutzt `pg` dir
 
 Start fehlgeschlagen heißt Exit 1 mit einer JSON-Zeile ohne Werte. Auf `SIGTERM` nimmt der Dienst
 keine Verbindungen mehr an, lässt laufende Anfragen höchstens 20 s zu Ende laufen und endet dann
-(Exit 0; nach Fristablauf Exit 1).
+(Exit 0). Die Frist gilt für Anfragen und Aufräumen (jti, Pool) zusammen; nach Fristablauf schließt
+der Dienst alle Verbindungen, gibt dem Aufräumen höchstens 2 s und endet mit Exit 1. Langsame
+Clients: Header nach höchstens 10 s, ganze Anfrage nach 30 s (`408`, Prüfraster 1 s), höchstens
+1 024 gleichzeitige Verbindungen (`apps/api/src/verbindung.ts`).
 
 **Endpunktregister.** Jeder Endpunkt steht genau einmal in `packages/contract/src/endpunkte.ts`
 (`ENDPUNKTE`: Methode, Pfadmuster, zugelassene Akteursarten `akteure`, `mandantenbezogen`, Schemas für
@@ -302,7 +305,8 @@ nie; `fehlerSchemaFuer(ENDPUNKTE.<name>)` prüft das, der Dienst antwortet bei e
 `500 INTERN`. Jeder
 Fehler bei Token, Bestätigung oder `jti` ergibt dieselbe Antwort `401 NICHT_AUTHENTIFIZIERT` (mit
 `Connection: close`); der Grund steht nur im Log (JSON-Zeilen auf stdout, mit Request-ID, ohne
-Header-Werte und Bodys). Fremde Mandanten und nicht kanonische Pfade ergeben `404`.
+Header-Werte und Bodys; bei `500 INTERN` nur Name, Code und SQLSTATE des Fehlers, nie Meldung
+oder Stack). Fremde Mandanten und nicht kanonische Pfade ergeben `404`.
 `GET /v1/health` braucht nur das Dienst-Token, `GET /v1/ich` liefert den abgeleiteten Akteur
 (Vertragstest; nur Personen).
 
@@ -318,7 +322,7 @@ und Zuständigkeit ergänzt die kanzleikonsole):
 | Methode | Pfad                                                         | Recht                                                                                                |
 | ------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
 | GET     | `/v1/mandanten/:mandantId/kontext?stand=`                    | Kanzleiperson mit `cli`; vertrauliche Feststellungen maskiert (RT-01)                                |
-| POST    | `/v1/portfolio`                                              | Kanzleiperson; Body `{ mandantIds, bt?, hb? }` (≤ 5 000, ADR §3.3)                                   |
+| POST    | `/v1/portfolio`                                              | Kanzleiperson; Body `{ mandantIds, bt?, hb? }` (≤ 5 000 je Liste, ≤ 6 700 zusammen, ADR §3.3)        |
 | POST    | `/v1/arbeitskorb`                                            | wie Portfolio; Zuständigkeit nur aus `bt`/`hb` der Liste                                             |
 | GET     | `/v1/mandanten/:mandantId/portal/uebersicht`                 | Mandantenkontakt mit aktiver Rolle (`portal: true`)                                                  |
 | PUT     | `/v1/mandanten/:mandantId`                                   | `kannBearbeiten`; Anker anlegen/aktualisieren, auditiert                                             |
