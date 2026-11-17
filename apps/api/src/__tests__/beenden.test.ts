@@ -24,7 +24,10 @@ interface Aufbau {
 
 const offen: Aufbau[] = [];
 
-async function starte(fristMs: number): Promise<Aufbau> {
+async function starte(
+  fristMs: number,
+  opts: { aufraeumen?: () => Promise<void>; aufraeumFristMs?: number } = {},
+): Promise<Aufbau> {
   let freigeben = () => undefined as void;
   const gesperrt = new Promise<void>((r) => (freigeben = r));
   const app = new Hono();
@@ -47,9 +50,11 @@ async function starte(fristMs: number): Promise<Aufbau> {
     },
     aufraeumen: async () => {
       aufgeraeumt = true;
+      await opts.aufraeumen?.();
     },
     ende: (c) => endeCode(c),
     fristMs,
+    aufraeumFristMs: opts.aufraeumFristMs,
     intervallMs: 20,
   });
   const a = { port, freigeben, log, ende, aufgeraeumt: () => aufgeraeumt, beende, server };
@@ -131,6 +136,60 @@ describe('geordnetBeenden', () => {
     expect(await haengt).toBe('abgebrochen');
     expect(a.aufgeraeumt()).toBe(true);
     expect(a.log.map((z) => z.ereignis)).toEqual(['beende', 'beende_erzwungen']);
+  });
+
+  // Befund 44: Ein Pool, dessen Verbindung an der Datenbank hängt, löst
+  // `pool.end()` nie auf; früher löschte `server.close` die Frist und der
+  // Prozess endete erst durch SIGKILL.
+  it('hängendes Aufräumen im Normalpfad: Exit 1 nach Frist und Aufräumfrist', async () => {
+    let aufrufe = 0;
+    const a = await starte(200, {
+      aufraeumen: () => {
+        aufrufe += 1;
+        return new Promise<void>(() => undefined);
+      },
+      aufraeumFristMs: 100,
+    });
+    const beginn = Date.now();
+    a.beende('SIGTERM');
+    expect(await a.ende).toBe(1);
+    expect(Date.now() - beginn).toBeLessThan(2000);
+    expect(aufrufe).toBe(1);
+    expect(a.log.map((z) => z.ereignis)).toEqual(['beende', 'beende_erzwungen']);
+    expect(a.log[1]!.felder).toMatchObject({ phase: 'aufraeumen' });
+  });
+
+  it('erzwungener Pfad mit hängendem Aufräumen: genau ein Aufräumen, Exit 1', async () => {
+    let aufrufe = 0;
+    const a = await starte(200, {
+      aufraeumen: () => {
+        aufrufe += 1;
+        return new Promise<void>(() => undefined);
+      },
+      aufraeumFristMs: 100,
+    });
+    const haengt = hole(a.port, '/langsam').catch(() => 'abgebrochen');
+    await new Promise((r) => setTimeout(r, 50));
+    a.beende('SIGTERM');
+    expect(await a.ende).toBe(1);
+    expect(await haengt).toBe('abgebrochen');
+    // Nach closeAllConnections ruft auch `server.close` zurück – kein zweites Aufräumen.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(aufrufe).toBe(1);
+    expect(a.log.map((z) => z.ereignis)).toEqual(['beende', 'beende_erzwungen']);
+    expect(a.log[1]!.felder).toMatchObject({ phase: 'anfragen' });
+  });
+
+  it('fehlgeschlagenes Aufräumen: Exit 1, genau eine Fehlerzeile', async () => {
+    const a = await starte(5000, {
+      aufraeumen: async () => {
+        throw new TypeError('Called end on pool more than once');
+      },
+    });
+    a.beende('SIGTERM');
+    expect(await a.ende).toBe(1);
+    expect(a.log.map((z) => z.ereignis)).toEqual(['beende', 'beende_aufraeumen_fehlgeschlagen']);
+    expect(a.log[1]!.felder).toEqual({ fehler: 'TypeError' });
   });
 
   it('reagiert nur auf das erste Signal', async () => {

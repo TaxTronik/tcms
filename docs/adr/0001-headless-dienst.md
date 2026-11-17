@@ -59,20 +59,20 @@ Andere `alg`/`typ` werden abgewiesen. `TCMS_ACTOR_PUBLIC_KEYS`: Liste
 
 Payload (alle Felder Pflicht, wo nicht anders genannt; unbekannte Felder → abweisen):
 
-| Feld  | Typ                                                          | Bedeutung                                                                                                                                                                                                                                                                                    |
-| ----- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `iss` | `"kanzleikonsole"`                                           |                                                                                                                                                                                                                                                                                              |
-| `aud` | `"tcms"`                                                     |                                                                                                                                                                                                                                                                                              |
-| `iat` | Sekunden                                                     | nicht mehr als 30 s in der Zukunft                                                                                                                                                                                                                                                           |
-| `exp` | Sekunden                                                     | `exp > now`, `exp - iat ≤ 120`                                                                                                                                                                                                                                                               |
-| `jti` | 22–64 Zeichen base64url                                      | Einmal-ID; das Tax-CMS speichert sie bis `exp` und weist Wiederholungen ab (`409 WIEDERHOLT`, intern 401)                                                                                                                                                                                    |
-| `tnt` | UUID                                                         | Tenant (Kanzlei) der kanzleikonsole                                                                                                                                                                                                                                                          |
-| `sub` | UUID                                                         | Person: Mitarbeiter-ID bzw. Mandantenkontakt-ID der kanzleikonsole; Systemakteur: feste ID des Dienstnutzers je Tenant                                                                                                                                                                       |
-| `knd` | `"KANZLEI"` \| `"MANDANT"` \| `"SYSTEM"`                     | Akteursart (3.4)                                                                                                                                                                                                                                                                             |
-| `nam` | String 1–200                                                 | Anzeigename zum Zeitpunkt der Anfrage (für Audit und Nachrichten); beim Systemakteur seine Bezeichnung                                                                                                                                                                                       |
-| `rol` | `{ adm: boolean, bt: boolean }`                              | nur `KANZLEI` (dort Pflicht): Admin/Partner der Kanzlei; Berufsträger:in                                                                                                                                                                                                                     |
-| `cli` | `{ id: UUID, bt: boolean, hb: boolean }`                     | optional bei `KANZLEI`, Pflicht bei `MANDANT`, verboten bei `SYSTEM`: Mandant, auf den sich die Anfrage bezieht. Die kanzleikonsole setzt `cli` nur, wenn die Person Zugriff auf den Mandanten hat. `bt`: zuständige:r Berufsträger:in, `hb`: Hauptbearbeitung (bei `MANDANT` beide `false`) |
-| `req` | `{ m: Methode, p: Pfad+Query, b: base64url(SHA-256(Body)) }` | bindet die Bestätigung an genau diese Anfrage; leerer Body → Hash des leeren Strings                                                                                                                                                                                                         |
+| Feld  | Typ                                                                                        | Bedeutung                                                                                                                                                                                                                                                                                                                                |
+| ----- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `iss` | `"kanzleikonsole"`                                                                         |                                                                                                                                                                                                                                                                                                                                          |
+| `aud` | `"tcms"`                                                                                   |                                                                                                                                                                                                                                                                                                                                          |
+| `iat` | Sekunden                                                                                   | nicht mehr als 30 s in der Zukunft                                                                                                                                                                                                                                                                                                       |
+| `exp` | Sekunden                                                                                   | `exp > now`, `exp - iat ≤ 120`                                                                                                                                                                                                                                                                                                           |
+| `jti` | 22–64 Zeichen base64url                                                                    | Einmal-ID; das Tax-CMS speichert sie bis `exp` + 300 s Karenz (`JTI_KARENZ_S`) und weist Wiederholungen ab: `401 NICHT_AUTHENTIFIZIERT` wie jeder Authentifizierungsfehler, der Grund `JTI_WIEDERHOLT` steht nur im Log                                                                                                                  |
+| `tnt` | UUID, nicht die Nil-UUID                                                                   | Tenant (Kanzlei) der kanzleikonsole                                                                                                                                                                                                                                                                                                      |
+| `sub` | UUID                                                                                       | Person: Mitarbeiter-ID bzw. Mandantenkontakt-ID der kanzleikonsole; Systemakteur: feste ID des Dienstnutzers je Tenant                                                                                                                                                                                                                   |
+| `knd` | `"KANZLEI"` \| `"MANDANT"` \| `"SYSTEM"`                                                   | Akteursart (3.4)                                                                                                                                                                                                                                                                                                                         |
+| `nam` | String 1–200 (getrimmt, Code Points), Zeichenregel wie jeder einzeilige Name (`einzeilig`) | Anzeigename zum Zeitpunkt der Anfrage (für Audit und Nachrichten); beim Systemakteur seine Bezeichnung. Ohne Zeilenumbruch, Steuer-, Richtungs- und unsichtbare Zeichen und einzelne Surrogate (`actorName` liegt im Hash der Audit-Kette); `signiereAkteur` und `pruefeAkteur` weisen gleich ab (`CLAIMS`, nach außen `401` ohne Grund) |
+| `rol` | `{ adm: boolean, bt: boolean }`                                                            | nur `KANZLEI` (dort Pflicht): Admin/Partner der Kanzlei; Berufsträger:in                                                                                                                                                                                                                                                                 |
+| `cli` | `{ id: UUID, bt: boolean, hb: boolean }`                                                   | optional bei `KANZLEI`, Pflicht bei `MANDANT`, verboten bei `SYSTEM`: Mandant, auf den sich die Anfrage bezieht. Die kanzleikonsole setzt `cli` nur, wenn die Person Zugriff auf den Mandanten hat. `bt`: zuständige:r Berufsträger:in, `hb`: Hauptbearbeitung (bei `MANDANT` beide `false`)                                             |
+| `req` | `{ m: Methode, p: Pfad+Query, b: base64url(SHA-256(Body)) }`                               | bindet die Bestätigung an genau diese Anfrage; leerer Body → Hash des leeren Strings                                                                                                                                                                                                                                                     |
 
 Prüfreihenfolge im Dienst je Anfrage: Request-ID → Methode und Pfad bekannt
 (rohes Target, sonst `404`/`405`) → `Content-Length` vorab gegen die
@@ -96,7 +96,11 @@ Mandantenbindung (3.3, 3.4). Erst danach wird der Body geparst.
   (Stufe 5).
 - Mandantenübergreifende Lesepfade (Portfolio, Arbeitskorb) bekommen die Liste
   der zugänglichen Mandanten-IDs im Body (gebunden über `req.b`, höchstens
-  5 000 IDs) und liefern nur diese.
+  5 000 IDs) und liefern nur diese. Zusammen mit `bt` und `hb` (unten) trägt
+  ein Body höchstens 6 700 Einträge, damit jede schemagültige Liste in die
+  Body-Grenze von 256 KiB passt; größere Zuständigkeitslisten teilt die
+  kanzleikonsole auf mehrere Anfragen auf (Zeilen und Einträge gelten je
+  Mandant).
 - Dieselben Lesepfade tragen je Mandant die Zuständigkeit wie `cli`:
   `bt` (Mandanten, für die die Person zuständige:r Berufsträger:in ist) und
   `hb` (Hauptbearbeitung) als Teilmengen von `mandantIds` im selben Body,
@@ -436,10 +440,18 @@ Form. Ebenso prüfen Antworten mit gespeicherten Ereignis-Anlagen
 (`AnlageGespeichertSchema`: Detail, `ereignisAnlageLesen`) den Dateinamen nur
 nach der früheren Zeichenregel (`DATEINAME_GESPEICHERT_UNZULAESSIG`), weil die
 Anlagen im hash-verketteten Meldungs-Audit stehen; neue Verweise prüft die
-strengere Regel (`DATEINAME_UNZULAESSIG`). Freitexte einer Eingabe weisen NUL,
-einzelne Surrogate und die expliziten Richtungssteuerzeichen U+202A–U+202E und
-U+2066–U+2069 ab (`400`, tcms-s9); gespeicherte Freitexte in Antworten
-(Entwurf, Abschnitte, Snapshots) prüfen nur die Länge. Die kanzleikonsole
+strengere Regel (`gueltigerDateiname`: `DATEINAME_UNZULAESSIG`, kein Leerraum am
+Rand, kein Punkt am Ende, keine Leerraumfolge über drei Zeichen, Länge in
+UTF-16-Einheiten, sichtbarer Inhalt). Freitexte einer Eingabe weisen NUL,
+einzelne Surrogate, die übrigen Steuerzeichen außer TAB, LF und CR (C0, DEL,
+C1), die expliziten Richtungssteuerzeichen U+202A–U+202E und U+2066–U+2069,
+Zeilen- und Absatztrenner, die veralteten Formatzeichen U+206A–U+206F, BOM im
+Text, Interlinear-Anmerkungen U+FFF9–U+FFFB und Tag-Zeichen außerhalb einer
+Emoji-Flagge ab (`400`, tcms-s9, `TEXT_UNZULAESSIG`); Mindestlängen zählen
+sichtbare Zeichen (`sichtbareLaenge`). Einzeilige Texte prüfen zusätzlich
+Zeichenstapel (kombinierende Zeichen am Anfang oder mehr als vier
+hintereinander). Gespeicherte Freitexte in Antworten (Entwurf, Abschnitte,
+Snapshots) prüfen nur die Länge. Die kanzleikonsole
 speist ihren Client direkt aus einem Eintrag.
 
 ## 8. Betrieb (Stufe 2, in der kanzleikonsole)
@@ -467,7 +479,9 @@ Stufe 2). Ein `Dockerfile` mit zwei Zielen, Basisimages per Digest gepinnt
   Exit 0/1, keine Werte). `TCMS_VERSION` (Image-Tag) ist die Version von
   `/v1/health`. Der Start bricht bei ungültiger Konfiguration oder unsicherer
   Laufzeitverbindung (`pruefeLaufzeitverbindung`) ab und nennt keine Werte;
-  `SIGTERM` lässt laufende Anfragen höchstens 20 s zu Ende laufen.
+  `SIGTERM` lässt laufende Anfragen höchstens 20 s zu Ende laufen (Frist für Anfragen und
+  Aufräumen zusammen, danach höchstens 2 s Aufräumen und Exit 1). Langsame Clients: Header
+  nach 10 s, ganze Anfrage nach 30 s (`408`, Prüfraster 1 s), höchstens 1 024 Verbindungen.
   `TCMS_LOG_LEVEL` (`info|warn|error`) ist optional. `pnpm api` startet in der
   Entwicklung weiter über `tsx` (devDependency). Pflichtvariablen:
   `TCMS_SERVICE_TOKENS`, `TCMS_ACTOR_PUBLIC_KEYS`, `TCMS_CODE_SCHLUESSEL`

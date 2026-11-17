@@ -16,7 +16,7 @@
 
 import { z } from 'zod';
 import { VERWEIGERUNG_GRUENDE } from '../fehler';
-import { DATEINAME_UNZULAESSIG, einzeilig, mitTextBasis, StandSchema } from './lesepfade';
+import { einzeilig, gueltigerDateiname, mitTextBasis, StandSchema } from './lesepfade';
 
 // ---------------------------------------------------------------------------
 // Grenzen und Bausteine
@@ -181,19 +181,12 @@ export type DurchfuehrungSpeichernEingabe = z.infer<typeof DurchfuehrungSpeicher
 // ---------------------------------------------------------------------------
 
 const MIME = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/;
-// Steuer-, Richtungs-, Nullbreiten- und Füllzeichen, Pfadtrenner
-// (Dateinamen-Spoofing): eine Regel für alle Dateinamen (lesepfade.ts).
-const DATEINAME_VERBOTEN = DATEINAME_UNZULAESSIG;
-
-/** Gültiger Dateiname eines Verweises (strenger als `pruefeVerweis`, nie lockerer). */
+/**
+ * Gültiger Dateiname eines Verweises: die eine Regel für alle Dateinamen
+ * (`gueltigerDateiname`, zeichen.ts; ebenso Ereignis-Anlagen und `pruefeVerweis`).
+ */
 export function gueltigerNachweisDateiname(name: string): boolean {
-  return (
-    name.trim().length > 0 &&
-    name.length <= 255 &&
-    !DATEINAME_VERBOTEN.test(name) &&
-    name !== '.' &&
-    name !== '..'
-  );
+  return gueltigerDateiname(name);
 }
 
 /**

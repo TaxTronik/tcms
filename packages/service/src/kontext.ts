@@ -5,7 +5,13 @@
 // Demo-Oberfläche (apps/web) unterscheiden sich nur in den Ports.
 // =============================================================================
 
-import { DienstFehler, type Akteur, type PersonAkteur, type SystemAkteur } from '@tcms/contract';
+import {
+  AkteurNameSchema,
+  DienstFehler,
+  type Akteur,
+  type PersonAkteur,
+  type SystemAkteur,
+} from '@tcms/contract';
 import type { CodeSchluessel } from './bereiche/programm-beschreibung/code';
 import {
   eingabeFehlercode,
@@ -128,13 +134,17 @@ function uuid(wert: unknown): string {
  * Kanonische, unveränderliche Kopie eines Akteurs: alle IDs als UUID in
  * Kleinbuchstaben. Ohne diese Normalisierung könnte dieselbe Person in zwei
  * Schreibweisen als „zweite Person" gelten (Vier-Augen, AGENTS.md Regel 4).
- * Ungültige IDs: `NICHT_AUTHENTIFIZIERT` ohne Detail.
+ * Ungültige IDs: `NICHT_AUTHENTIFIZIERT` ohne Detail. Der Name folgt derselben
+ * Regel wie der Claim `nam` (`AkteurNameSchema`: getrimmt, 1–200 Zeichen, keine
+ * Steuer-, Richtungs- oder unsichtbaren Zeichen, kein einzelnes Surrogat), auch
+ * für Akteure, die nicht aus einer Bestätigung stammen (Demo).
  */
 export function normalisiereAkteur(a: Akteur): Akteur {
   // Unbekannte oder fehlende Art: nicht authentifiziert (fail closed).
   if (!a || typeof a !== 'object') throw new DienstFehler('NICHT_AUTHENTIFIZIERT');
-  const name = typeof a.name === 'string' ? a.name.trim() : '';
-  if (!name || name.length > 200) throw new DienstFehler('NICHT_AUTHENTIFIZIERT');
+  const geprueft = AkteurNameSchema.safeParse(a.name);
+  if (!geprueft.success) throw new DienstFehler('NICHT_AUTHENTIFIZIERT');
+  const name = geprueft.data;
   if (a.art === 'KANZLEI') {
     return Object.freeze({
       art: 'KANZLEI',

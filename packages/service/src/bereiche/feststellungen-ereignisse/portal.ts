@@ -140,9 +140,12 @@ export function darfEreignisMelden(
 
 /**
  * Meldet ein Ereignis aus dem Portal. Nur Mandantenkontakte mit Rolle GV oder
- * TCB beim eigenen Mandanten; Mitarbeitende und Kanzleipersonen sehen den
- * Mandanten, dürfen aber nicht melden (NICHT_BERECHTIGT); ohne aktive Rolle
- * oder fremder Mandant: NICHT_GEFUNDEN. Die Kanzlei wird über den Postausgang
+ * TCB beim eigenen Mandanten; Mitarbeitende sehen den Mandanten, dürfen aber
+ * nicht melden (NICHT_BERECHTIGT, `PORTAL_ROLLE`); ohne aktive Rolle oder
+ * fremder Mandant: NICHT_GEFUNDEN. Kanzleipersonen erreichen den Endpunkt nie
+ * (`NUR_MANDANT`, 404 an der Route); ruft man die Funktion mit einer
+ * Kanzleiperson mit Bezug auf (Demo), endet sie mit NICHT_BERECHTIGT `PARTEI`
+ * (Inventar `verweigerung.test.ts`). Die Kanzlei wird über den Postausgang
  * benachrichtigt; den Empfänger nennt die kanzleikonsole (`benachrichtigen`).
  */
 export async function meldeEreignis(
@@ -270,17 +273,20 @@ async function meldeMitAudit<T>(
 }
 
 /**
- * Die letzten Portal-Meldungen des eigenen Mandanten (P3). Aufrufen dürfen
- * alle Kontakte mit aktiver Rolle beim eigenen Mandanten und Kanzleipersonen
- * mit Bezug (`kannLesen`); sonst NICHT_GEFUNDEN. Welche Meldungen sie sehen,
- * regelt `siehtPortalMeldung` wie in der Portal-Übersicht (ADR 0001 §5,
- * RT4-T-04): GV und TCB alle, alle anderen nur selbst gemeldete.
+ * Die letzten Portal-Meldungen des eigenen Mandanten (P3). Aufrufen dürfen nur
+ * Mandantenkontakte mit aktiver Rolle beim eigenen Mandanten (Portal-Endpunkt,
+ * `NUR_MANDANT`); Kanzleipersonen und alle anderen erhalten NICHT_GEFUNDEN –
+ * auch beim direkten Aufruf der Funktion (zweite Schicht wie `portalZugriff`).
+ * Welche Meldungen sie sehen, regelt `siehtPortalMeldung` wie in der
+ * Portal-Übersicht (ADR 0001 §5, RT4-T-04): GV und TCB alle, alle anderen nur
+ * selbst gemeldete.
  */
 export async function ladePortalMeldungen(
   ctx: DienstKontext,
   eingabe: PortalMeldungenLesen,
 ): Promise<PortalMeldungen> {
   const x = pruefe(PortalMeldungenLesenSchema, eingabe);
+  if (ctx.akteur.art !== 'MANDANT') throw new DienstFehler('NICHT_GEFUNDEN');
   const mandantId = x.mandantId.toLowerCase();
   const rollen = await ladeKontaktRollen(ctx.tx, ctx.akteur);
   if (!kannLesen(ctx.akteur, mandantId, rollen)) throw new DienstFehler('NICHT_GEFUNDEN');

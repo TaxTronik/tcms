@@ -24,8 +24,19 @@ export interface AuditKontext {
 
 /** Anfang von `actorName` bei Systemakteuren. */
 export const AUDIT_SYSTEM_PRAEFIX = 'System: ';
-/** Höchstlänge von `actorName` (Vertrag `AuditListeAntwortSchema`). */
+/** Höchstlänge von `actorName` in Zeichen (Code Points wie `AuditListeAntwortSchema`). */
 const MAX_ACTOR_NAME = 200;
+
+/**
+ * Kürzt auf höchstens `max` Zeichen (Code Points), nie mitten in einem
+ * Surrogatpaar: Ein einzelnes Surrogat speicherte der Treiber als U+FFFD, der
+ * gespeicherte Eintrag passte dann nicht mehr zu seinem Hash (Kette dauerhaft
+ * „verändert“).
+ */
+export function kuerzeAufZeichen(s: string, max: number): string {
+  const zeichen = Array.from(s);
+  return zeichen.length <= max ? s : zeichen.slice(0, max).join('');
+}
 /** Reservierter Detail-Schlüssel der Kennzeichnung. */
 const SYSTEM_SCHLUESSEL = 'systemakteur';
 
@@ -55,7 +66,7 @@ export async function mitAudit<T>(
   }
   const system = ctx.akteur.art === 'SYSTEM';
   const actorName = system
-    ? `${AUDIT_SYSTEM_PRAEFIX}${ctx.akteur.name}`.slice(0, MAX_ACTOR_NAME)
+    ? kuerzeAufZeichen(`${AUDIT_SYSTEM_PRAEFIX}${ctx.akteur.name}`, MAX_ACTOR_NAME)
     : ctx.akteur.name;
   const eingaben = eintraege.map((p) => {
     const detail = p.detail ?? {};

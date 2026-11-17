@@ -987,13 +987,14 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
       [A.tcb, true],
       [A.gv, true],
       [A.ma, false],
-      [A.leser, false],
     ] as const) {
       const l = await im(a, (ctx) => ladePortalMeldungen(ctx, { mandantId: w.mandant }));
       expect(PortalMeldungenSchema.parse(l)).toEqual(l);
       expect(l.meldungen.some((m) => m.id === r.id)).toBe(sieht);
     }
-    for (const a of [A.ohneRolle, A.gvFremd, A.ohneBezug, A.leerTenant]) {
+    // Kanzleipersonen auch mit Bezug: Portal-Endpunkt nur für Mandantenkontakte
+    // (zweite Schicht neben `NUR_MANDANT`, Befund 137).
+    for (const a of [A.leser, A.zbt, A.ohneRolle, A.gvFremd, A.ohneBezug, A.leerTenant]) {
       expect(
         (await fehlerVon(im(a, (ctx) => ladePortalMeldungen(ctx, { mandantId: w.mandant })))).code,
       ).toBe('NICHT_GEFUNDEN');
@@ -1027,7 +1028,7 @@ describe.skipIf(!AKTIV)('Ereignisse gegen PostgreSQL', () => {
 
   it('Portal-Meldungen lesen: Melderecht = Ergebnis von „Ereignis melden"; Programm vorhanden', async () => {
     const gesehen = new Set<boolean>();
-    for (const [wer, a] of Object.entries({ gv: A.gv, tcb: A.tcb, ma: A.ma, leser: A.leser })) {
+    for (const [wer, a] of Object.entries({ gv: A.gv, tcb: A.tcb, ma: A.ma })) {
       const l = await im(a, (ctx) => ladePortalMeldungen(ctx, { mandantId: w.mandant }));
       expect(l.programmVorhanden, wer).toBe(true);
       let tatsaechlich = true;

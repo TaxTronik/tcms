@@ -4,7 +4,7 @@
 // Verweis und prüft ihn streng; Dateiinhalte weist es ab.
 // =============================================================================
 
-import { DATEINAME_UNZULAESSIG, DienstFehler } from '@tcms/contract';
+import { DienstFehler, gueltigerDateiname } from '@tcms/contract';
 import type { NachweisAblage, NachweisEingang, NachweisVerweis } from './kontext';
 
 /** Obergrenzen eines Verweises; die Spalte `groesse` ist ein INTEGER. */
@@ -18,9 +18,8 @@ export const VERWEIS_GRENZEN = {
 const DOKUMENT_ID = /^[A-Za-z0-9._:-]+$/;
 const MIME = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-// Steuer-, Richtungs-, Nullbreiten- und Füllzeichen, Pfadtrenner (Dateinamen-
-// Spoofing): dieselbe Regel wie der Vertrag (`DATEINAME_UNZULAESSIG`).
-const DATEINAME_VERBOTEN = DATEINAME_UNZULAESSIG;
+// Dateinamen: dieselbe Regel wie der Vertrag (`gueltigerDateiname`: Steuer-,
+// Richtungs-, Nullbreiten- und Füllzeichen, Pfadtrenner, Rand, sichtbarer Inhalt).
 
 /** Prüft einen Verweis; liefert die Feldfehler (leer = gültig). */
 export function pruefeVerweis(v: unknown): Record<string, string[]> {
@@ -43,11 +42,8 @@ export function pruefeVerweis(v: unknown): Record<string, string[]> {
     fehler('dokumentId', 'Ungültige Dokument-ID');
   if (
     typeof dateiname !== 'string' ||
-    dateiname.trim().length === 0 ||
     dateiname.length > VERWEIS_GRENZEN.dateiname ||
-    DATEINAME_VERBOTEN.test(dateiname) ||
-    dateiname === '.' ||
-    dateiname === '..'
+    !gueltigerDateiname(dateiname)
   )
     fehler('dateiname', 'Ungültiger Dateiname');
   if (typeof mime !== 'string' || mime.length > VERWEIS_GRENZEN.mime || !MIME.test(mime))

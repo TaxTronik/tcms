@@ -146,6 +146,13 @@ export function antwortSchema<T extends z.ZodType>(daten: T) {
 export const MAX_BODY_BYTES = 256 * 1024;
 /** Höchste Zahl Mandanten-IDs in mandantenübergreifenden Lesepfaden. */
 export const MAX_MANDANTEN_JE_ANFRAGE = 5000;
+/**
+ * Höchste Zahl aller Einträge einer Mandantenliste (`mandantIds` + `bt` + `hb`):
+ * Jede UUID belegt in kompaktem JSON 39 Bytes, 6 700 Einträge passen also
+ * sicher in `MAX_BODY_BYTES`. Größere Zuständigkeitslisten teilt die
+ * kanzleikonsole auf mehrere Anfragen auf (je Teilliste ihre `bt`/`hb`).
+ */
+export const MAX_LISTENEINTRAEGE_JE_ANFRAGE = 6700;
 
 /**
  * Fachlicher bzw. technischer Fehler, den der Dienst in den Antwortumschlag

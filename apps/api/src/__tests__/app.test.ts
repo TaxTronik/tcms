@@ -69,10 +69,26 @@ const testRouten = (r: Routen<unknown>) => {
       if (params.art === 'zod') return z.object({ a: z.string() }).parse({});
       if (params.art === 'verweigert') throw nichtBerechtigt('VIER_AUGEN', 'Zweite Person.');
       if (params.art === 'unbekannt') throw new DienstFehler('NICHT_GEFUNDEN');
+      if (params.art === 'auth') throw new DienstFehler('NICHT_AUTHENTIFIZIERT', 'Detail');
       if (params.art === 'ohne-grund') {
         // Umgehung des Typs: der Konstruktor weist ab, die Antwort ist 500 (fail closed).
         const roh = DienstFehler as unknown as new (...a: unknown[]) => DienstFehler;
         throw new roh('NICHT_BERECHTIGT', 'Ohne Grund.');
+      }
+      if (params.art === 'prisma') {
+        // Wie ein Prisma-Fehler mit adapter-pg: Meldung und Servermeldung
+        // tragen Eingabewerte, Codes stehen in strukturierten Feldern.
+        const e = new Error('Database error. Code 22007 Message: "Talwind geheim"');
+        e.name = 'PrismaClientKnownRequestError';
+        Object.assign(e, {
+          code: 'P2039',
+          meta: {
+            driverAdapterError: {
+              cause: { originalCode: '22007', originalMessage: 'Talwind geheim' },
+            },
+          },
+        });
+        throw e;
       }
       throw new Error('SELECT geheim FROM mandant WHERE name = Talwind');
     },
@@ -881,13 +897,41 @@ describe('Fehlerabbildung', () => {
     });
   });
 
-  it('alles andere → 500 INTERN ohne Details; Stack nur im Log', async () => {
+  it('alles andere → 500 INTERN ohne Details; ins Log nur Name und Codes (Befund 94)', async () => {
     const t = routenAufbau();
     const r = await bestaetigtSenden(t.app, { methode: 'POST', ziel: '/v1/fehler/intern' });
     expect(r.status).toBe(500);
     const text = await r.text();
     expect(text).toBe(JSON.stringify({ ok: false, fehler: { code: 'INTERN' } }));
-    expect(String(t.log.at(-1)?.stack)).toContain('SELECT geheim');
+    // Weder Meldung noch Stack: Sie können Eingabewerte und Namen tragen
+    // (Log-Regel: nur IDs und Codes).
+    const zeile = t.log.at(-1)!;
+    expect(zeile).toMatchObject({ fehler: 'INTERN', ausnahme: 'Error' });
+    expect(zeile).not.toHaveProperty('stack');
+    expect(JSON.stringify(t.log)).not.toContain('geheim');
+    expect(JSON.stringify(t.log)).not.toContain('Talwind');
+  });
+
+  it('NICHT_AUTHENTIFIZIERT aus dem Dienstkern: dasselbe 401 wie die Kette (ohne Meldung, close)', async () => {
+    const t = routenAufbau();
+    const r = await bestaetigtSenden(t.app, { methode: 'POST', ziel: '/v1/fehler/auth' });
+    expect(r.status).toBe(401);
+    expect(r.headers.get('connection')).toBe('close');
+    expect(await json(r)).toEqual(AUTH_401);
+  });
+
+  it('500 aus einem Prisma-Fehler: Prisma-Code und SQLSTATE aus den Feldern, keine Meldung', async () => {
+    const t = routenAufbau();
+    const r = await bestaetigtSenden(t.app, { methode: 'POST', ziel: '/v1/fehler/prisma' });
+    expect(r.status).toBe(500);
+    expect(await json(r)).toEqual({ ok: false, fehler: { code: 'INTERN' } });
+    expect(t.log.at(-1)).toMatchObject({
+      fehler: 'INTERN',
+      ausnahme: 'PrismaClientKnownRequestError',
+      code: 'P2039',
+      sqlstate: '22007',
+    });
+    expect(JSON.stringify(t.log)).not.toContain('geheim');
   });
 });
 

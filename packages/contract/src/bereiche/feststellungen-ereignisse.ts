@@ -23,9 +23,9 @@ import { VERWEIGERUNG_GRUENDE } from '../fehler';
 import {
   BearbeitenRechteSchema,
   DATEINAME_GESPEICHERT_UNZULAESSIG,
-  DATEINAME_UNZULAESSIG,
   einzeilig,
   freitext,
+  gueltigerDateiname,
   StandSchema,
 } from './lesepfade';
 
@@ -553,20 +553,29 @@ export const PORTAL_ANLAGE_MIME =
 export const PORTAL_MAX_ANLAGEN = 5;
 export const PORTAL_MAX_ANLAGE_BYTES = 10 * 1024 * 1024;
 const SHA256 = /^[0-9a-f]{64}$/;
-// Wie `pruefeVerweis` (@tcms/service) und Nachweise: eine Regel für Dateinamen
-// (Steuer-, Richtungs-, Nullbreiten- und Füllzeichen, Pfadtrenner; lesepfade.ts).
-const DATEINAME_VERBOTEN = DATEINAME_UNZULAESSIG;
 
 export const Sha256Schema = z.string().regex(SHA256, 'Ungültiger SHA-256');
 
-/** Dateiname einer Anlage; `verboten` ist die Zeichenregel (neu bzw. gespeichert). */
-const anlageDateiname = (verboten: RegExp) =>
+/**
+ * Dateiname einer neuen Anlage: eine Regel mit Nachweisen und `pruefeVerweis`
+ * (@tcms/service), `gueltigerDateiname` (zeichen.ts) – Zeichenregel, Pfadtrenner,
+ * Rand, Länge in UTF-16-Einheiten, sichtbarer Inhalt.
+ */
+const anlageDateiname = () =>
+  z.string().min(1).max(255).refine(gueltigerDateiname, 'Ungültiger Dateiname');
+
+/**
+ * Dateiname einer gespeicherten Anlage (Antworten): die frühere Regel (Länge in
+ * Code Points, nicht leer, nicht `.`/`..`, `DATEINAME_GESPEICHERT_UNZULAESSIG`),
+ * damit Namen aus dem unveränderlichen Meldungs-Audit lesbar bleiben.
+ */
+const gespeicherterAnlageDateiname = () =>
   z
     .string()
     .min(1)
     .max(255)
     .refine((s) => s.trim().length > 0 && s !== '.' && s !== '..', 'Ungültiger Dateiname')
-    .refine((s) => !verboten.test(s), 'Ungültiger Dateiname');
+    .refine((s) => !DATEINAME_GESPEICHERT_UNZULAESSIG.test(s), 'Ungültiger Dateiname');
 
 /**
  * Verweis auf eine Anlage, die die kanzleikonsole angenommen hat (Virenscan,
@@ -582,7 +591,7 @@ export const AnlageVerweisSchema = z
       .max(200)
       .regex(/^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/)
       .refine((s) => !s.split('/').some((t) => t === '.' || t === '..'), 'Ungültige Dokument-ID'),
-    dateiname: anlageDateiname(DATEINAME_VERBOTEN),
+    dateiname: anlageDateiname(),
     mime: z.string().max(127).regex(PORTAL_ANLAGE_MIME, 'Dateityp nicht zulässig'),
     groesse: z.number().int().min(1).max(PORTAL_MAX_ANLAGE_BYTES),
     sha256: Sha256Schema,
@@ -597,7 +606,7 @@ export const AnlageVerweisSchema = z
  * Namen bleiben so lesbar. Neue Verweise prüft `AnlageVerweisSchema`.
  */
 export const AnlageGespeichertSchema = AnlageVerweisSchema.extend({
-  dateiname: anlageDateiname(DATEINAME_GESPEICHERT_UNZULAESSIG),
+  dateiname: gespeicherterAnlageDateiname(),
 }).strict();
 
 // ---- Portal: Ereignis melden ----

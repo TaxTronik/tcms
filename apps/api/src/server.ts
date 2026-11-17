@@ -23,6 +23,7 @@ import { erzeugeDienst } from './dienst';
 import { PgJti, starteJtiAufraeumen } from './jti';
 import { KonfigurationsFehler, ladeKonfiguration } from './konfiguration';
 import { jsonLogger, type Logger } from './log';
+import { MAX_VERBINDUNGEN, SERVER_OPTIONEN } from './verbindung';
 
 /** Beim Bündeln gesetzt (TCMS-Version = Image-Tag); in der Entwicklung aus package.json. */
 declare const __TCMS_VERSION__: string | undefined;
@@ -51,6 +52,10 @@ async function starte() {
     max: 10,
     connectionTimeoutMillis: 2000,
     idleTimeoutMillis: 30_000,
+    // Kurze Abfragen (jti, Ping): Eine an der Datenbank hängende Abfrage gibt
+    // ihre Verbindung nach 10 s zurück, statt `pool.end()` beim Beenden
+    // unbegrenzt aufzuhalten (Befund 44; das Beenden hat zusätzlich eine Frist).
+    query_timeout: 10_000,
   });
   pool.on('error', (e) => log.schreibe('error', 'db_pool_fehler', { fehler: e.name }));
 
@@ -79,9 +84,10 @@ async function starte() {
   const server = createAdaptorServer({
     fetch: app.fetch,
     hostname: konfiguration.host,
-    // Langsame Clients begrenzen (Header 10 s, ganze Anfrage 30 s).
-    serverOptions: { headersTimeout: 10_000, requestTimeout: 30_000 },
+    // Langsame Clients begrenzen (Header 10 s, ganze Anfrage 30 s, Prüfraster 1 s).
+    serverOptions: { ...SERVER_OPTIONEN },
   });
+  (server as Server).maxConnections = MAX_VERBINDUNGEN;
   server.listen(konfiguration.port, konfiguration.host, () => {
     log.schreibe('info', 'gestartet', {
       host: konfiguration.host,

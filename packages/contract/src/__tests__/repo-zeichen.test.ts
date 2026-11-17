@@ -29,9 +29,14 @@
 //
 // Im Quelltext gehören solche Zeichen als Escape geschrieben (`\u202e`). Eine
 // Datei, die nicht gültiges UTF-8 ist oder ein NUL enthält, ist ein Befund,
-// außer ihre Endung ist in `.gitattributes` als `binary` erklärt. Ausnahmen nur
-// je Datei und Zeichen mit Begründung; eine nicht mehr gebrauchte Ausnahme lässt
-// den Test ebenfalls scheitern.
+// außer ihre Endung ist in `.gitattributes` als `binary` erklärt. Welche
+// Endungen das sein dürfen, legt dieser Test fest (`BINAER_ENDUNGEN`, je mit
+// Magic Bytes): Eine Zeile `*.ts binary` nähme sonst still alle Quelltexte aus
+// der Prüfung. `.gitattributes` wird aus dem Index gelesen und muss im
+// Arbeitsbaum gleich lauten (skip-worktree, RT2-T-02). Auch die Pfade der
+// versionierten Dateien tragen keines dieser Zeichen (etwa U+202E oder U+200B
+// im Dateinamen). Ausnahmen nur je Datei und Zeichen mit Begründung; eine nicht
+// mehr gebrauchte Ausnahme lässt den Test ebenfalls scheitern.
 // =============================================================================
 
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
@@ -118,6 +123,19 @@ export function binaerEndungen(gitattributes: string): Set<string> {
   }
   return endungen;
 }
+
+/**
+ * Endungen, die `.gitattributes` als `binary` erklären darf, je mit den Magic
+ * Bytes, mit denen jede solche Datei beginnt (Befund 88). Eine neue Endung
+ * gehört bewusst hierher.
+ */
+const BINAER_ENDUNGEN: Readonly<Record<string, Buffer>> = {
+  '.png': Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  '.woff2': Buffer.from('wOF2', 'latin1'),
+};
+
+/** Unzulässig in Pfaden versionierter Dateien: die ganze Zeichenregel (auch TAB und LF). */
+const PFAD_VERBOTEN = new RegExp(`[${UNZULAESSIG_KLASSE}]`, 'u');
 
 /** Ausnahmen: Datei → erlaubte Code Points (`U+XXXX`) mit Begründung. Derzeit keine. */
 const AUSNAHMEN: Record<string, { zeichen: string[]; begruendung: string }> = {};
@@ -221,12 +239,47 @@ describe('befundeIn (Prüfer)', () => {
     ]);
     expect(() => binaerEndungen('assets/** binary\n')).toThrow();
   });
+
+  it('erkennt unzulässige Zeichen in Pfaden (Pfadprüfung)', () => {
+    expect(PFAD_VERBOTEN.test(`src/a${String.fromCodePoint(0x202e)}sj.ts`)).toBe(true);
+    expect(PFAD_VERBOTEN.test(`src/a${String.fromCodePoint(0x200b)}.ts`)).toBe(true);
+    expect(PFAD_VERBOTEN.test('src/a\tb.ts')).toBe(true);
+    expect(PFAD_VERBOTEN.test('src/Prüfung – Übersicht.ts')).toBe(false);
+  });
 });
 
 describe('Repository: keine unsichtbaren oder bidirektionalen Zeichen', () => {
-  const binaer = binaerEndungen(readFileSync(join(REPO_WURZEL, '.gitattributes'), 'utf8'));
   const eintraege = indexEintraege().filter((e) => e.modus !== '160000');
   const inhalte = blobInhalte(eintraege.map((e) => e.objekt));
+  // .gitattributes aus dem Index (nicht nur aus dem Arbeitsbaum, RT2-T-02).
+  const attribute = eintraege.find((e) => e.pfad === '.gitattributes');
+  const binaer = binaerEndungen(attribute ? inhalte.get(attribute.objekt)!.toString('utf8') : '');
+
+  it('.gitattributes erklärt nur die festgelegten Endungen als binary, Index und Arbeitsbaum gleich', () => {
+    expect(attribute, '.gitattributes ist versioniert').toBeDefined();
+    expect([...binaer].sort()).toEqual(Object.keys(BINAER_ENDUNGEN).sort());
+    const datei = join(REPO_WURZEL, '.gitattributes');
+    if (existsSync(datei)) {
+      expect([...binaerEndungen(readFileSync(datei, 'utf8'))].sort()).toEqual([...binaer].sort());
+    }
+  });
+
+  it('Binärdateien beginnen mit den Magic Bytes ihrer Endung', () => {
+    const falsch: string[] = [];
+    for (const e of eintraege) {
+      const magic = BINAER_ENDUNGEN[posix.extname(e.pfad).toLowerCase()];
+      if (!magic || !binaer.has(posix.extname(e.pfad).toLowerCase())) continue;
+      const quellen: Buffer[] = [inhalte.get(e.objekt)!];
+      const datei = join(REPO_WURZEL, e.pfad);
+      if (existsSync(datei) && lstatSync(datei).isFile()) quellen.push(readFileSync(datei));
+      if (quellen.some((q) => !q.subarray(0, magic.length).equals(magic))) falsch.push(e.pfad);
+    }
+    expect(falsch).toEqual([]);
+  });
+
+  it('kein Pfad einer versionierten Datei enthält ein unzulässiges Zeichen', () => {
+    expect(eintraege.filter((e) => PFAD_VERBOTEN.test(e.pfad)).map((e) => e.pfad)).toEqual([]);
+  });
 
   it('prüft eine plausible Zahl versionierter Dateien (Index lesbar)', () => {
     expect(eintraege.length).toBeGreaterThan(300);
