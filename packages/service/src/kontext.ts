@@ -176,7 +176,7 @@ export function normalisiereAkteur(a: Akteur): Akteur {
 /**
  * Normalisierter Akteur einer Fachoperation für Personen. Ein Systemakteur
  * erhält `NICHT_GEFUNDEN` wie ein unbekannter Pfad (kein Hinweis auf Inhalte,
- * ADR 0001 §3.3): Er darf ausschließlich die Systemoperationen
+ * ADR 0001 §3.4): Er darf ausschließlich die Systemoperationen
  * (`SystemKontext`), nie eine Operation für Personen.
  */
 export function personAkteur(a: Akteur): PersonAkteur {
@@ -185,7 +185,7 @@ export function personAkteur(a: Akteur): PersonAkteur {
   return n;
 }
 
-/** Normalisierter Systemakteur; jede Person erhält `NICHT_GEFUNDEN` (ADR 0001 §3.3). */
+/** Normalisierter Systemakteur; jede Person erhält `NICHT_GEFUNDEN` (ADR 0001 §3.4). */
 export function systemAkteur(a: Akteur): SystemAkteur {
   const n = normalisiereAkteur(a);
   if (n.art !== 'SYSTEM') throw new DienstFehler('NICHT_GEFUNDEN');

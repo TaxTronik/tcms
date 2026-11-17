@@ -4,7 +4,9 @@
 // Test klont das Talwind-Programm im Demo-Tenant `PERF_MANDANTEN`-mal und
 // verändert die Datenbank dauerhaft).
 //
-//   bash tcms-mkdb.sh <perf-db> <arbeitsbaum>
+//   # <perf-db> anlegen, Bootstrap, Migration und Seed wie im README („Datenbank“:
+//   # 01_bootstrap.sql bzw. tcms-migrate, dann pnpm db:deploy und pnpm db:seed
+//   # mit DATABASE_OWNER_URL auf <perf-db>)
 //   PERF_TESTS=1 DATABASE_URL=postgresql://tcms_app:…/<perf-db> \
 //     pnpm --filter @tcms/service exec vitest run src/bereiche/lesepfade/portfolio.perf.test.ts
 //

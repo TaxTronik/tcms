@@ -65,7 +65,7 @@ Payload (alle Felder Pflicht, wo nicht anders genannt; unbekannte Felder → abw
 | `aud` | `"tcms"`                                                     |                                                                                                                                                                                                                                                                                              |
 | `iat` | Sekunden                                                     | nicht mehr als 30 s in der Zukunft                                                                                                                                                                                                                                                           |
 | `exp` | Sekunden                                                     | `exp > now`, `exp - iat ≤ 120`                                                                                                                                                                                                                                                               |
-| `jti` | 22–64 Zeichen base64url                                      | Einmal-ID; das Tax-CMS speichert sie bis `exp` und weist Wiederholungen ab (`409 WIEDERHOLT`, intern 401)                                                                                                                                                                                    |
+| `jti` | 22–64 Zeichen base64url                                      | Einmal-ID; das Tax-CMS speichert sie bis `exp` und weist Wiederholungen ab (`401 NICHT_AUTHENTIFIZIERT` wie jeder Authentifizierungsfehler; Grund `JTI_WIEDERHOLT` nur im Log)                                                                                                               |
 | `tnt` | UUID                                                         | Tenant (Kanzlei) der kanzleikonsole                                                                                                                                                                                                                                                          |
 | `sub` | UUID                                                         | Person: Mitarbeiter-ID bzw. Mandantenkontakt-ID der kanzleikonsole; Systemakteur: feste ID des Dienstnutzers je Tenant                                                                                                                                                                       |
 | `knd` | `"KANZLEI"` \| `"MANDANT"` \| `"SYSTEM"`                     | Akteursart (3.4)                                                                                                                                                                                                                                                                             |
@@ -453,7 +453,12 @@ Dienst.
 
 Produktions-Images (RT-04, Advisories in Werkzeugen; Betriebsschnittstelle
 Stufe 2). Ein `Dockerfile` mit zwei Zielen, Basisimages per Digest gepinnt
-(dieselben wie in der kanzleikonsole), ohne `# syntax=`-Zeile:
+(dieselben wie in der kanzleikonsole), ohne Parser-Direktive (`# syntax=`,
+`# escape=`, `# check=`). `pnpm image:pruefen` verlangt je Basisimage genau eine
+globale `ARG` mit dem gepinnten Wert und lässt `--from=` (COPY, `RUN --mount`)
+nur aus einem früheren Stage zu; die Regeln gegen Werkzeuge und Downloads in
+den ausgelieferten Stages sind eine Heuristik über den Anweisungstext und
+ersetzen das Review nicht:
 
 - **`tcms-api`** (Node 24 Alpine): Der Build-Schritt bündelt `apps/api` mit allen
   Workspace-Paketen zu `dist/server.mjs` (esbuild, nur dort), erzeugt den
@@ -485,11 +490,26 @@ Stufe 2). Ein `Dockerfile` mit zwei Zielen, Basisimages per Digest gepinnt
   unvollständige oder dem Image unbekannte Migration → Abbruch; jede Migration
   mit ihrem Ledger-Eintrag in einer Transaktion, Migrationsdateien ohne
   jeden Backslash (psql führt Metabefehle wie `\!` auch mitten in einer Zeile
-  aus; Backslash in Literalen über `chr(92)`, RT2-T-01) und ohne eigene
-  Transaktionssteuerung. Jeder psql-Aufruf erbt eine geleerte Umgebung: nur
-  PATH, Locale und die PG*-Werte seiner Rolle, der Bootstrap zusätzlich die
-  beiden Rollenpasswörter; die Migrationssitzung sieht weder die
-  Superuser-URL noch fremde Passwörter. (3) Prüfung
+  aus; Backslash in Literalen über `chr(92)`, RT2-T-01), ohne NUL und ohne
+  eigene Transaktionssteuerung (ein Lexer wie der von psql erkennt jede
+  Anweisung auf oberster Ebene, die mit BEGIN, START, COMMIT, END, ROLLBACK,
+  ABORT, SAVEPOINT, RELEASE oder PREPARE TRANSACTION beginnt; Literale,
+  Kommentare und plpgsql-Rümpfe zählen nicht). Jede Datei wird vor der ersten
+  Verbindung genau einmal gelesen; geprüft, gehasht und ausgeführt werden
+  dieselben Bytes. Außerhalb der Migrationstransaktionen ist die Sitzung
+  schreibgeschützt (`default_transaction_read_only`, jede Migration in
+  `BEGIN READ WRITE`): Verließe eine Migration ihre Transaktion doch, wäre nur
+  ihr Teil bis zum eigenen COMMIT festgeschrieben, jede weitere Änderung
+  scheiterte, und der Ledger-Eintrag entfiele (Exit 3). Jeder psql-Aufruf erbt
+  eine geleerte Umgebung: nur PATH, Locale und die PG*-Werte seiner Rolle, der
+  Bootstrap zusätzlich die beiden Rollenpasswörter; die Migrationssitzung sieht
+  weder die Superuser-URL noch fremde Passwörter. Der Läufer exportiert selbst
+  nichts, und Umgebungseinträge, deren Name kein Shell-Bezeichner ist (`A.B`),
+  entfernt `env -u` vor psql. TLS: nur `?sslmode=…` in den URLs; für
+  `verify-ca`/`verify-full` nennt `TCMS_DB_SSLROOTCERT` die CA-Datei
+  (absoluter Pfad) oder `system` (nur mit `verify-full`), psql erhält sie als
+  `PGSSLROOTCERT`; ohne sie bricht der Läufer vor jeder Verbindung ab, statt
+  auf einen undokumentierten Pfad im Heimatverzeichnis zu hoffen. (3) Prüfung
   (`betrieb/pruefung.sql`): `tcms_app` kein Superuser, NOBYPASSRLS, keine
   Mitgliedschaft, besitzt nichts, kein TRUNCATE/REFERENCES/TRIGGER, Audit nur
   anhängen; ENABLE+FORCE RLS mit Policy auf allen Tabellen außer Ledger und

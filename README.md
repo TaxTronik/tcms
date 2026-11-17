@@ -16,7 +16,7 @@ Freigabe per E-Mail-Code und ein Mandantenportal.
 
 - Node.js 24 (`.nvmrc`; mindestens 22.12)
 - pnpm 12.14.0 – `corepack enable` oder `npm install -g pnpm@12.14.0`
-- Docker Desktop (für PostgreSQL 16)
+- Docker Desktop (für PostgreSQL 18, dasselbe Image per Digest wie CI und Betrieb)
 
 ## Schnellstart (Windows, PowerShell)
 
@@ -35,14 +35,22 @@ pnpm dev                             # http://localhost:3100
 und erzeugt `SESSION_SECRET` und `TCMS_CODE_SCHLUESSEL` mit `node:crypto`, wo der Wert fehlt, leer
 oder ein Platzhalter ist. Vorhandene gültige Werte bleiben unverändert (ein neuer Code-Schlüssel ließe
 offene Codes ablaufen); die Datei hat danach Modus 0600, und die Ausgabe nennt nur Namen, nie Werte.
-Das Skript bricht ab mit `NODE_ENV=production`, wenn `.env` ein Symlink ist, wenn git sie versioniert
-oder nicht ignoriert, oder wenn ein eigener Wert ungültig ist (nichts wird überschrieben). Für
+Unter Windows gibt es keinen Modus 0600 (chmod setzt dort nur das Schreibschutz-Attribut): Den Zugriff
+regeln die NTFS-Rechte des Verzeichnisses, das Repo gehört deshalb ins eigene Benutzerprofil; die
+Ausgabe des Skripts sagt das, statt einen Modus zu behaupten. Das Skript bricht ab mit
+`NODE_ENV=production`, wenn `.env` ein Symlink ist, wenn git sie (oder die Temporärdatei
+`.env.tmp-…` des atomaren Schreibens) versioniert oder nicht ignoriert – `.gitignore` ignoriert jede
+`.env*` außer `.env.example` –, oder wenn ein eigener Wert ungültig ist (nichts wird überschrieben). Für
 `pnpm api` bleiben `TCMS_SERVICE_TOKENS` und `TCMS_ACTOR_PUBLIC_KEYS` von Hand zu setzen (siehe
 „Dienst (headless)“).
 
 `pnpm db:seed` setzt die Datenbank jedes Mal vollständig zurück (alle Tenants) und bricht mit
 `NODE_ENV=production` ab. Bestehende Volumes aus der Zeit vor dem Umbau einmal löschen
-(`docker compose down -v`), damit das Init-Skript die Rollen anlegt.
+(`docker compose down -v`), damit das Init-Skript die Rollen anlegt. Seit der Umstellung auf
+PostgreSQL 18 nutzt `docker compose` ein neues Volume (`tcms-pg18`, Datenverzeichnis unter
+`/var/lib/postgresql/18/docker`); das alte Volume mit den Daten von PostgreSQL 16 wird nicht
+gelesen und lässt sich mit `docker volume rm <projekt>_tcms-pg` entfernen. Danach einmal
+`pnpm db:deploy` und `pnpm db:seed`.
 
 ## Anmelden in der Demo
 
@@ -86,7 +94,7 @@ schreibgeschützt ansehen.
 
 | Befehl                | Zweck                                                                     |
 | --------------------- | ------------------------------------------------------------------------- |
-| `pnpm env:lokal`      | lokale `.env` anlegen bzw. ergänzen (Geheimnisse zufällig, Modus 0600)    |
+| `pnpm env:lokal`      | lokale `.env` anlegen bzw. ergänzen (Geheimnisse zufällig, Modus 0600¹)   |
 | `pnpm dev`            | Entwicklungsserver der Demo auf Port 3100                                 |
 | `pnpm build`          | Builds von `apps/web` (Next.js) und `apps/api` (Bundle `dist/server.mjs`) |
 | `pnpm start`          | Produktionsserver der Demo                                                |
@@ -98,6 +106,8 @@ schreibgeschützt ansehen.
 | `pnpm db:seed`        | Datenbank leeren und Demodaten laden                                      |
 | `pnpm image:pruefen`  | Dockerfile und Build-Kontext statisch prüfen                              |
 | `pnpm vertrag:export` | Commit und SHA-256 der Vertrags- bzw. Domain-Dateien (`VENDOR.json`)      |
+
+¹ Unter Windows ohne Modus; dort schützen die NTFS-Rechte des Verzeichnisses.
 
 ## Datenbank
 
@@ -161,6 +171,10 @@ DB_TESTS=1 \
 ```
 
 `DATABASE_SUPERUSER_URL` (optional) prüft zusätzlich die Abweisung einer Superuser-Verbindung.
+
+Alle DB-Tests wie in CI (db, service mit den Red-Team-Tests, api, web) laufen nach `pnpm db:seed`
+nacheinander mit `DB_TESTS=1 DATABASE_URL=… DATABASE_OWNER_URL=… pnpm -r
+--workspace-concurrency=1 run test`; ohne `DB_TESTS=1` überspringen sie sich still.
 
 Abweisungen der Datenbank prüfen alle DB-Tests über `@tcms/db/testhilfe`
 (`packages/db/src/__tests__/db-fehler.ts`): `dbAbgewiesen(aufruf, regel.check('Tabelle', 'Name'))`
@@ -297,7 +311,8 @@ await fetch(`<interne-url>${pfad}`, {
 Antworten: `{ ok: true, daten }` bzw. `{ ok: false, fehler: { code, meldung?, felder?, grund?, konflikt? } }`;
 `grund` steht genau bei `403 NICHT_BERECHTIGT` (feste Liste `VERWEIGERUNG_GRUENDE`, je Wert eine
 Rechtefunktion, nie bei `404`). `konflikt` (feste Liste `KONFLIKT_GRUENDE`) steht an jedem `409` der
-Endpunkte, deren Registereintrag `konflikte` nennt (Code anfordern und Freigeben im Portal), und sonst
+Endpunkte, deren Registereintrag `konflikte` nennt (Code anfordern und Freigeben im Portal sowie die
+Portal-Meldung), und sonst
 nie; `fehlerSchemaFuer(ENDPUNKTE.<name>)` prüft das, der Dienst antwortet bei einer Abweichung
 `500 INTERN`. Jeder
 Fehler bei Token, Bestätigung oder `jti` ergibt dieselbe Antwort `401 NICHT_AUTHENTIFIZIERT` (mit
@@ -582,9 +597,19 @@ docker build --target migrate -t <praefix>/tcms-migrate:1.2.3 .
 (Rolle `tcms_owner`, Passwort darf fehlen), `TCMS_DB_OWNER_PASSWORD` und `TCMS_DB_APP_PASSWORD`. Er ist
 idempotent und bricht ab, wenn eine angewandte Migration eine andere Prüfsumme hat, eine Migration
 unvollständig ist, die Datenbank Migrationen kennt, die das Image nicht kennt, oder die Prüfung scheitert
-(Exit 64 Konfiguration, 69 psql fehlt oder ist älter als 15, 2 Bootstrap, 3 Migration, 4 Prüfung).
-Passwörter gehen nur über die Umgebung an psql, nie in eine Kommandozeile oder die Ausgabe. Lokal braucht
-er psql ≥ 15 (`\getenv`; ein älteres psql weist er vor jeder Verbindung ab):
+(Exit 64 Konfiguration, 65 unzulässige Migration, 69 psql fehlt oder ist älter als 15, 2 Bootstrap,
+3 Migration, 4 Prüfung). Jede `migration.sql` liest er genau einmal und prüft, hasht und führt dieselben
+Bytes aus; vor jeder Verbindung weist er Backslashes (psql-Metabefehle), NUL, `CONCURRENTLY`, offene
+Literale oder Kommentare am Dateiende und jede Transaktionssteuerung auf oberster Ebene ab (`BEGIN`,
+`START`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, `SAVEPOINT`, `RELEASE`, `PREPARE TRANSACTION`, auch
+hinter einem `;` derselben Zeile; Literale, Kommentare und plpgsql-Rümpfe zählen nicht). Außerhalb der
+Migrationstransaktionen ist seine Sitzung schreibgeschützt: Verließe eine Migration ihre Transaktion
+doch, scheiterte jede weitere Änderung, und es entstünde kein Ledger-Eintrag (Exit 3).
+Passwörter gehen nur über die Umgebung an psql, nie in eine Kommandozeile oder die Ausgabe; psql erbt
+sonst nur `PATH` und die Locale. TLS: `?sslmode=…` in beiden URLs (kein anderer Parameter); für
+`verify-ca`/`verify-full` nennt `TCMS_DB_SSLROOTCERT` die CA-Datei (absoluter Pfad, lesbar) oder
+`system` (CA-Speicher des Systems, nur mit `verify-full`), sonst bricht er vor jeder Verbindung ab.
+Lokal braucht er psql ≥ 15 (`\getenv`; ein älteres psql weist er vor jeder Verbindung ab):
 
 ```bash
 TCMS_DB_SUPERUSER_URL=postgresql://postgres@localhost:5433/tcms \
@@ -592,7 +617,11 @@ TCMS_DB_SUPERUSER_URL=postgresql://postgres@localhost:5433/tcms \
   TCMS_DB_OWNER_PASSWORD=… TCMS_DB_APP_PASSWORD=… bash packages/db/betrieb/migrate.sh
 ```
 
-Ohne Docker prüfbar: `pnpm image:pruefen` (Regeln für Dockerfile und `.dockerignore`) und
+Ohne Docker prüfbar: `pnpm image:pruefen` (Regeln für Dockerfile und `.dockerignore`: je Basisimage
+genau eine globale, per Digest gepinnte `ARG`, keine Parser-Direktive, kein `ADD`/Heredoc,
+`--from=` nur aus einem früheren Stage, in den ausgelieferten Stages genau ein `USER`/`CMD`
+bzw. `ENTRYPOINT`, keine `RUN`-Optionen und – heuristisch über den Anweisungstext – keine Werkzeuge
+oder Downloads) und
 `DATABASE_URL=<tcms_app> scripts/simuliere-image.sh <verzeichnis>` (Build-Schritte auf dem
 Build-Kontext, Start des Bundles mit `node`, Health, signierte Anfrage, `SIGTERM`). Ohne eigene
 Datenbank nimmt das Skript stattdessen den Superuser eines eigenen Test-Clusters und baut sich eine
@@ -617,9 +646,10 @@ ebenfalls clusterweite Rollenpasswörter und laufen daher nur auf Anforderung ge
 vitest run src/__tests__/migrate.db.test.ts` bzw. `TCMS_SIM_TESTS=1 TCMS_SIM_PGHOST=… TCMS_SIM_PGPORT=…
 TCMS_SIM_PGUSER=… pnpm --filter @tcms/api exec vitest run src/__tests__/simulation.test.ts`.
 
-CI (`.forgejo/workflows/ci.yml`): Lieferketten-Prüfung (`scripts/pruefe-lieferkette.sh`) vor jeder
-Installation, frozen Lockfile, Format, Typecheck, Tests ohne und mit PostgreSQL 18 (Datenbank aus
-`tcms-migrate`, zweimal), Laufzeit-Simulation, Sicherheit (`.forgejo/workflows/security.yml`: gitleaks,
+CI (`.forgejo/workflows/ci.yml`): Lieferketten-Prüfung (`scripts/pruefe-lieferkette.sh`: pnpm-Regeln,
+jede Abhängigkeit in jedem `package.json` und jeder Eintrag unter `overrides` mit exakter Version
+`X.Y.Z` bzw. `workspace:*`) vor jeder Installation, frozen Lockfile, Format, Typecheck, Tests ohne und mit PostgreSQL 18 (Datenbank aus
+`tcms-migrate`, zweimal; der Service lauscht nur auf localhost), Laufzeit-Simulation, Sicherheit (`.forgejo/workflows/security.yml`: gitleaks,
 `pnpm audit --prod` blockierend ab „high“, ganzer Graph nicht blockierend; zusätzlich täglich um 03:47 UTC
 und von Hand), Build beider Images; auf
 Tags `v*` (gleich der Version von `apps/api`) Trivy-Gate, SBOM und Push nach

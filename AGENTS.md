@@ -356,9 +356,11 @@ vorhandenen Tokens aufsetzen.
 - Passwörter und Tokens nie als Kommandozeilenargument, nie in Logs oder
   Ausgaben (auch nicht in Skripten, Tests und CI).
 - Lokale Geheimnisse der Entwicklung (`SESSION_SECRET`, `TCMS_CODE_SCHLUESSEL`) erzeugt nur
-  `pnpm env:lokal` (`scripts/lokale-env.mjs`): `.env` im Repo-Root, Modus 0600, atomar
+  `pnpm env:lokal` (`scripts/lokale-env.mjs`): `.env` im Repo-Root, Modus 0600 (unter Windows
+  gibt es keinen; dort schützen die NTFS-Rechte, und das Skript behauptet keinen Modus), atomar
   geschrieben, Werte nie ausgegeben, vorhandene gültige Werte unverändert, Abbruch bei
-  Symlink, `NODE_ENV=production` oder wenn git `.env` versioniert bzw. nicht ignoriert.
+  Symlink, `NODE_ENV=production` oder wenn git `.env` oder die Temporärdatei `.env.tmp-…`
+  versioniert bzw. nicht ignoriert (`.gitignore`: `.env*` außer `.env.example`).
 - Neue Abhängigkeiten nur mit exakter Version; `pnpm-workspace.yaml` bleibt so
   streng, wie `scripts/pruefe-lieferkette.sh` verlangt.
 - Keine rohen unsichtbaren oder bidirektionalen Zeichen in versionierten Dateien
@@ -403,13 +405,17 @@ vorhandenen Tokens aufsetzen.
 
 ```
 sh scripts/pruefe-lieferkette.sh
+pnpm format:check
 pnpm typecheck
 pnpm test
-DB_TESTS=1 DATABASE_URL=… DATABASE_OWNER_URL=… pnpm --filter @tcms/db test
-DB_TESTS=1 DATABASE_URL=… DATABASE_OWNER_URL=… pnpm --filter @tcms/api test
+DB_TESTS=1 DATABASE_URL=… DATABASE_OWNER_URL=… pnpm -r --workspace-concurrency=1 run test
 pnpm build
 pnpm image:pruefen
 ```
+
+Die DB-Tests laufen wie in CI für alle Pakete (db, service mit den Red-Team-Tests, api, web) gegen
+eine migrierte und geseedete Datenbank auf PostgreSQL 18 (`docker compose up -d`, wie CI und Betrieb);
+ohne `DB_TESTS=1` werden sie still übersprungen.
 
 Änderungen am Migrationsläufer zusätzlich mit
 `TCMS_MIGRATE_TESTS=1 TCMS_MIGRATE_TEST_SUPERUSER_URL=…` gegen eine Testinstanz
