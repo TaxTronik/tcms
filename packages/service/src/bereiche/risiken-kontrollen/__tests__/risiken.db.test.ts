@@ -763,6 +763,14 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
 
   // ---------------------------------------------------------------------------
   describe('Freigabe des Inventars', () => {
+    /** Eingabe zum Freigeben: je Risiko der gerade gesehene (offene) Stand. */
+    async function freigabe(...ids: string[]) {
+      const risiken = [];
+      for (const risikoId of ids)
+        risiken.push({ risikoId, standId: (await offenerStand(risikoId)).id });
+      return { mandantId: a.mandantId, risiken };
+    }
+
     /** Risiko auf BEWERTET setzen (neu bewerten mit geänderten Werten). */
     async function bewertet(code: string) {
       const id = risiko(code);
@@ -792,7 +800,7 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
       expect(ein.bearbeitet.map((x) => x.risikoId).sort()).toEqual([id1, id2].sort());
       // Selbst eingereicht → nicht freigeben.
       const selbst = await fehlerVon(
-        rufe(akt.hb, (ctx) => risikenFreigeben(ctx, { mandantId: a.mandantId, risikoIds: [id1] })),
+        rufe(akt.hb, async (ctx) => risikenFreigeben(ctx, await freigabe(id1))),
       );
       expect([selbst.code, selbst.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       const zurueck = await fehlerVon(
@@ -805,9 +813,7 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
         ),
       );
       expect([zurueck.code, zurueck.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
-      const frei = await rufe(akt.bt, (ctx) =>
-        risikenFreigeben(ctx, { mandantId: a.mandantId, risikoIds: [id1] }),
-      );
+      const frei = await rufe(akt.bt, async (ctx) => risikenFreigeben(ctx, await freigabe(id1)));
       expect(frei.bearbeitet).toEqual([{ risikoId: id1, code: codes[4]! }]);
       const zw = await rufe(akt.bt, (ctx) =>
         risikoZurueckweisen(ctx, {
@@ -859,22 +865,56 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
         risikenZurFreigabe(ctx, { mandantId: a.mandantId, risikoIds: [id] }),
       );
       const e = await gleichzeitig(
-        () =>
-          rufe(akt.bt, (ctx) => risikenFreigeben(ctx, { mandantId: a.mandantId, risikoIds: [id] })),
-        () =>
-          rufe(
-            akt.admin,
-            (ctx) => risikenFreigeben(ctx, { mandantId: a.mandantId, risikoIds: [id] }),
-            zweite,
-          ),
+        () => rufe(akt.bt, async (ctx) => risikenFreigeben(ctx, await freigabe(id))),
+        () => rufe(akt.admin, async (ctx) => risikenFreigeben(ctx, await freigabe(id)), zweite),
       );
       expect(e).toEqual({ erfolge: 1, codes: ['KONFLIKT'] });
       expect(await audit(id, 'tcms.risiko.freigegeben')).toHaveLength(1);
     });
 
+    it('freigeben nur auf dem gesehenen Stand; Audit nennt den Stand (Befund 20)', async () => {
+      const codes = [...a.risiken.keys()];
+      const id = await bewertet(codes[8] ?? codes[0]!);
+      await rufe(akt.hb, (ctx) =>
+        risikenZurFreigabe(ctx, { mandantId: a.mandantId, risikoIds: [id] }),
+      );
+      // B öffnet die Ansicht (Stand v), A bewertet neu und reicht erneut ein.
+      const ansicht = await freigabe(id);
+      await bewertet(codes[8] ?? codes[0]!);
+      await rufe(akt.hb, (ctx) =>
+        risikenZurFreigabe(ctx, { mandantId: a.mandantId, risikoIds: [id] }),
+      );
+      const alt = await fehlerVon(rufe(akt.bt, (ctx) => risikenFreigeben(ctx, ansicht)));
+      expect(alt.code).toBe('KONFLIKT');
+      expect((await lies((tx) => tx.risiko.findUniqueOrThrow({ where: { id } }))).freigabe).toBe(
+        'ZUR_FREIGABE',
+      );
+      const aktuell = await freigabe(id);
+      const ok = await rufe(akt.bt, (ctx) => risikenFreigeben(ctx, aktuell));
+      expect(ok.bearbeitet.map((x) => x.risikoId)).toEqual([id]);
+      const ev = await audit(id, 'tcms.risiko.freigegeben');
+      expect(ev.at(-1)!.detail).toMatchObject({ standId: aktuell.risiken[0]!.standId });
+      const eingereicht = await audit(id, 'tcms.risiko.zur_freigabe');
+      expect(eingereicht.at(-1)!.detail).toMatchObject({ standId: aktuell.risiken[0]!.standId });
+      // Ohne gesehenen Stand bzw. mit doppeltem Risiko → UNGUELTIG.
+      for (const eingabe of [
+        { mandantId: a.mandantId, risikoIds: [id] },
+        { mandantId: a.mandantId, risiken: [{ risikoId: id }] },
+        { mandantId: a.mandantId, risiken: [...aktuell.risiken, ...aktuell.risiken] },
+      ]) {
+        const f = await fehlerVon(
+          rufe(akt.bt, (ctx) => risikenFreigeben(ctx, eingabe as unknown as typeof aktuell)),
+        );
+        expect(f.code).toBe('UNGUELTIG');
+      }
+    });
+
     it('Rechte negativ', async () => {
       await rechteNegativ((ctx, mandantId) =>
         risikenZurFreigabe(ctx, { mandantId, risikoIds: [risiko()] }),
+      );
+      await rechteNegativ((ctx, mandantId) =>
+        risikenFreigeben(ctx, { mandantId, risiken: [{ risikoId: risiko(), standId: 'x' }] }),
       );
       await rechteNegativ((ctx, mandantId) =>
         risikoZurueckweisen(ctx, { mandantId, risikoId: risiko(), begruendung: BEGRUENDUNG }),

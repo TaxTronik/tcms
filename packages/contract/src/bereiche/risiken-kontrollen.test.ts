@@ -1,12 +1,16 @@
 // =============================================================================
-// Vertrag „risiken-kontrollen“: Übersteuerung aufheben (Befund 4) – Eingaben
-// strikt, Begründung ≥ 30 Zeichen; Antworten mit Aufhebung und Kennzeichen
-// „überholt“; Registereintrag.
+// Vertrag „risiken-kontrollen“: Inventar freigeben mit gesehenem Stand
+// (Befund 20) und Übersteuerung aufheben (Befund 4) – Eingaben strikt,
+// Begründung ≥ 30 Zeichen; Antworten mit Aufhebung und Kennzeichen „überholt“;
+// Registereinträge.
 // =============================================================================
 
 import { describe, expect, it } from 'vitest';
 import { ENDPUNKTE } from '../endpunkte';
 import {
+  RisikenFreigabeSchrittBodySchema,
+  RisikenFreigebenBodySchema,
+  RisikenFreigebenSchema,
   UebersteuerungAufgehobenSchema,
   UebersteuerungAufhebenBodySchema,
   UebersteuerungAufhebenSchema,
@@ -15,6 +19,37 @@ import {
 
 const BEGRUENDUNG = 'Begründung mit ausreichend vielen Zeichen für die Prüfung.';
 const MANDANT = '0b5f0c1e-8f9a-4a39-9d0e-6d3c3c1f2a10';
+
+describe('Inventar freigeben mit gesehenem Stand (Befund 20)', () => {
+  it('je Risiko risikoId und standId, ohne Dubletten; Einreichen bleibt bei risikoIds', () => {
+    const ok = {
+      risiken: [
+        { risikoId: 'r1', standId: 's1' },
+        { risikoId: 'r2', standId: 's2' },
+      ],
+    };
+    expect(RisikenFreigebenBodySchema.safeParse(ok).success).toBe(true);
+    expect(RisikenFreigebenSchema.safeParse({ mandantId: MANDANT, ...ok }).success).toBe(true);
+    for (const body of [
+      { risikoIds: ['r1'] },
+      { risiken: [] },
+      { risiken: [{ risikoId: 'r1' }] },
+      { risiken: [{ risikoId: 'r1', standId: '../s' }] },
+      { risiken: [{ risikoId: 'r1', standId: 's1', klasse: 'GERING' }] },
+      {
+        risiken: [
+          { risikoId: 'r1', standId: 's1' },
+          { risikoId: 'r1', standId: 's2' },
+        ],
+      },
+      { ...ok, risikoIds: ['r1'] },
+    ]) {
+      expect(RisikenFreigebenBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
+    }
+    expect(ENDPUNKTE.risikenFreigeben.bodySchema).toBe(RisikenFreigebenBodySchema);
+    expect(ENDPUNKTE.risikenFreigabeEinreichen.bodySchema).toBe(RisikenFreigabeSchrittBodySchema);
+  });
+});
 
 describe('Übersteuerung aufheben', () => {
   it('Eingabe: nur Begründung (≥ 30 Zeichen), Mandant und Objekt-ID', () => {
@@ -83,14 +118,14 @@ describe('Übersteuerung aufheben', () => {
     );
   });
 
-  it('Registereintrag: POST unter dem Mandanten, nur Kanzlei, ohne Query', () => {
+  it('Registereintrag: POST unter dem Mandanten, nur Kanzlei, Body-Schema', () => {
     const e = ENDPUNKTE.uebersteuerungAufheben;
     expect([e.methode, e.pfad]).toEqual([
       'POST',
       '/v1/mandanten/:mandantId/uebersteuerungen/:uebersteuerungId/aufheben',
     ]);
     expect(e.akteure).toEqual(['KANZLEI']);
-    expect('query' in e && e.query).toBeFalsy();
+    expect(e.bodySchema).toBe(UebersteuerungAufhebenBodySchema);
     expect(e.konflikte).toEqual([]);
   });
 });

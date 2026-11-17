@@ -153,12 +153,17 @@ export async function risikenFreigabeSchritt(_prev: Ergebnis, fd: FormData): Pro
   if (risikoIds.length === 0) return { fehler: 'Bitte mindestens ein Risiko auswählen.' };
   const aktion = feld(fd, 'aktion');
   if (aktion !== 'einreichen' && aktion !== 'freigeben') return { fehler: 'Unbekannter Schritt.' };
+  // Freigeben nur auf dem gesehenen Stand (TS-05): je Risiko ein Feld `standId:<id>`.
+  const risiken = risikoIds.map((risikoId) => ({
+    risikoId,
+    standId: feld(fd, `standId:${risikoId}`),
+  }));
   const r = await fuehreAus(
     mandantId,
     (ctx) =>
       aktion === 'einreichen'
         ? risikenZurFreigabe(ctx, { mandantId, risikoIds })
-        : risikenFreigeben(ctx, { mandantId, risikoIds }),
+        : risikenFreigeben(ctx, { mandantId, risiken }),
     { ungueltig: 'Bitte die Auswahl prüfen.', nichtGefunden: 'Risiko nicht gefunden.' },
   );
   if ('fehler' in r) return r;

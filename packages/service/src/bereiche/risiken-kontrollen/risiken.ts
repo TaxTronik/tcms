@@ -19,6 +19,7 @@ import {
   DienstFehler,
   nichtBerechtigt,
   RisikenFreigabeSchrittSchema,
+  RisikenFreigebenSchema,
   RisikoakzeptanzAnfordernSchema,
   RisikoBestaetigenSchema,
   RisikoNeuBewertenSchema,
@@ -30,6 +31,7 @@ import {
   type KontrollNeuplanung,
   type NeuBewertungErgebnis,
   type RisikenFreigabeSchritt,
+  type RisikenFreigeben,
   type RisikoakzeptanzAnfordern,
   type RisikoakzeptanzAngefordert,
   type RisikoBestaetigen,
@@ -765,12 +767,16 @@ export async function uebersteuerungAufheben(
 
 type Schritt = 'EINREICHEN' | 'FREIGEBEN';
 
+/**
+ * Ein Schritt für die Auswahl. `gesehen` (nur Freigeben) nennt je Risiko den
+ * Stand, den die freigebende Person gesehen hat (Befund 20).
+ */
 async function freigabeSchritt(
   ctx: DienstKontext,
-  eingabe: RisikenFreigabeSchritt,
+  e: { mandantId: string; risikoIds: string[] },
   schritt: Schritt,
+  gesehen?: ReadonlyMap<string, string>,
 ): Promise<FreigabeSchrittErgebnis> {
-  const e = pruefeEingabe(RisikenFreigabeSchrittSchema, eingabe);
   const mandantId = kanonisch(e.mandantId);
   pruefeBearbeiten(ctx.akteur, mandantId);
   return konfliktSicher(() =>
@@ -780,6 +786,9 @@ async function freigabeSchritt(
       await sperreRisiken(tx, programm.id, e.risikoIds);
       const risiken = await tx.risiko.findMany({
         where: { id: { in: e.risikoIds }, programmId: programm.id },
+        include: {
+          staende: { where: { gueltigBis: null }, orderBy: [{ version: 'asc' }, { id: 'asc' }] },
+        },
         orderBy: [{ code: 'asc' }, { id: 'asc' }],
       });
       const bearbeitet: FreigabeSchrittErgebnis['bearbeitet'] = [];
@@ -802,6 +811,9 @@ async function freigabeSchritt(
           ueberspringe(r, 'nicht zur Freigabe eingereicht');
         else if (schritt === 'FREIGEBEN' && !zweitePerson(ctx.akteur, r.freigabeEingereichtVon))
           ueberspringe(r, 'selbst eingereicht – zweite Person erforderlich', true);
+        // TS-05: nur die Bewertung, die die freigebende Person gesehen hat.
+        else if (gesehen && gesehen.get(r.id) !== r.staende[0]?.id)
+          ueberspringe(r, 'inzwischen neu bewertet – bitte neu laden');
         else {
           const z = await tx.risiko.updateMany({
             where: {
@@ -827,6 +839,7 @@ async function freigabeSchritt(
             programmId: programm.id,
             detail: {
               code: r.code,
+              standId: r.staende[0]?.id ?? null,
               ...(schritt === 'FREIGEBEN' ? { eingereichtVon: r.freigabeEingereichtVon } : {}),
             },
           });
@@ -843,19 +856,29 @@ async function freigabeSchritt(
 }
 
 /** Reicht bewertete Risiken zur Freigabe ein; andere Status werden übersprungen. */
-export function risikenZurFreigabe(
+export async function risikenZurFreigabe(
   ctx: DienstKontext,
   eingabe: RisikenFreigabeSchritt,
 ): Promise<FreigabeSchrittErgebnis> {
-  return freigabeSchritt(ctx, eingabe, 'EINREICHEN');
+  return freigabeSchritt(ctx, pruefeEingabe(RisikenFreigabeSchrittSchema, eingabe), 'EINREICHEN');
 }
 
-/** Gibt eingereichte Risiken frei – nur eine zweite Person (≠ einreichend). */
-export function risikenFreigeben(
+/**
+ * Gibt eingereichte Risiken frei – nur eine zweite Person (≠ einreichend) und
+ * je Risiko nur auf dem gesehenen Stand (`standId`, Befund 20); ein inzwischen
+ * neu bewertetes Risiko wird übersprungen.
+ */
+export async function risikenFreigeben(
   ctx: DienstKontext,
-  eingabe: RisikenFreigabeSchritt,
+  eingabe: RisikenFreigeben,
 ): Promise<FreigabeSchrittErgebnis> {
-  return freigabeSchritt(ctx, eingabe, 'FREIGEBEN');
+  const e = pruefeEingabe(RisikenFreigebenSchema, eingabe);
+  return freigabeSchritt(
+    ctx,
+    { mandantId: e.mandantId, risikoIds: e.risiken.map((r) => r.risikoId) },
+    'FREIGEBEN',
+    new Map(e.risiken.map((r) => [r.risikoId, r.standId])),
+  );
 }
 
 /** Weist ein eingereichtes Risiko zurück (zweite Person, Begründung); Status wieder „bewertet". */

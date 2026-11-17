@@ -828,6 +828,7 @@ export function RisikoDrawer({
             <div className="row-s">
               <AktionsForm action={risikenFreigabeSchritt} className="inline-form">
                 <input type="hidden" name="ids" value={r.id} />
+                <input type="hidden" name={`standId:${r.id}`} value={r.standId} />
                 <input type="hidden" name="mandantId" value={ctx.mandant.id} />
                 <input type="hidden" name="aktion" value="freigeben" />
                 <input type="hidden" name="stand" value={seite.standIso} />

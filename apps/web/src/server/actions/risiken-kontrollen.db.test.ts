@@ -175,15 +175,23 @@ describe.skipIf(!AKTIV)('Demo risiken-kontrollen gegen PostgreSQL', () => {
       form({ mandantId: T, ids: [r.id], aktion: 'einreichen' }),
     );
     expect(ein?.ok).toContain('zur Freigabe eingereicht');
+    // Freigeben mit dem gesehenen Risikostand (TS-05, Befund 20).
+    const gesehen = (await risikoMitStand(r.code)).staende[0]!.id;
+    const freigeben = { mandantId: T, ids: [r.id], aktion: 'freigeben' };
     const selbst = await R.risikenFreigabeSchritt(
       null,
-      form({ mandantId: T, ids: [r.id], aktion: 'freigeben' }),
+      form({ ...freigeben, [`standId:${r.id}`]: gesehen }),
     );
     expect(selbst?.fehler).toContain('zweite Person');
     als(DEMO_IDS.anna);
+    const veraltet = await R.risikenFreigabeSchritt(
+      null,
+      form({ ...freigeben, [`standId:${r.id}`]: s.id }),
+    );
+    expect(veraltet?.fehler).toContain('neu bewertet');
     const frei = await R.risikenFreigabeSchritt(
       null,
-      form({ mandantId: T, ids: [r.id], aktion: 'freigeben' }),
+      form({ ...freigeben, [`standId:${r.id}`]: gesehen }),
     );
     expect(frei?.ok).toContain('freigegeben');
   });

@@ -173,6 +173,7 @@ import {
   ProfilDatenSchema,
   ProfilGeaendertSchema,
   RisikenFreigabeSchrittBodySchema,
+  RisikenFreigebenBodySchema,
   RisikenKontrollenQuerySchema,
   RisikenListeSchema,
   RisikoakzeptanzAngefordertSchema,
@@ -794,7 +795,7 @@ export const ENDPUNKTE = register({
     methode: 'POST',
     pfad: `${M}/risiken-freigabe/freigeben`,
     params: MandantPfadSchema,
-    body: RisikenFreigabeSchrittBodySchema,
+    body: RisikenFreigebenBodySchema,
     antwort: FreigabeSchrittErgebnisSchema,
   },
   risikoZurueckweisen: {

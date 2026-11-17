@@ -181,6 +181,24 @@ const freigabeSchritt = {
 export const RisikenFreigabeSchrittBodySchema = z.object(freigabeSchritt).strict();
 export const RisikenFreigabeSchrittSchema = z.object({ mandantId, ...freigabeSchritt }).strict();
 
+/**
+ * Freigeben: je Risiko der gesehene Risikostand (TS-05, Befund 20). Die zweite
+ * Person gibt nur die Bewertung frei, die sie gesehen hat; ist inzwischen ein
+ * anderer Stand gültig, überspringt der Dienst das Risiko.
+ */
+const freigeben = {
+  risiken: z
+    .array(z.object({ risikoId: ObjektIdSchema, standId }).strict())
+    .min(1)
+    .max(MAX_RISIKEN_JE_SCHRITT)
+    .refine(
+      (rs) => new Set(rs.map((r) => r.risikoId)).size === rs.length,
+      'Risiko doppelt ausgewählt',
+    ),
+};
+export const RisikenFreigebenBodySchema = z.object(freigeben).strict();
+export const RisikenFreigebenSchema = z.object({ mandantId, ...freigeben }).strict();
+
 const zurueckweisen = { begruendung: BegruendungSchema };
 export const RisikoZurueckweisenBodySchema = z.object(zurueckweisen).strict();
 export const RisikoZurueckweisenSchema = z.object({ ...risiko, ...zurueckweisen }).strict();
@@ -451,6 +469,7 @@ export type UebersteuerungBeantragen = z.infer<typeof UebersteuerungBeantragenSc
 export type UebersteuerungEntscheiden = z.infer<typeof UebersteuerungEntscheidenSchema>;
 export type UebersteuerungAufheben = z.infer<typeof UebersteuerungAufhebenSchema>;
 export type RisikenFreigabeSchritt = z.infer<typeof RisikenFreigabeSchrittSchema>;
+export type RisikenFreigeben = z.infer<typeof RisikenFreigebenSchema>;
 export type RisikoZurueckweisen = z.infer<typeof RisikoZurueckweisenSchema>;
 export type RisikoakzeptanzAnfordern = z.infer<typeof RisikoakzeptanzAnfordernSchema>;
 export type DesignBeurteilen = z.infer<typeof DesignBeurteilenSchema>;
