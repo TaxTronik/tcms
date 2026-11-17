@@ -37,7 +37,7 @@ export const DF_MAX_BETRAG = 1e12;
 /** Obergrenze `groesse` eines Nachweises (Spalte INTEGER). */
 export const DF_MAX_NACHWEIS_BYTES = 2_147_483_647;
 
-/** Objekt-IDs des Tax-CMS (cuid): nur Kleinbuchstaben und Ziffern. */
+/** Objekt-IDs des Tax-CMS (cuid2, ältere Objekte cuid v1): nur Kleinbuchstaben und Ziffern. */
 const OBJEKT_ID = /^[a-z0-9]{1,64}$/;
 const objektId = () => z.string().regex(OBJEKT_ID, 'Ungültige ID');
 

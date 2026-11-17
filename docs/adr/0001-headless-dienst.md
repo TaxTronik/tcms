@@ -631,6 +631,15 @@ Kontexts innerhalb derselben Transaktion.
   Kettenprüfung verlangt sie lückenlos. Eine Änderung setzt UPDATE-Rechte voraus,
   die die Laufzeitrolle nicht hat. Der globale Schlüssel `seq` bleibt in der
   Datenbank lesbar (nur mit SQL, siehe 10.1).
+- **Objekt-IDs.** Prisma erzeugt die IDs im Client. Seit dem 17.11.2026 sind sie
+  cuid2 (`@default(cuid(2))`, ein Hash ohne ablesbare Bestandteile); cuid
+  Version 1 trug Zeitstempel, einen prozessweiten Zähler über alle Tenants und
+  einen Fingerabdruck des Hosts – derselbe Seitenkanal wie `seq` (Zahl der
+  zwischen zwei eigenen Objekten angelegten Zeilen anderer Kanzleien). Bereits
+  vergebene v1-IDs bleiben gültig und nennen weiter ihren Entstehungszeitpunkt
+  und Zählerstand; die Vertragsmuster nehmen beide Formen an. Ein statischer Test
+  (`packages/db/src/__tests__/objekt-ids.test.ts`) weist `cuid()` ohne Version
+  ab.
 - **Vertraulichkeit (RT-01)** gilt für die Feststellung selbst. Texte außerhalb der
   Feststellung bleiben für alle mit Leserecht sichtbar: Beschreibung und Folgetexte
   eines Ereignisses, aus dem eine Feststellung entstand, der Ergebniskommentar einer

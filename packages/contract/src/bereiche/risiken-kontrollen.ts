@@ -42,7 +42,7 @@ const MAX_BEGRUENDUNG_ZEICHEN = 2000;
 export const MAX_RISIKEN_JE_SCHRITT = 200;
 
 const mandantId = z.uuid();
-/** ID eines Tax-CMS-Objekts (cuid). Nur harmlose Zeichen, begrenzte Länge. */
+/** ID eines Tax-CMS-Objekts (cuid2, ältere cuid v1). Nur harmlose Zeichen, begrenzte Länge. */
 const ObjektIdSchema = z
   .string()
   .min(1)

@@ -33,7 +33,7 @@ import {
 // Bausteine
 // ---------------------------------------------------------------------------
 
-/** IDs von Tax-CMS-Objekten (cuid, Kleinbuchstaben und Ziffern). */
+/** IDs von Tax-CMS-Objekten (cuid2, ältere Objekte cuid v1; Kleinbuchstaben und Ziffern). */
 export const ObjektIdSchema = z.string().regex(/^[a-z0-9]{16,40}$/, 'Ungültige ID');
 
 /** Kalendertag `YYYY-MM-DD` (nur gültige Tage). */
