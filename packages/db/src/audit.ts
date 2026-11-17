@@ -113,7 +113,11 @@ async function haengeFolgeAn(
   await tx.auditEvent.createMany({ data: zeilen });
 }
 
-/** Prüft die vollständige Kette des aktuellen Tenants (lesend). */
+/**
+ * Prüft die vollständige Kette des aktuellen Tenants (lesend, ohne Grenze) – nur für
+ * Tests (`@tcms/db/testhilfe`); zur Laufzeit prüft der Dienst seitenweise mit
+ * Zeitbudget (`pruefeAudit`).
+ */
 export async function pruefeAuditKette(tx: Tx): Promise<KettenPruefung> {
   const tenantId = await aktuellerTenant(tx);
   const alle = await tx.auditEvent.findMany({ where: { tenantId }, orderBy: { pos: 'asc' } });

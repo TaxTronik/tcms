@@ -9,8 +9,8 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PortalFreigabenViewSchema } from '@tcms/contract';
-import { pruefeAuditKette, type PrismaClient } from '@tcms/db';
-import { dbAbgewiesen, regel } from '@tcms/db/testhilfe';
+import type { PrismaClient } from '@tcms/db';
+import { dbAbgewiesen, pruefeAuditKette, regel } from '@tcms/db/testhilfe';
 import {
   fordereBeschreibungsfreigabeAn,
   gibBeschreibungZurReview,

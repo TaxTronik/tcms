@@ -12,7 +12,8 @@ import {
   BeschreibungSnapshotSchema,
   BeschreibungViewSchema,
 } from '@tcms/contract';
-import { pruefeAuditKette, type PrismaClient } from '@tcms/db';
+import type { PrismaClient } from '@tcms/db';
+import { pruefeAuditKette } from '@tcms/db/testhilfe';
 import { pruefeSnapshot } from './bausteine';
 import {
   fordereBeschreibungsfreigabeAn,

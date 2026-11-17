@@ -483,7 +483,9 @@ function pruefeEingabe(eingabe: unknown): { mandantId: string; stand: string | u
 }
 
 /**
- * Was der Kontext je Programm aus der Datenbank braucht (eine Abfrage, auch für Blöcke).
+ * Was der Kontext je Programm aus der Datenbank braucht (eine Abfrage, auch für Blöcke);
+ * große Spalten, die `berechne` nicht liest (`snapshot` der Beschreibungsversionen,
+ * Schritte und Werte der Durchführungen), bleiben in der Datenbank.
  * Jede Liste in fester Reihenfolge mit der ID als letzter Stufe (Verknüpfungen: der
  * andere Schlüssel): Ohne ORDER BY hinge sie vom Abfrageplan ab, Einzel- und
  * Blockabfrage lieferten verschiedene Reihenfolgen, und Bausteine eingefrorener
@@ -508,9 +510,29 @@ const PROGRAMM_INHALT = {
     include: {
       staende: { orderBy: [{ version: 'asc' }, { id: 'asc' }] },
       risiken: { orderBy: { risikoId: 'asc' } },
+      // Nur die Felder, die `berechne` liest – ohne Schritte, Werte und Texte der Durchführung.
       durchfuehrungen: {
         orderBy: [{ periodeVon: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
-        include: { _count: { select: { nachweise: { where: { entferntAm: null } } } } },
+        select: {
+          id: true,
+          kontrolleStandId: true,
+          periodeLabel: true,
+          periodeVon: true,
+          periodeBis: true,
+          faelligAm: true,
+          status: true,
+          ausserplanmaessig: true,
+          anlass: true,
+          durchgefuehrtVon: true,
+          begonnenAm: true,
+          eingereichtAm: true,
+          mandantBestaetigtVon: true,
+          gegengezeichnetVon: true,
+          abgeschlossenAm: true,
+          entfallenAm: true,
+          createdAt: true,
+          _count: { select: { nachweise: { where: { entferntAm: null } } } },
+        },
       },
     },
   },
@@ -526,7 +548,26 @@ const PROGRAMM_INHALT = {
     orderBy: [{ gemeldetAm: 'desc' }, { id: 'desc' }],
   },
   laender: { orderBy: [{ land: 'asc' }, { stand: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] },
-  beschreibungen: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
+  // Ohne den eingefrorenen Inhalt (`snapshot`): Den liest nur der Lesepfad der Beschreibung.
+  beschreibungen: {
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: {
+      id: true,
+      nummer: true,
+      status: true,
+      abschnitte: true,
+      createdAt: true,
+      erstelltVon: true,
+      reviewAngefordertVon: true,
+      reviewAngefordertAm: true,
+      reviewVon: true,
+      reviewAm: true,
+      freigabeAngefordertAm: true,
+      freigegebenVon: true,
+      freigegebenAm: true,
+      snapshotSha256: true,
+    },
+  },
 } as const satisfies Prisma.TcmsProgrammInclude;
 
 type ProgrammRoh = Prisma.TcmsProgrammGetPayload<{ include: typeof PROGRAMM_INHALT }>;

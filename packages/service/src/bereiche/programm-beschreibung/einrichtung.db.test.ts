@@ -8,7 +8,8 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { EinrichtungViewSchema } from '@tcms/contract';
-import { pruefeAuditKette, type PrismaClient } from '@tcms/db';
+import type { PrismaClient } from '@tcms/db';
+import { pruefeAuditKette } from '@tcms/db/testhilfe';
 import { ladeEinrichtung, legeProgrammAn, speichereEinrichtungsschritt } from './einrichtung';
 import {
   auditZu,

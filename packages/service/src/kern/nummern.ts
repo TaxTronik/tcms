@@ -3,7 +3,9 @@
 // apps/web/src/server/nummern.ts. Alle Vergaben laufen in der Transaktion der
 // jeweiligen Operation (`ctx.tx` bzw. `tx` aus `mitAudit`) und serialisieren
 // sich über einen Advisory-Lock je Tenant und Nummernkreis (TS-08: kein
-// globaler Lock). Unter RLS sieht max + 1 nur die Nummern des eigenen Tenants;
+// globaler Lock). Das Maximum rechnet die Datenbank (keine Liste aller
+// Nummern); laufende Nummern, die keine reine Ziffernfolge sind, zählen
+// nicht. Unter RLS sieht max + 1 nur die Nummern des eigenen Tenants;
 // die eindeutigen Schlüssel (tenant_id, nummer) bzw. (tenant_id,
 // wiedervorlageNr) sichern ab.
 // =============================================================================
@@ -18,15 +20,13 @@ export async function naechsteEreignisnummern(
 ): Promise<string[]> {
   await tenantSperre(tx, 'nummer.ereignis');
   const praefix = `${jahr}-T-`;
-  const vorhandene = await tx.ereignis.findMany({
-    where: { nummer: { startsWith: praefix } },
-    select: { nummer: true },
-    orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
-  });
-  let max = vorhandene.reduce(
-    (m, e) => Math.max(m, Number.parseInt(e.nummer.slice(praefix.length), 10) || 0),
-    0,
-  );
+  // Höchste laufende Nummer des Jahres in der Datenbank (nicht alle Nummern lesen).
+  const [z] = await tx.$queryRaw<{ max: number | null }[]>`
+    SELECT MAX(substr(nummer, ${praefix.length + 1}::int)::int) AS max
+      FROM "Ereignis"
+     WHERE starts_with(nummer, ${praefix})
+       AND substr(nummer, ${praefix.length + 1}::int) ~ '^[0-9]{1,9}$'`;
+  let max = z?.max ?? 0;
   return Array.from({ length: anzahl }, () => `${praefix}${String(++max).padStart(4, '0')}`);
 }
 
@@ -42,15 +42,12 @@ export async function naechsteFeststellungsnummer(
 ): Promise<string> {
   await tenantSperre(tx, 'nummer.feststellung');
   const praefix = `F-${jahr}-`;
-  const vorhandene = await tx.feststellung.findMany({
-    where: { programmId, nummer: { startsWith: praefix } },
-    select: { nummer: true },
-    orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
-  });
-  const max = vorhandene.reduce(
-    (m, f) => Math.max(m, Number.parseInt(f.nummer.slice(praefix.length), 10) || 0),
-    0,
-  );
+  const [z] = await tx.$queryRaw<{ max: number | null }[]>`
+    SELECT MAX(substr(nummer, ${praefix.length + 1}::int)::int) AS max
+      FROM "Feststellung"
+     WHERE "programmId" = ${programmId} AND starts_with(nummer, ${praefix})
+       AND substr(nummer, ${praefix.length + 1}::int) ~ '^[0-9]{1,9}$'`;
+  const max = z?.max ?? 0;
   return `${praefix}${String(max + 1).padStart(3, '0')}`;
 }
 

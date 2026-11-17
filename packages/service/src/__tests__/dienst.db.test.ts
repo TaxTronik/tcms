@@ -4,7 +4,8 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Akteur } from '@tcms/contract';
-import { mitTenant, pruefeAuditKette } from '@tcms/db';
+import { mitTenant } from '@tcms/db';
+import { pruefeAuditKette } from '@tcms/db/testhilfe';
 import { abgewiesenOhneDb } from '@tcms/db/testhilfe';
 import { verweisAblage } from '../ablage';
 import { mitAudit } from '../audit';

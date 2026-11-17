@@ -32,6 +32,9 @@
 // =============================================================================
 
 /** Fehler der Datenbank, wie der Server ihn meldet (ohne Codeausschnitt). */
+// Vollständige Kettenprüfung ohne Grenze: nur für Tests, nicht im Laufzeit-Index.
+export { pruefeAuditKette } from '../audit';
+
 export interface DbFehler {
   /** SQLSTATE, z. B. `23514` (CHECK), `23505` (eindeutig), `42501` (Recht, RLS), `P0001` (Trigger). */
   readonly sqlstate: string;
