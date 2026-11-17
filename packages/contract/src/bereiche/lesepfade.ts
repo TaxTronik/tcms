@@ -223,6 +223,10 @@ const risikoSicht = z
           beantragtAm: zeitpunkt,
           entschiedenVon: personId.nullable(),
           entschiedenAm: zeitpunkt.nullable(),
+          aufgehobenVon: personId.nullable(),
+          aufgehobenAm: zeitpunkt.nullable(),
+          /** Freigegeben gegen einen anderen als den heute berechneten Wert: nicht wirksam. */
+          ueberholt: z.boolean(),
         })
         .strict(),
     ),

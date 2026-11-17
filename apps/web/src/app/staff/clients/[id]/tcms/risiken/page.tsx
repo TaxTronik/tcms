@@ -247,6 +247,8 @@ export default async function Risikoinventar({
                           : `Status ${RISIKO_FREIGABE_LABEL[r.freigabe]}`
                     }
                   />
+                  {/* Gesehener Risikostand: Freigeben nur auf diesem Stand (TS-05). */}
+                  <input type="hidden" name={`standId:${r.id}`} value={r.standId} />
                 </td>
               ) : null}
               <td style={{ ...P, whiteSpace: 'nowrap' }}>

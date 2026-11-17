@@ -6,10 +6,12 @@
 // `@tcms/domain`, Kontrollvorlagen aus `kern/kontroll-vorlage.ts`.
 //
 // TS-05: Beide Operationen sperren zuerst das Programm des Mandanten
-// (SELECT … FOR UPDATE), dann betroffene Risiken und Kontrollen (Reihenfolge
-// Programm → Risiken → Kontrollen → Durchführungen). Der offene Profilstand
-// wird bedingt geschlossen; „ein offener Stand je Programm" und
-// (programmId, version) sind eindeutig – eine Gabelung ist unmöglich.
+// (SELECT … FOR NO KEY UPDATE), dann betroffene Risiken und Kontrollen
+// (Ordnung im Kopf von `gemeinsam.ts`: Programm → Risiken → Kontrollen →
+// Durchführungen → Nummernkreise). `profilAendern` sperrt alle Risiken des
+// Programms, bevor es das Kennzeichen „neu bewerten“ liest und setzt. Der
+// offene Profilstand wird bedingt geschlossen; „ein offener Stand je Programm"
+// und (programmId, version) sind eindeutig – eine Gabelung ist unmöglich.
 // =============================================================================
 
 import {
@@ -29,11 +31,14 @@ import {
   ereignisseFuerAenderung,
   ereignistyp,
   fmtDatum,
+  frequenzLabel,
+  gleicheFrequenz,
   gleichesProfil,
   kalenderjahr,
   katalogRisiko,
   kontrollenFuerRisiko,
   leiteFrequenzAb,
+  mindestensSoStreng,
   neuZuBewerten,
   perioden,
   profilDiff,
@@ -43,7 +48,6 @@ import {
   type FrageDiff,
   type Geschaeftsprofil,
   type RisikoFuerFrequenz,
-  type Turnus,
 } from '@tcms/domain';
 import { mitAudit, type Protokoll } from '../../audit';
 import {
@@ -64,13 +68,12 @@ import {
   konfliktSicher,
   pruefeBearbeiten,
   pruefeEingabe,
-  sperreDurchfuehrungen,
   sperreKontrollen,
   sperreProgramm,
   sperreRisiken,
 } from './gemeinsam';
 import { pruefeKanzleiPersonen } from './kontrollen';
-import { loescheUnberuehrte } from './planung';
+import { effektiveFrequenz, neuerKontrollStand, planeDurchfuehrungenNeu } from './planung';
 
 const TAG_MS = 86_400_000;
 
@@ -187,8 +190,21 @@ export async function profilAendern(
       });
 
       const diff = profilDiff(alt, profil);
-      const risiken = await tx.risiko.findMany({
+      // TS-05: Risiken des Programms sperren (Programm → Risiken nach ID) und das
+      // Kennzeichen „neu bewerten“ erst unter der Sperre lesen – eine parallele
+      // Neubewertung setzt es sonst nach unserem Lesen zurück.
+      const refs = await tx.risiko.findMany({
         where: { programmId: programm.id },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+      });
+      await sperreRisiken(
+        tx,
+        programm.id,
+        refs.map((r) => r.id),
+      );
+      const risiken = await tx.risiko.findMany({
+        where: { programmId: programm.id, id: { in: refs.map((r) => r.id) } },
         select: { id: true, code: true, entscheidung: true, inaktivAb: true, neuBewerten: true },
         orderBy: { id: 'asc' },
       });
@@ -224,7 +240,12 @@ export async function profilAendern(
         });
       }
 
-      const nummern = await naechsteEreignisnummern(tx, kalenderjahr(zeitpunkt), typen.length);
+      // Den Nummernkreis nur sperren, wenn Ereignisse entstehen (Ordnung: Nummernkreise
+      // nach den Zeilensperren).
+      const nummern =
+        typen.length > 0
+          ? await naechsteEreignisnummern(tx, kalenderjahr(zeitpunkt), typen.length)
+          : [];
       const ereignisse: string[] = [];
       for (const [i, t] of typen.entries()) {
         const kat = ereignistyp(t.typ);
@@ -354,77 +375,6 @@ async function rollenFuer(
 }
 
 /**
- * Plant künftige Durchführungen einer (gesperrten) Kontrolle nach einem neuen
- * Turnus. Entfernt werden nur unberührte Perioden, die nach heute beginnen
- * (unter Sperre gelesen und beim Löschen erneut geprüft); laufende und
- * abgeschlossene bleiben.
- */
-async function planeKuenftigNeu(
-  tx: Tx,
-  a: {
-    kontrolleId: string;
-    standId: string;
-    faelligNachTagen: number;
-    turnus: Turnus;
-    start: Date;
-    ende: Date;
-    heute: Date;
-    zeitpunkt: Date;
-  },
-): Promise<{ entfernt: number; angelegt: number }> {
-  await sperreDurchfuehrungen(tx, a.kontrolleId);
-  const alle = await tx.durchfuehrung.findMany({
-    where: { kontrolleId: a.kontrolleId },
-    include: {
-      _count: { select: { nachweise: true, feststellungen: true, nachkontrolleFuer: true } },
-    },
-    orderBy: [{ periodeVon: 'asc' }, { id: 'asc' }],
-  });
-  const entfernbar = alle.filter(
-    (d) =>
-      d.status === 'GEPLANT' &&
-      !d.ausserplanmaessig &&
-      d.begonnenAm == null &&
-      d.durchgefuehrtVon == null &&
-      d.eingereichtAm == null &&
-      d.abgeschlossenAm == null &&
-      d.entfallenBegruendung == null &&
-      d.entfallenVon == null &&
-      d.periodeVon.getTime() > a.heute.getTime() &&
-      d._count.nachweise === 0 &&
-      d._count.feststellungen === 0 &&
-      d._count.nachkontrolleFuer === 0,
-  );
-  await loescheUnberuehrte(
-    tx,
-    entfernbar.map((d) => d.id),
-  );
-  const ids = new Set(entfernbar.map((d) => d.id));
-  const bleibend = alle.filter((d) => !ids.has(d.id) && !d.ausserplanmaessig);
-  const letztesEnde = bleibend.reduce<Date | null>(
-    (m, d) => (!m || d.periodeBis.getTime() > m.getTime() ? d.periodeBis : m),
-    null,
-  );
-  const ab =
-    letztesEnde && addTage(letztesEnde, 1).getTime() > a.start.getTime()
-      ? addTage(letztesEnde, 1)
-      : a.start;
-  const neu = perioden(a.turnus, ab, a.ende).filter(
-    (p) =>
-      p.von.getTime() >= ab.getTime() ||
-      (letztesEnde == null && p.bis.getTime() >= a.start.getTime()),
-  );
-  if (neu.length) {
-    await tx.durchfuehrung.createMany({
-      data: neu.map((p) =>
-        geplanteDurchfuehrung(a.kontrolleId, a.standId, a.faelligNachTagen, p, a.zeitpunkt),
-      ),
-    });
-  }
-  return { entfernt: entfernbar.length, angelegt: neu.length };
-}
-
-/**
  * Nimmt ein aus dem aktuellen Profil vorgeschlagenes Katalogrisiko ins
  * Inventar auf (deterministischer Vorschlag mit Grund, AGENTS.md Regel 7):
  * Risiko mit Katalogstand anlegen bzw. Ablehnung aufheben, passende
@@ -457,15 +407,23 @@ export async function vorgeschlagenesRisikoAufnehmen(
           ? [{ id: e.verantwortliche.vertretung.id, feld: 'verantwortliche.vertretung' }]
           : []),
       ]);
-      // Nur deterministische Vorschläge des offenen Profilstands (mit Grund).
-      const profilStand = await tx.profilStand.findFirst({
-        where: { programmId: programm.id, gueltigBis: null },
-        orderBy: [{ gueltigAb: 'desc' }, { id: 'desc' }],
+      // Nur deterministische Vorschläge (mit Grund): des offenen Profilstands (auch
+      // eines im Voraus erfassten, wie die Profilseite der Demo) oder des heute
+      // gültigen Stands, den der Lesepfad `ladeProfil.vorschlaege` nennt (Befund 14).
+      const staende = await tx.profilStand.findMany({
+        where: { programmId: programm.id },
+        orderBy: [{ gueltigAb: 'desc' }, { id: 'asc' }],
       });
-      if (!profilStand) throw konflikt('Kein Profilstand vorhanden.');
-      const vorschlag = schlageRisikenVor(
-        profilStand.antworten as unknown as Geschaeftsprofil,
-      ).find((v) => v.code === e.code);
+      const offen = staende.find((s) => s.gueltigBis == null);
+      if (!offen) throw konflikt('Kein Profilstand vorhanden.');
+      const heuteGueltig = gueltigerStand(staende, zeitpunkt);
+      const vorschlagAus = (s: (typeof staende)[number] | undefined) =>
+        s
+          ? schlageRisikenVor(s.antworten as unknown as Geschaeftsprofil).find(
+              (v) => v.code === e.code,
+            )
+          : undefined;
+      const vorschlag = vorschlagAus(offen) ?? vorschlagAus(heuteGueltig);
       if (!vorschlag) {
         throw new DienstFehler(
           'UNGUELTIG',
@@ -544,18 +502,14 @@ export async function vorgeschlagenesRisikoAufnehmen(
         });
         risikoId = neu.id;
       }
-      protokolle.push({
+      // Das Detail nennt am Ende auch die verknüpften und neuen Kontrollen (Befund 35).
+      const aufgenommen: Protokoll = {
         aktion: 'tcms.risiko.aufgenommen',
         objektTyp: 'Risiko',
         objektId: risikoId,
         programmId: programm.id,
-        detail: {
-          code: e.code,
-          vorschlagsgrund: vorschlag.grund,
-          vorher: vorhanden ? vorhanden.entscheidung : null,
-          quelle: 'Profilvorschlag',
-        },
-      });
+      };
+      protokolle.push(aufgenommen);
 
       // --- Betroffene Kontrollen sperren, dann unter Sperre lesen ---
       const kandidaten = kontrollenFuerRisiko(e.code);
@@ -636,38 +590,123 @@ export async function vorgeschlagenesRisikoAufnehmen(
             !(k.entfallenAb && k.entfallenAb.getTime() <= zeitpunkt.getTime()),
         );
         if (bestehend) {
-          if (!bestehend.risiken.some((x) => x.risikoId === risikoId)) {
+          const neuVerknuepft = !bestehend.risiken.some((x) => x.risikoId === risikoId);
+          if (neuVerknuepft) {
             await tx.risikoKontrolle.create({ data: { risikoId, kontrolleId: bestehend.id } });
             verknuepft.push(kk.code);
           }
-          const stand = gueltigerStand(bestehend.staende, zeitpunkt);
+          let stand = gueltigerStand(bestehend.staende, zeitpunkt);
           if (!stand) continue;
-          const vorlage = { turnus: stand.vorlageTurnus, anlass: stand.vorlageAnlass };
           const idZuCode = new Map([...risikoIdJe.entries()].map(([c, id]) => [id, c]));
           const verkn = (m: Map<string, RisikoFuerFrequenz>) =>
             [...new Set([...bestehend.risiken.map((x) => idZuCode.get(x.risikoId)), e.code])]
               .filter((c): c is string => !!c && m.has(c))
               .map((c) => m.get(c)!);
-          const vorher = leiteFrequenzAb(vorlage, verkn(ohneNeues), turnus).effektiv;
-          const nachher = leiteFrequenzAb(vorlage, verkn(bruttoJe), turnus).effektiv;
-          if (stand.abweichungTurnus == null && vorher.turnus !== nachher.turnus && ende) {
-            const ergebnis = await planeKuenftigNeu(tx, {
+          // Effektive Frequenz wie in der Neubewertung (eine Regel, `planung.ts`): eine
+          // offene Abweichung zählt nicht, eine freigegebene schon.
+          const vorher = effektiveFrequenz(stand, verkn(ohneNeues), turnus);
+          let nachher = effektiveFrequenz(stand, verkn(bruttoJe), turnus);
+          const anlass = `Risiko ${e.code} aufgenommen`;
+          // Eine freigegebene Abweichung wurde gegen die bisherige Mindestfrequenz
+          // freigegeben; deckt sie die durch das neue Risiko geänderte nicht mehr, endet
+          // sie (Doppelbedingung wie in der Neubewertung, Befund 3).
+          if (
+            stand.abweichungTurnus != null &&
+            stand.abweichungFreigegebenVon &&
+            !gleicheFrequenz(vorher.ableitung.mindest, nachher.ableitung.mindest)
+          ) {
+            const abw = { turnus: stand.abweichungTurnus, anlass: stand.abweichungAnlass ?? false };
+            if (!mindestensSoStreng(abw, nachher.ableitung.mindest)) {
+              stand = await neuerKontrollStand(
+                tx,
+                stand,
+                {
+                  abweichungTurnus: null,
+                  abweichungAnlass: null,
+                  abweichungBegruendung: null,
+                  abweichungFreigegebenVon: null,
+                },
+                zeitpunkt,
+                ctx.akteur.id,
+              );
+              nachher = effektiveFrequenz(stand, verkn(bruttoJe), turnus);
+              protokolle.push({
+                aktion: 'tcms.kontrolle.abweichung_aufgehoben',
+                objektTyp: 'Kontrolle',
+                objektId: bestehend.id,
+                programmId: programm.id,
+                detail: {
+                  code: kk.code,
+                  abweichung: frequenzLabel(abw),
+                  mindest: frequenzLabel(nachher.ableitung.mindest),
+                  grund: anlass,
+                },
+              });
+            }
+          }
+          // Befund 35: Verknüpfung und Frequenzänderung stehen in der Spur der Kontrolle.
+          if (neuVerknuepft) {
+            protokolle.push({
+              aktion: 'tcms.kontrolle.risiko_verknuepft',
+              objektTyp: 'Kontrolle',
+              objektId: bestehend.id,
+              programmId: programm.id,
+              detail: {
+                code: kk.code,
+                risiko: e.code,
+                risikoId,
+                frequenz: {
+                  vorher: frequenzLabel(vorher.frequenz),
+                  nachher: frequenzLabel(nachher.frequenz),
+                },
+                anlass,
+              },
+            });
+          }
+          if (!gleicheFrequenz(vorher.frequenz, nachher.frequenz)) {
+            protokolle.push({
+              aktion: 'tcms.kontrolle.frequenz_geaendert',
+              objektTyp: 'Kontrolle',
+              objektId: bestehend.id,
+              programmId: programm.id,
+              detail: {
+                code: kk.code,
+                vorher: frequenzLabel(vorher.frequenz),
+                nachher: frequenzLabel(nachher.frequenz),
+                grund: nachher.ableitung.begruendung,
+                anlass,
+              },
+            });
+          }
+          if (vorher.frequenz.turnus !== nachher.frequenz.turnus) {
+            const plan = await planeDurchfuehrungenNeu(tx, {
+              programmId: programm.id,
               kontrolleId: bestehend.id,
+              code: kk.code,
               standId: stand.id,
               faelligNachTagen: stand.faelligNachTagen,
-              turnus: nachher.turnus,
-              start,
-              ende,
+              turnusVorher: vorher.frequenz.turnus,
+              turnusNachher: nachher.frequenz.turnus,
               heute,
               zeitpunkt,
             });
-            neuGeplant.push({
-              code: kk.code,
-              vorher: vorher.turnus,
-              nachher: nachher.turnus,
-              ...ergebnis,
-            });
-            anzahlDurchf += ergebnis.angelegt;
+            if (plan) {
+              neuGeplant.push({
+                code: kk.code,
+                vorher: plan.turnusVorher,
+                nachher: plan.turnusNachher,
+                entfernt: plan.entfernt.length,
+                angelegt: plan.angelegt.length,
+              });
+              anzahlDurchf += plan.angelegt.length;
+              protokolle.push({
+                aktion: 'tcms.kontrolle.neu_geplant',
+                objektTyp: 'Kontrolle',
+                objektId: bestehend.id,
+                programmId: programm.id,
+                detail: { ...plan, anlass },
+              });
+            }
           }
           continue;
         }
@@ -713,6 +752,14 @@ export async function vorgeschlagenesRisikoAufnehmen(
           },
         });
       }
+      aufgenommen.detail = {
+        code: e.code,
+        vorschlagsgrund: vorschlag.grund,
+        vorher: vorhanden ? vorhanden.entscheidung : null,
+        quelle: 'Profilvorschlag',
+        verknuepft,
+        neueKontrollen,
+      };
       if (neuGeplant.length) {
         protokolle.push({
           aktion: 'tcms.durchfuehrungen.neu_geplant',

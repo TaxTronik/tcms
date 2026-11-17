@@ -20,6 +20,7 @@ import {
   risikoBewertungBestaetigen,
   risikoNeuBewerten,
   risikoZurueckweisen,
+  uebersteuerungAufheben,
   uebersteuerungBeantragen,
   uebersteuerungEntscheiden,
 } from '../risiken';
@@ -512,10 +513,278 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
       );
       expect(unveraendert.status).toBe('BEANTRAGT');
     });
+
+    /** Werte, die die Bruttoklasse sicher ändern (KRITISCH bzw. GERING). */
+    async function andereBewertung(id: string) {
+      const alt = await offenerStand(id);
+      const d = await rufe(akt.bt, (ctx) =>
+        ladeRisiko(ctx, { mandantId: a.mandantId, risikoId: id }),
+      );
+      const hoch = d.risiko.bewertung.brutto.klasse !== 'KRITISCH';
+      return {
+        mandantId: a.mandantId,
+        risikoId: id,
+        standId: alt.id,
+        s: hoch ? ('H' as const) : ('N' as const),
+        w: hoch ? ('HAEUFIG' as const) : ('SELTEN' as const),
+        r: hoch ? (3 as const) : (1 as const),
+        gt: alt.gt,
+        begruendung: BEGRUENDUNG,
+      };
+    }
+
+    async function beantrage(id: string, akteur = akt.hb) {
+      const d = await rufe(akt.bt, (ctx) =>
+        ladeRisiko(ctx, { mandantId: a.mandantId, risikoId: id }),
+      );
+      const b = d.risiko.bewertung;
+      const klasse = (['GERING', 'MITTEL', 'HOCH', 'KRITISCH'] as const).find(
+        (k) => k !== b.nettoDesign.klasse && k !== b.wirksamDesign,
+      )!;
+      return rufe(akteur, (ctx) =>
+        uebersteuerungBeantragen(ctx, {
+          mandantId: a.mandantId,
+          risikoId: id,
+          sicht: 'DESIGN',
+          klasse,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+    }
+
+    it('geänderter berechneter Wert: Freigabe → KONFLIKT, freigegebene Übersteuerung überholt (Befund 4)', async () => {
+      const id = risiko([...a.risiken.keys()][4]);
+      // Antrag, danach Neubewertung: Die Begründung bezog sich auf einen anderen Wert.
+      const alt = await beantrage(id);
+      await rufe(akt.hb, async (ctx) => risikoNeuBewerten(ctx, await andereBewertung(id)));
+      const veraltet = await fehlerVon(
+        rufe(akt.bt, (ctx) =>
+          uebersteuerungEntscheiden(ctx, {
+            mandantId: a.mandantId,
+            uebersteuerungId: alt.uebersteuerungId,
+            entscheidung: 'FREIGEBEN',
+          }),
+        ),
+      );
+      expect(veraltet.code).toBe('KONFLIKT');
+      expect(
+        (
+          await lies((tx) =>
+            tx.uebersteuerung.findUniqueOrThrow({ where: { id: alt.uebersteuerungId } }),
+          )
+        ).status,
+      ).toBe('BEANTRAGT');
+      await rufe(akt.bt, (ctx) =>
+        uebersteuerungEntscheiden(ctx, {
+          mandantId: a.mandantId,
+          uebersteuerungId: alt.uebersteuerungId,
+          entscheidung: 'ABLEHNEN',
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      // Neuer Antrag, freigegeben – wirksam.
+      const neu = await beantrage(id);
+      await rufe(akt.bt, (ctx) =>
+        uebersteuerungEntscheiden(ctx, {
+          mandantId: a.mandantId,
+          uebersteuerungId: neu.uebersteuerungId,
+          entscheidung: 'FREIGEBEN',
+        }),
+      );
+      const vorher = await rufe(akt.bt, (ctx) =>
+        ladeRisiko(ctx, { mandantId: a.mandantId, risikoId: id }),
+      );
+      expect(vorher.risiko.bewertung.wirksamDesign).toBe(neu.klasse);
+      expect(
+        vorher.risiko.uebersteuerungen.find((u) => u.id === neu.uebersteuerungId),
+      ).toMatchObject({ status: 'FREIGEGEBEN', ueberholt: false });
+      // Neubewertung ändert den berechneten Wert: Die Freigabe deckt ihn nicht mehr.
+      await rufe(akt.hb, async (ctx) => risikoNeuBewerten(ctx, await andereBewertung(id)));
+      const nachher = await rufe(akt.bt, (ctx) =>
+        ladeRisiko(ctx, { mandantId: a.mandantId, risikoId: id }),
+      );
+      const b = nachher.risiko.bewertung;
+      expect(b.nettoDesign.klasse).not.toBe(neu.berechnet);
+      expect([b.uebersteuertDesign, b.wirksamDesign]).toEqual([false, b.nettoDesign.klasse]);
+      expect(
+        nachher.risiko.uebersteuerungen.find((u) => u.id === neu.uebersteuerungId),
+      ).toMatchObject({ status: 'FREIGEGEBEN', ueberholt: true });
+    });
+
+    it('aufheben: freigegebene Übersteuerung endet, berechneter Wert gilt, Protokoll (Befund 4)', async () => {
+      const id = risiko([...a.risiken.keys()][5]);
+      const u = await beantrage(id);
+      // Nur eine freigegebene Übersteuerung lässt sich aufheben.
+      const offen = await fehlerVon(
+        rufe(akt.admin, (ctx) =>
+          uebersteuerungAufheben(ctx, {
+            mandantId: a.mandantId,
+            uebersteuerungId: u.uebersteuerungId,
+            begruendung: BEGRUENDUNG,
+          }),
+        ),
+      );
+      expect(offen.code).toBe('KONFLIKT');
+      await rufe(akt.bt, (ctx) =>
+        uebersteuerungEntscheiden(ctx, {
+          mandantId: a.mandantId,
+          uebersteuerungId: u.uebersteuerungId,
+          entscheidung: 'FREIGEBEN',
+        }),
+      );
+      const kurz = await fehlerVon(
+        rufe(akt.hb, (ctx) =>
+          uebersteuerungAufheben(ctx, {
+            mandantId: a.mandantId,
+            uebersteuerungId: u.uebersteuerungId,
+            begruendung: 'zu kurz',
+          }),
+        ),
+      );
+      expect(kurz.code).toBe('UNGUELTIG');
+      const r = await rufe(akt.hb, (ctx) =>
+        uebersteuerungAufheben(ctx, {
+          mandantId: a.mandantId,
+          uebersteuerungId: u.uebersteuerungId,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      expect(r).toEqual({
+        uebersteuerungId: u.uebersteuerungId,
+        risikoId: id,
+        status: 'AUFGEHOBEN',
+      });
+      const d = await rufe(akt.bt, (ctx) =>
+        ladeRisiko(ctx, { mandantId: a.mandantId, risikoId: id }),
+      );
+      expect(d.risiko.bewertung.uebersteuertDesign).toBe(false);
+      expect(d.risiko.bewertung.wirksamDesign).toBe(d.risiko.bewertung.nettoDesign.klasse);
+      expect(d.risiko.uebersteuerungen.find((x) => x.id === u.uebersteuerungId)).toMatchObject({
+        status: 'AUFGEHOBEN',
+        aufgehobenVon: a.personen.hb,
+        ueberholt: false,
+      });
+      const ev = await audit(id, 'tcms.risiko.uebersteuerung_aufgehoben');
+      expect(ev).toHaveLength(1);
+      expect(ev[0]!.detail).toMatchObject({
+        uebersteuerungId: u.uebersteuerungId,
+        begruendung: BEGRUENDUNG,
+      });
+      // Zweites Aufheben → KONFLIKT; gleichzeitiges Aufheben wirkt genau einmal.
+      const nochmal = await fehlerVon(
+        rufe(akt.admin, (ctx) =>
+          uebersteuerungAufheben(ctx, {
+            mandantId: a.mandantId,
+            uebersteuerungId: u.uebersteuerungId,
+            begruendung: BEGRUENDUNG,
+          }),
+        ),
+      );
+      expect(nochmal.code).toBe('KONFLIKT');
+      const v = await beantrage(id);
+      await rufe(akt.bt, (ctx) =>
+        uebersteuerungEntscheiden(ctx, {
+          mandantId: a.mandantId,
+          uebersteuerungId: v.uebersteuerungId,
+          entscheidung: 'FREIGEBEN',
+        }),
+      );
+      const lauf = (client?: PrismaClient) =>
+        rufe(
+          akt.admin,
+          (ctx) =>
+            uebersteuerungAufheben(ctx, {
+              mandantId: a.mandantId,
+              uebersteuerungId: v.uebersteuerungId,
+              begruendung: BEGRUENDUNG,
+            }),
+          client,
+        );
+      expect(
+        await gleichzeitig(
+          () => lauf(),
+          () => lauf(zweite),
+        ),
+      ).toEqual({ erfolge: 1, codes: ['KONFLIKT'] });
+    });
+
+    it('aufheben: Rechte negativ, fremde Übersteuerung → NICHT_GEFUNDEN', async () => {
+      await rechteNegativ((ctx, mandantId) =>
+        uebersteuerungAufheben(ctx, {
+          mandantId,
+          uebersteuerungId: 'beliebig',
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      const akteureB = akteureVon(b);
+      const idB = [...b.risiken.values()][1]!;
+      const dB = await rufe(akteureB.bt, (ctx) =>
+        ladeRisiko(ctx, { mandantId: b.mandantId, risikoId: idB }),
+      );
+      const uB = await rufe(akteureB.hb, (ctx) =>
+        uebersteuerungBeantragen(ctx, {
+          mandantId: b.mandantId,
+          risikoId: idB,
+          sicht: 'DESIGN',
+          klasse: dB.risiko.bewertung.nettoDesign.klasse === 'KRITISCH' ? 'HOCH' : 'KRITISCH',
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      await rufe(akteureB.bt, (ctx) =>
+        uebersteuerungEntscheiden(ctx, {
+          mandantId: b.mandantId,
+          uebersteuerungId: uB.uebersteuerungId,
+          entscheidung: 'FREIGEBEN',
+        }),
+      );
+      const f = await fehlerVon(
+        rufe(akt.bt, (ctx) =>
+          uebersteuerungAufheben(ctx, {
+            mandantId: a.mandantId,
+            uebersteuerungId: uB.uebersteuerungId,
+            begruendung: BEGRUENDUNG,
+          }),
+        ),
+      );
+      expect([f.code, f.message]).toEqual(['NICHT_GEFUNDEN', 'NICHT_GEFUNDEN']);
+      expect(
+        (
+          await lies((tx) =>
+            tx.uebersteuerung.findUniqueOrThrow({ where: { id: uB.uebersteuerungId } }),
+          )
+        ).status,
+      ).toBe('FREIGEGEBEN');
+    });
+
+    it('die beantragende Person zieht ihren Antrag zurück, freigeben darf sie nicht (Befund 104)', async () => {
+      const id = risiko([...a.risiken.keys()][6]);
+      const u = await beantrage(id);
+      const r = await rufe(akt.hb, (ctx) =>
+        uebersteuerungEntscheiden(ctx, {
+          mandantId: a.mandantId,
+          uebersteuerungId: u.uebersteuerungId,
+          entscheidung: 'ABLEHNEN',
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      expect(r.status).toBe('ABGELEHNT');
+      expect(await audit(id, 'tcms.risiko.uebersteuerung_zurueckgezogen')).toHaveLength(1);
+      expect(await audit(id, 'tcms.risiko.uebersteuerung_abgelehnt')).toHaveLength(0);
+      // Der Platz ist frei: ein neuer Antrag derselben Sicht ist möglich.
+      expect((await beantrage(id)).sicht).toBe('DESIGN');
+    });
   });
 
   // ---------------------------------------------------------------------------
   describe('Freigabe des Inventars', () => {
+    /** Eingabe zum Freigeben: je Risiko der gerade gesehene (offene) Stand. */
+    async function freigabe(...ids: string[]) {
+      const risiken = [];
+      for (const risikoId of ids)
+        risiken.push({ risikoId, standId: (await offenerStand(risikoId)).id });
+      return { mandantId: a.mandantId, risiken };
+    }
+
     /** Risiko auf BEWERTET setzen (neu bewerten mit geänderten Werten). */
     async function bewertet(code: string) {
       const id = risiko(code);
@@ -545,7 +814,7 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
       expect(ein.bearbeitet.map((x) => x.risikoId).sort()).toEqual([id1, id2].sort());
       // Selbst eingereicht → nicht freigeben.
       const selbst = await fehlerVon(
-        rufe(akt.hb, (ctx) => risikenFreigeben(ctx, { mandantId: a.mandantId, risikoIds: [id1] })),
+        rufe(akt.hb, async (ctx) => risikenFreigeben(ctx, await freigabe(id1))),
       );
       expect([selbst.code, selbst.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       const zurueck = await fehlerVon(
@@ -558,9 +827,7 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
         ),
       );
       expect([zurueck.code, zurueck.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
-      const frei = await rufe(akt.bt, (ctx) =>
-        risikenFreigeben(ctx, { mandantId: a.mandantId, risikoIds: [id1] }),
-      );
+      const frei = await rufe(akt.bt, async (ctx) => risikenFreigeben(ctx, await freigabe(id1)));
       expect(frei.bearbeitet).toEqual([{ risikoId: id1, code: codes[4]! }]);
       const zw = await rufe(akt.bt, (ctx) =>
         risikoZurueckweisen(ctx, {
@@ -612,22 +879,56 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
         risikenZurFreigabe(ctx, { mandantId: a.mandantId, risikoIds: [id] }),
       );
       const e = await gleichzeitig(
-        () =>
-          rufe(akt.bt, (ctx) => risikenFreigeben(ctx, { mandantId: a.mandantId, risikoIds: [id] })),
-        () =>
-          rufe(
-            akt.admin,
-            (ctx) => risikenFreigeben(ctx, { mandantId: a.mandantId, risikoIds: [id] }),
-            zweite,
-          ),
+        () => rufe(akt.bt, async (ctx) => risikenFreigeben(ctx, await freigabe(id))),
+        () => rufe(akt.admin, async (ctx) => risikenFreigeben(ctx, await freigabe(id)), zweite),
       );
       expect(e).toEqual({ erfolge: 1, codes: ['KONFLIKT'] });
       expect(await audit(id, 'tcms.risiko.freigegeben')).toHaveLength(1);
     });
 
+    it('freigeben nur auf dem gesehenen Stand; Audit nennt den Stand (Befund 20)', async () => {
+      const codes = [...a.risiken.keys()];
+      const id = await bewertet(codes[8] ?? codes[0]!);
+      await rufe(akt.hb, (ctx) =>
+        risikenZurFreigabe(ctx, { mandantId: a.mandantId, risikoIds: [id] }),
+      );
+      // B öffnet die Ansicht (Stand v), A bewertet neu und reicht erneut ein.
+      const ansicht = await freigabe(id);
+      await bewertet(codes[8] ?? codes[0]!);
+      await rufe(akt.hb, (ctx) =>
+        risikenZurFreigabe(ctx, { mandantId: a.mandantId, risikoIds: [id] }),
+      );
+      const alt = await fehlerVon(rufe(akt.bt, (ctx) => risikenFreigeben(ctx, ansicht)));
+      expect(alt.code).toBe('KONFLIKT');
+      expect((await lies((tx) => tx.risiko.findUniqueOrThrow({ where: { id } }))).freigabe).toBe(
+        'ZUR_FREIGABE',
+      );
+      const aktuell = await freigabe(id);
+      const ok = await rufe(akt.bt, (ctx) => risikenFreigeben(ctx, aktuell));
+      expect(ok.bearbeitet.map((x) => x.risikoId)).toEqual([id]);
+      const ev = await audit(id, 'tcms.risiko.freigegeben');
+      expect(ev.at(-1)!.detail).toMatchObject({ standId: aktuell.risiken[0]!.standId });
+      const eingereicht = await audit(id, 'tcms.risiko.zur_freigabe');
+      expect(eingereicht.at(-1)!.detail).toMatchObject({ standId: aktuell.risiken[0]!.standId });
+      // Ohne gesehenen Stand bzw. mit doppeltem Risiko → UNGUELTIG.
+      for (const eingabe of [
+        { mandantId: a.mandantId, risikoIds: [id] },
+        { mandantId: a.mandantId, risiken: [{ risikoId: id }] },
+        { mandantId: a.mandantId, risiken: [...aktuell.risiken, ...aktuell.risiken] },
+      ]) {
+        const f = await fehlerVon(
+          rufe(akt.bt, (ctx) => risikenFreigeben(ctx, eingabe as unknown as typeof aktuell)),
+        );
+        expect(f.code).toBe('UNGUELTIG');
+      }
+    });
+
     it('Rechte negativ', async () => {
       await rechteNegativ((ctx, mandantId) =>
         risikenZurFreigabe(ctx, { mandantId, risikoIds: [risiko()] }),
+      );
+      await rechteNegativ((ctx, mandantId) =>
+        risikenFreigeben(ctx, { mandantId, risiken: [{ risikoId: risiko(), standId: 'x' }] }),
       );
       await rechteNegativ((ctx, mandantId) =>
         risikoZurueckweisen(ctx, { mandantId, risikoId: risiko(), begruendung: BEGRUENDUNG }),
@@ -722,6 +1023,76 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
       const ev = await audit(id, 'tcms.risiko.akzeptanz_angefordert');
       expect(ev).toHaveLength(1);
       expect(JSON.stringify(ev[0]!.detail)).not.toContain('Person ');
+    });
+
+    it('Neubewertung zieht eine offene Akzeptanz zurück, eine erteilte gilt danach als überholt (Befund 61)', async () => {
+      const id = await ueberAppetit();
+      const anf = await rufe(akt.hb, (ctx) =>
+        risikoakzeptanzAnfordern(ctx, {
+          mandantId: a.mandantId,
+          risikoId: id,
+          empfaengerId: a.personen.gv,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      // Unveränderte Bestätigung: Der eingefrorene Text stimmt weiter, die Anforderung bleibt offen.
+      const st = await offenerStand(id);
+      await rufe(akt.hb, (ctx) =>
+        risikoBewertungBestaetigen(ctx, {
+          mandantId: a.mandantId,
+          risikoId: id,
+          standId: st.id,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      const freigabe = () =>
+        lies((tx) => tx.freigabe.findUniqueOrThrow({ where: { id: anf.freigabeId } }));
+      expect((await freigabe()).status).toBe('OFFEN');
+      // Geänderte Bewertung: Die Anforderung ist überholt und wird zurückgezogen.
+      const st2 = await offenerStand(id);
+      await rufe(akt.hb, (ctx) =>
+        risikoNeuBewerten(ctx, {
+          mandantId: a.mandantId,
+          risikoId: id,
+          standId: st2.id,
+          s: 'H',
+          w: st2.w === 'HAEUFIG' ? 'WAHRSCHEINLICH' : 'HAEUFIG',
+          r: 3,
+          gt: st2.gt,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      const f = await freigabe();
+      expect([f.status, f.codeHash, f.codeAblauf]).toEqual(['ABGELEHNT', null, null]);
+      expect(f.anmerkung).toContain('neu bewertet');
+      expect(await audit(id, 'tcms.risiko.akzeptanz_zurueckgezogen')).toHaveLength(1);
+      expect(
+        await lies((tx) =>
+          tx.freigabe.count({ where: { art: 'RISIKOAKZEPTANZ', refId: id, status: 'OFFEN' } }),
+        ),
+      ).toBe(0);
+      // Erteilt (hier direkt gesetzt) und danach neu bewertet → „überholt“ im Lesepfad.
+      await lies((tx) =>
+        tx.freigabe.update({
+          where: { id: anf.freigabeId },
+          data: { status: 'FREIGEGEBEN', erledigtAm: UHR.jetzt(), anmerkung: null },
+        }),
+      );
+      const akzeptanz = async () =>
+        (
+          await rufe(akt.bt, (ctx) => ladeRisiko(ctx, { mandantId: a.mandantId, risikoId: id }))
+        ).risiko.akzeptanzen.find((x) => x.id === anf.freigabeId)!;
+      expect(await akzeptanz()).toMatchObject({ status: 'FREIGEGEBEN', ueberholt: false });
+      const st3 = await offenerStand(id);
+      await rufe(akt.hb, (ctx) =>
+        risikoBewertungBestaetigen(ctx, {
+          mandantId: a.mandantId,
+          risikoId: id,
+          standId: st3.id,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      expect(await akzeptanz()).toMatchObject({ status: 'FREIGEGEBEN', ueberholt: true });
     });
 
     it('Empfänger unter der Sperre der Rollenpflege geprüft: eben entzogene GV → UNGUELTIG (RT4-T-06)', async () => {

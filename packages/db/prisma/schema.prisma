@@ -312,6 +312,10 @@ model Uebersteuerung {
   beantragtAm    DateTime             @default(now())
   entschiedenVon String?
   entschiedenAm  DateTime?
+  /// Aufhebung einer freigegebenen Übersteuerung (Person und Zeitpunkt nur
+  /// gemeinsam und nur im Status AUFGEHOBEN, CHECK `Uebersteuerung_aufgehoben_check`).
+  aufgehobenVon  String?
+  aufgehobenAm   DateTime?
 
   /// Höchstens eine beantragte Übersteuerung je (Risiko, Sicht): Teilindex
   /// `Uebersteuerung_beantragt_key` in der Migration (TS-05).

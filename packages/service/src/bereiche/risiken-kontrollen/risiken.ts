@@ -7,31 +7,39 @@
 // - Neubewertung schließt den Risikostand und legt einen neuen an (Regel 3).
 // - Übersteuerung, Inventarfreigabe und Zurückweisung im Vier-Augen-Prinzip
 //   (Regel 4); Entscheidungen nur aus dem erwarteten Status.
-// - TS-05: Jede Operation sperrt das Risiko (SELECT … FOR UPDATE) in der
-//   Transaktion von `mitAudit` und liest den Zustand erst unter der Sperre;
-//   Zustandswechsel zusätzlich als bedingtes Update mit count-Prüfung.
+// - TS-05: Jede Operation sperrt das Risiko (SELECT … FOR NO KEY UPDATE) in
+//   der Transaktion von `mitAudit` und liest den Zustand erst unter der Sperre;
+//   Zustandswechsel zusätzlich als bedingtes Update mit count-Prüfung. Die
+//   Neubewertung sperrt vorher die Ereignisse mit offenen Folgen „Risiko neu
+//   bewerten" (Ordnung Ereignis → Risiko → Kontrollen → Durchführungen, Kopf
+//   von `gemeinsam.ts`).
 // =============================================================================
 
 import {
   DienstFehler,
   nichtBerechtigt,
   RisikenFreigabeSchrittSchema,
+  RisikenFreigebenSchema,
   RisikoakzeptanzAnfordernSchema,
   RisikoBestaetigenSchema,
   RisikoNeuBewertenSchema,
   RisikoZurueckweisenSchema,
+  UebersteuerungAufhebenSchema,
   UebersteuerungBeantragenSchema,
   UebersteuerungEntscheidenSchema,
   type FreigabeSchrittErgebnis,
   type KontrollNeuplanung,
   type NeuBewertungErgebnis,
   type RisikenFreigabeSchritt,
+  type RisikenFreigeben,
   type RisikoakzeptanzAnfordern,
   type RisikoakzeptanzAngefordert,
   type RisikoBestaetigen,
   type RisikoNeuBewerten,
   type RisikoZurueckgewiesen,
   type RisikoZurueckweisen,
+  type UebersteuerungAufgehoben,
+  type UebersteuerungAufheben,
   type UebersteuerungBeantragen,
   type UebersteuerungBeantragt,
   type UebersteuerungEntscheiden,
@@ -60,7 +68,7 @@ import { mitAudit, type Protokoll } from '../../audit';
 import { ladeKontext } from '../../kern/tcms-kontext';
 import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
-import { zweitePerson } from '../../rechte';
+import { gleicheId, zweitePerson } from '../../rechte';
 import { halteRollenFest } from '../../rollen';
 import { legeNachrichtAn } from '../programm-beschreibung/nachrichten';
 import {
@@ -124,24 +132,86 @@ async function aktuelleSicht(ctx: DienstKontext, mandantId: string, risikoId: st
   return { k, risiko };
 }
 
-/** Ereignisfolgen „Risiko neu bewerten" (in der Triage angelegt) mit der Neubewertung erledigen. */
+/** Offene Ereignisfolgen „Risiko neu bewerten" eines Risikos (Code), wahlweise nur bestimmter Ereignisse. */
+function offeneNeubewertungsFolgen(
+  tx: Tx,
+  programmId: string,
+  code: string,
+  ereignisIds?: readonly string[],
+) {
+  return tx.ereignisFolge.findMany({
+    where: {
+      art: 'RISIKO_NEU_BEWERTEN',
+      ziel: code,
+      status: 'ANGELEGT',
+      ...(ereignisIds ? { ereignisId: { in: [...ereignisIds] } } : {}),
+      ereignis: { programmId, status: { in: ['NEU', 'IN_TRIAGE'] } },
+    },
+    select: { id: true, ereignisId: true },
+    orderBy: { id: 'asc' },
+  });
+}
+
+/**
+ * Sperrt die Ereignisse mit offenen Folgen „Risiko neu bewerten" für dieses
+ * Risiko – vor dem Risiko (Sperrordnung Ereignis → Risiko → Folge, wie
+ * „Folge hinzufügen", „Folge erledigen" und „Markierung freigeben"). Der Code
+ * eines Risikos ändert sich nie; er darf vor der Risikosperre gelesen werden.
+ * Liefert die gesperrten Ereignis-IDs.
+ */
+async function sperreBetroffeneEreignisse(
+  tx: Tx,
+  mandantId: string,
+  risikoId: string,
+): Promise<string[]> {
+  const programm = await programmDes(tx, mandantId);
+  const r = await tx.risiko.findFirst({
+    where: { id: risikoId, programmId: programm.id },
+    select: { code: true },
+  });
+  if (!r) throw new DienstFehler('NICHT_GEFUNDEN');
+  const folgen = await offeneNeubewertungsFolgen(tx, programm.id, r.code);
+  const ids = [...new Set(folgen.map((f) => f.ereignisId))].sort();
+  if (ids.length === 0) return [];
+  const gesperrt = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "Ereignis"
+    WHERE "programmId" = ${programm.id} AND "id" = ANY(${ids}::text[])
+    ORDER BY "id" FOR NO KEY UPDATE`;
+  return gesperrt.map((z) => z.id);
+}
+
+/**
+ * Sperrt offene Risikoakzeptanzen des Risikos (Freigabe vor Risiko, Kopf von
+ * `gemeinsam.ts`), damit die Neubewertung eine überholte Anforderung
+ * zurückziehen kann, ohne gegen ein gleichzeitiges Erteilen zu laufen.
+ */
+async function sperreOffeneAkzeptanzen(tx: Tx, mandantId: string, risikoId: string) {
+  const programm = await programmDes(tx, mandantId);
+  await tx.$queryRaw`
+    SELECT "id" FROM "Freigabe"
+    WHERE "programmId" = ${programm.id} AND "art" = 'RISIKOAKZEPTANZ'
+      AND "refId" = ${risikoId} AND "status" = 'OFFEN'
+    ORDER BY "id" FOR NO KEY UPDATE`;
+}
+
+/**
+ * Ereignisfolgen „Risiko neu bewerten" (in der Triage angelegt) mit der
+ * Neubewertung erledigen – nur an den vorher gesperrten Ereignissen. Ein
+ * Ereignis in der Triage, dessen Folgen danach alle erledigt oder verworfen
+ * sind, wird unter seiner Sperre abgeschlossen (Folgen unter der Sperre
+ * gelesen; ein offener Antrag auf Verwerfen erledigt sich wie bei
+ * `schliesseEreignisAb`).
+ */
 async function erledigeEreignisFolgen(
   tx: Tx,
   programmId: string,
   code: string,
   standId: string,
   zeitpunkt: Date,
+  ereignisIds: readonly string[],
 ): Promise<Protokoll[]> {
-  const folgen = await tx.ereignisFolge.findMany({
-    where: {
-      art: 'RISIKO_NEU_BEWERTEN',
-      ziel: code,
-      status: 'ANGELEGT',
-      ereignis: { programmId, status: { in: ['NEU', 'IN_TRIAGE'] } },
-    },
-    select: { id: true, ereignisId: true },
-    orderBy: { id: 'asc' },
-  });
+  if (ereignisIds.length === 0) return [];
+  const folgen = await offeneNeubewertungsFolgen(tx, programmId, code, ereignisIds);
   const erledigt: typeof folgen = [];
   for (const f of folgen) {
     // Bedingt: eine parallel verworfene oder erledigte Folge bleibt unberührt.
@@ -168,7 +238,7 @@ async function erledigeEreignisFolgen(
     if (e.status === 'IN_TRIAGE' && ereignisErledigt(e.folgen)) {
       const u = await tx.ereignis.updateMany({
         where: { id: e.id, status: 'IN_TRIAGE' },
-        data: { status: 'ERLEDIGT' },
+        data: { status: 'ERLEDIGT', verwerfenBegruendung: null, verwerfenBeantragtVon: null },
       });
       if (u.count === 1)
         protokolle.push({
@@ -176,7 +246,13 @@ async function erledigeEreignisFolgen(
           objektTyp: 'Ereignis',
           objektId: e.id,
           programmId,
-          detail: { nummer: e.nummer, grund: 'alle Folgen erledigt oder verworfen' },
+          detail: {
+            nummer: e.nummer,
+            grund: 'alle Folgen erledigt oder verworfen',
+            ...(e.verwerfenBeantragtVon
+              ? { verwerfenAntragErledigt: { beantragtVon: e.verwerfenBeantragtVon } }
+              : {}),
+          },
         });
     }
   }
@@ -203,6 +279,10 @@ async function bewerte(
   begruendung: string,
 ): Promise<NeuBewertungErgebnis> {
   return mitAudit(ctx, async (tx, zeitpunkt) => {
+    // Sperrordnung: betroffene Ereignisse → offene Risikoakzeptanz (Freigabe) →
+    // Risiko → Kontrollen → Durchführungen.
+    const ereignisIds = await sperreBetroffeneEreignisse(tx, mandantId, risikoId);
+    await sperreOffeneAkzeptanzen(tx, mandantId, risikoId);
     const risiko = await risikoUnterSperre(tx, mandantId, risikoId);
     pruefeAktiv(risiko, zeitpunkt);
     const alt = risiko.staende[0];
@@ -309,8 +389,59 @@ async function bewerte(
       },
     });
     protokolle.push(
-      ...(await erledigeEreignisFolgen(tx, programm.id, risiko.code, neu.id, zeitpunkt)),
+      ...(await erledigeEreignisFolgen(
+        tx,
+        programm.id,
+        risiko.code,
+        neu.id,
+        zeitpunkt,
+        ereignisIds,
+      )),
     );
+    // Befund 61: Eine offene Risikoakzeptanz nennt die bisherige Bewertung im
+    // eingefrorenen Text („in der genannten Höhe bis zur nächsten Neubewertung“).
+    // Ändert sich die Bewertung, ist sie überholt und wird wie eine abgelöste
+    // Beschreibungsfreigabe zurückgezogen (Code gelöscht); eine neue Anforderung
+    // mit den aktuellen Werten ist danach möglich.
+    if (geaendert) {
+      const offen = await tx.freigabe.findMany({
+        where: {
+          programmId: programm.id,
+          art: 'RISIKOAKZEPTANZ',
+          refId: risikoId,
+          status: 'OFFEN',
+        },
+        select: { id: true, empfaengerId: true },
+        orderBy: { id: 'asc' },
+      });
+      for (const f of offen) {
+        const z = await tx.freigabe.updateMany({
+          where: { id: f.id, status: 'OFFEN' },
+          data: {
+            status: 'ABGELEHNT',
+            anmerkung: `Zurückgezogen: Risiko am ${fmtDatum(zeitpunkt)} neu bewertet (Version ${neu.version})`,
+            erledigtAm: zeitpunkt,
+            codeHash: null,
+            codeSchluesselId: null,
+            codeAblauf: null,
+          },
+        });
+        if (z.count === 1)
+          protokolle.push({
+            aktion: 'tcms.risiko.akzeptanz_zurueckgezogen',
+            objektTyp: 'Risiko',
+            objektId: risikoId,
+            programmId: programm.id,
+            detail: {
+              code: risiko.code,
+              freigabeId: f.id,
+              empfaengerId: f.empfaengerId,
+              grund: 'Neubewertung',
+              standId: neu.id,
+            },
+          });
+      }
+    }
 
     // Folgen für die Kontrollhäufigkeit (GT × Bruttoklasse).
     const neuplanungen: KontrollNeuplanung[] = [];
@@ -535,8 +666,40 @@ export async function uebersteuerungBeantragen(
 }
 
 /**
- * Entscheidet über eine beantragte Übersteuerung. Nur eine zweite Person
- * (≠ beantragend); Ablehnung mit Begründung. Genau eine von gleichzeitigen
+ * Sperrt das Risiko einer Übersteuerung des Mandanten und liest die
+ * Übersteuerung unter der Sperre (fremde oder unbekannte ID → NICHT_GEFUNDEN).
+ */
+async function uebersteuerungUnterSperre(tx: Tx, mandantId: string, uebersteuerungId: string) {
+  const programm = await programmDes(tx, mandantId);
+  const ref = await tx.uebersteuerung.findFirst({
+    where: { id: uebersteuerungId, risiko: { programmId: programm.id } },
+    select: { risikoId: true },
+  });
+  if (!ref) throw new DienstFehler('NICHT_GEFUNDEN');
+  await sperreRisiken(tx, programm.id, [ref.risikoId]);
+  const u = await tx.uebersteuerung.findFirst({
+    where: { id: uebersteuerungId, risikoId: ref.risikoId },
+    include: { risiko: { select: { code: true, programmId: true } } },
+  });
+  if (!u) throw new DienstFehler('NICHT_GEFUNDEN');
+  return u;
+}
+
+/** Berechnete Nettoklasse einer Sicht im aktuellen Stand (ohne Übersteuerung). */
+function berechnetIn(
+  sicht: 'DESIGN' | 'BETRIEB',
+  b: { nettoDesign: { klasse: Klasse }; nettoBetrieb: { klasse: Klasse } },
+): Klasse {
+  return sicht === 'DESIGN' ? b.nettoDesign.klasse : b.nettoBetrieb.klasse;
+}
+
+/**
+ * Entscheidet über eine beantragte Übersteuerung. Freigeben nur eine zweite
+ * Person (≠ beantragend) und nur, solange der berechnete Wert der Sicht noch
+ * dem beim Antrag entspricht (sonst KONFLIKT: Die Begründung bezog sich auf
+ * einen anderen Wert, Befund 4). Ablehnen mit Begründung durch eine zweite
+ * Person; die beantragende Person zieht ihren Antrag auf demselben Weg zurück
+ * (wie bei Entfallen und Verwerfen). Genau eine von gleichzeitigen
  * Entscheidungen wirkt, jede weitere erhält KONFLIKT.
  */
 export async function uebersteuerungEntscheiden(
@@ -548,23 +711,24 @@ export async function uebersteuerungEntscheiden(
   pruefeBearbeiten(ctx.akteur, mandantId);
   return konfliktSicher(() =>
     mitAudit(ctx, async (tx, zeitpunkt) => {
-      const programm = await programmDes(tx, mandantId);
-      const ref = await tx.uebersteuerung.findFirst({
-        where: { id: e.uebersteuerungId, risiko: { programmId: programm.id } },
-        select: { risikoId: true },
-      });
-      if (!ref) throw new DienstFehler('NICHT_GEFUNDEN');
-      await sperreRisiken(tx, programm.id, [ref.risikoId]);
-      const u = await tx.uebersteuerung.findFirst({
-        where: { id: e.uebersteuerungId, risikoId: ref.risikoId },
-        include: { risiko: { select: { code: true, programmId: true } } },
-      });
-      if (!u) throw new DienstFehler('NICHT_GEFUNDEN');
+      const u = await uebersteuerungUnterSperre(tx, mandantId, e.uebersteuerungId);
       if (u.status !== 'BEANTRAGT') {
         throw konflikt('Über diese Übersteuerung wurde bereits entschieden.');
       }
-      if (!zweitePerson(ctx.akteur, u.beantragtVon)) {
+      const zurueckgezogen =
+        e.entscheidung === 'ABLEHNEN' && gleicheId(ctx.akteur.id, u.beantragtVon);
+      if (!zurueckgezogen && !zweitePerson(ctx.akteur, u.beantragtVon)) {
         throw nichtBerechtigt('VIER_AUGEN', ZWEITE_PERSON);
+      }
+      let berechnetJetzt: Klasse | null = null;
+      if (e.entscheidung === 'FREIGEBEN') {
+        const { risiko: sicht } = await aktuelleSicht(ctx, mandantId, u.risikoId);
+        berechnetJetzt = berechnetIn(u.sicht, sicht.bewertung);
+        if (berechnetJetzt !== u.berechnet) {
+          throw konflikt(
+            `Der berechnete Wert hat sich seit dem Antrag geändert (${KLASSE_LABEL[u.berechnet]} → ${KLASSE_LABEL[berechnetJetzt]}). Bitte ablehnen und bei Bedarf neu beantragen.`,
+          );
+        }
       }
       const status = e.entscheidung === 'FREIGEBEN' ? 'FREIGEGEBEN' : 'ABGELEHNT';
       const z = await tx.uebersteuerung.updateMany({
@@ -578,7 +742,9 @@ export async function uebersteuerungEntscheiden(
           aktion:
             status === 'FREIGEGEBEN'
               ? 'tcms.risiko.uebersteuerung_freigegeben'
-              : 'tcms.risiko.uebersteuerung_abgelehnt',
+              : zurueckgezogen
+                ? 'tcms.risiko.uebersteuerung_zurueckgezogen'
+                : 'tcms.risiko.uebersteuerung_abgelehnt',
           objektTyp: 'Risiko',
           objektId: u.risikoId,
           programmId: u.risiko.programmId,
@@ -597,18 +763,80 @@ export async function uebersteuerungEntscheiden(
   );
 }
 
+/**
+ * Hebt eine freigegebene Übersteuerung auf: Es gilt wieder der berechnete
+ * Wert (Regel 2). Wie das Aufheben einer Frequenzabweichung durch jede Person
+ * mit Bearbeitungsrecht, mit Begründung (≥ 30 Zeichen) und Protokoll; eine
+ * zweite Person ist nicht nötig, weil der berechnete Wert nie einer Freigabe
+ * bedarf (Regel 2/4 verlangen sie nur für die Abweichung davon). Auch eine
+ * überholte Übersteuerung (Befund 4) lässt sich so ausdrücklich beenden.
+ */
+export async function uebersteuerungAufheben(
+  ctx: DienstKontext,
+  eingabe: UebersteuerungAufheben,
+): Promise<UebersteuerungAufgehoben> {
+  const e = pruefeEingabe(UebersteuerungAufhebenSchema, eingabe);
+  const mandantId = kanonisch(e.mandantId);
+  pruefeBearbeiten(ctx.akteur, mandantId);
+  return konfliktSicher(() =>
+    mitAudit(ctx, async (tx, zeitpunkt) => {
+      const u = await uebersteuerungUnterSperre(tx, mandantId, e.uebersteuerungId);
+      if (u.status !== 'FREIGEGEBEN') {
+        throw konflikt(
+          u.status === 'BEANTRAGT'
+            ? 'Die Übersteuerung ist erst beantragt – bitte entscheiden bzw. zurückziehen.'
+            : 'Die Übersteuerung ist nicht freigegeben.',
+        );
+      }
+      // Nur für das Protokoll: berechneter Wert heute (ein inaktives Risiko hat keinen).
+      const sicht = (await ladeKontext(ctx, { mandantId })).risiken.find(
+        (r) => r.id === u.risikoId,
+      );
+      const berechnetJetzt = sicht ? berechnetIn(u.sicht, sicht.bewertung) : null;
+      const z = await tx.uebersteuerung.updateMany({
+        where: { id: u.id, status: 'FREIGEGEBEN' },
+        data: { status: 'AUFGEHOBEN', aufgehobenVon: ctx.akteur.id, aufgehobenAm: zeitpunkt },
+      });
+      if (z.count !== 1) throw konflikt('Die Übersteuerung wurde inzwischen geändert.');
+      return {
+        wert: { uebersteuerungId: u.id, risikoId: u.risikoId, status: 'AUFGEHOBEN' as const },
+        protokoll: {
+          aktion: 'tcms.risiko.uebersteuerung_aufgehoben',
+          objektTyp: 'Risiko',
+          objektId: u.risikoId,
+          programmId: u.risiko.programmId,
+          detail: {
+            code: u.risiko.code,
+            uebersteuerungId: u.id,
+            sicht: u.sicht,
+            klasse: u.klasse,
+            berechnetBeiAntrag: u.berechnet,
+            berechnet: berechnetJetzt,
+            freigegebenVon: u.entschiedenVon,
+            begruendung: e.begruendung,
+          },
+        },
+      };
+    }),
+  );
+}
+
 // -----------------------------------------------------------------------------
 // Freigabe-Workflow des Inventars: BEWERTET → ZUR_FREIGABE → FREIGEGEBEN
 // -----------------------------------------------------------------------------
 
 type Schritt = 'EINREICHEN' | 'FREIGEBEN';
 
+/**
+ * Ein Schritt für die Auswahl. `gesehen` (nur Freigeben) nennt je Risiko den
+ * Stand, den die freigebende Person gesehen hat (Befund 20).
+ */
 async function freigabeSchritt(
   ctx: DienstKontext,
-  eingabe: RisikenFreigabeSchritt,
+  e: { mandantId: string; risikoIds: string[] },
   schritt: Schritt,
+  gesehen?: ReadonlyMap<string, string>,
 ): Promise<FreigabeSchrittErgebnis> {
-  const e = pruefeEingabe(RisikenFreigabeSchrittSchema, eingabe);
   const mandantId = kanonisch(e.mandantId);
   pruefeBearbeiten(ctx.akteur, mandantId);
   return konfliktSicher(() =>
@@ -618,6 +846,9 @@ async function freigabeSchritt(
       await sperreRisiken(tx, programm.id, e.risikoIds);
       const risiken = await tx.risiko.findMany({
         where: { id: { in: e.risikoIds }, programmId: programm.id },
+        include: {
+          staende: { where: { gueltigBis: null }, orderBy: [{ version: 'asc' }, { id: 'asc' }] },
+        },
         orderBy: [{ code: 'asc' }, { id: 'asc' }],
       });
       const bearbeitet: FreigabeSchrittErgebnis['bearbeitet'] = [];
@@ -640,6 +871,9 @@ async function freigabeSchritt(
           ueberspringe(r, 'nicht zur Freigabe eingereicht');
         else if (schritt === 'FREIGEBEN' && !zweitePerson(ctx.akteur, r.freigabeEingereichtVon))
           ueberspringe(r, 'selbst eingereicht – zweite Person erforderlich', true);
+        // TS-05: nur die Bewertung, die die freigebende Person gesehen hat.
+        else if (gesehen && gesehen.get(r.id) !== r.staende[0]?.id)
+          ueberspringe(r, 'inzwischen neu bewertet – bitte neu laden');
         else {
           const z = await tx.risiko.updateMany({
             where: {
@@ -665,6 +899,7 @@ async function freigabeSchritt(
             programmId: programm.id,
             detail: {
               code: r.code,
+              standId: r.staende[0]?.id ?? null,
               ...(schritt === 'FREIGEBEN' ? { eingereichtVon: r.freigabeEingereichtVon } : {}),
             },
           });
@@ -681,19 +916,29 @@ async function freigabeSchritt(
 }
 
 /** Reicht bewertete Risiken zur Freigabe ein; andere Status werden übersprungen. */
-export function risikenZurFreigabe(
+export async function risikenZurFreigabe(
   ctx: DienstKontext,
   eingabe: RisikenFreigabeSchritt,
 ): Promise<FreigabeSchrittErgebnis> {
-  return freigabeSchritt(ctx, eingabe, 'EINREICHEN');
+  return freigabeSchritt(ctx, pruefeEingabe(RisikenFreigabeSchrittSchema, eingabe), 'EINREICHEN');
 }
 
-/** Gibt eingereichte Risiken frei – nur eine zweite Person (≠ einreichend). */
-export function risikenFreigeben(
+/**
+ * Gibt eingereichte Risiken frei – nur eine zweite Person (≠ einreichend) und
+ * je Risiko nur auf dem gesehenen Stand (`standId`, Befund 20); ein inzwischen
+ * neu bewertetes Risiko wird übersprungen.
+ */
+export async function risikenFreigeben(
   ctx: DienstKontext,
-  eingabe: RisikenFreigabeSchritt,
+  eingabe: RisikenFreigeben,
 ): Promise<FreigabeSchrittErgebnis> {
-  return freigabeSchritt(ctx, eingabe, 'FREIGEBEN');
+  const e = pruefeEingabe(RisikenFreigebenSchema, eingabe);
+  return freigabeSchritt(
+    ctx,
+    { mandantId: e.mandantId, risikoIds: e.risiken.map((r) => r.risikoId) },
+    'FREIGEBEN',
+    new Map(e.risiken.map((r) => [r.risikoId, r.standId])),
+  );
 }
 
 /** Weist ein eingereichtes Risiko zurück (zweite Person, Begründung); Status wieder „bewertet". */

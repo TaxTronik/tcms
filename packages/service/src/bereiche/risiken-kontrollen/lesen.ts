@@ -197,9 +197,15 @@ async function akzeptanzen(
   });
   // Zustellstatus der Anforderung: nur im aktuellen Stand.
   const zustellungen = await zustellungenDerFreigaben(ctx.tx, k.mandant.id, liste, k);
+  const standAb = new Map(k.risiken.map((r) => [r.id, r.gueltigAb.getTime()]));
   for (const f of liste) {
     // Zum Stichtag noch nicht entschiedene Akzeptanzen gelten als offen.
     const status = f.erledigtAm && f.erledigtAm.getTime() > ende.getTime() ? 'OFFEN' : f.status;
+    // Erteilt vor der zum Stichtag gültigen Bewertung: Die Akzeptanz galt laut
+    // Text nur bis zur nächsten Neubewertung (Befund 61).
+    const ab = standAb.get(f.refId);
+    const ueberholt =
+      status === 'FREIGEGEBEN' && !!f.erledigtAm && ab != null && f.erledigtAm.getTime() < ab;
     out.set(f.refId, [
       ...(out.get(f.refId) ?? []),
       {
@@ -212,6 +218,7 @@ async function akzeptanzen(
         empfaengerId: f.empfaengerId,
         anmerkung: status === 'OFFEN' ? null : f.anmerkung,
         erledigtAm: status === 'OFFEN' ? null : iso(f.erledigtAm),
+        ueberholt,
         zustellung: zustellungen.get(f.id) ?? null,
       },
     ]);
@@ -263,6 +270,9 @@ function risikoEintrag(
       beantragtAm: u.beantragtAm.toISOString(),
       entschiedenVon: u.entschiedenVon,
       entschiedenAm: iso(u.entschiedenAm),
+      aufgehobenVon: u.aufgehobenVon,
+      aufgehobenAm: iso(u.aufgehobenAm),
+      ueberholt: u.ueberholt,
     })),
     offeneEreignisse: r.offeneEreignisse,
     wirktAuf: [...r.wirktAuf],
@@ -276,7 +286,7 @@ function personenDesRisikos(r: RisikoEintrag): (string | null)[] {
     r.freigabeEingereichtVon,
     r.freigegebenVon,
     r.ownerId,
-    ...r.uebersteuerungen.flatMap((u) => [u.beantragtVon, u.entschiedenVon]),
+    ...r.uebersteuerungen.flatMap((u) => [u.beantragtVon, u.entschiedenVon, u.aufgehobenVon]),
     ...r.akzeptanzen.flatMap((a) => [a.angefordertVon, a.empfaengerId]),
   ];
 }

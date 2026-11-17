@@ -49,6 +49,7 @@ import {
 import { tenantSperre, type Prisma, type Tx } from '@tcms/db';
 import { addTage, type DurchfuehrungStatus } from '@tcms/domain';
 import { mitAudit, type Protokoll } from '../../audit';
+import { konfliktSicher } from '../../kern/konflikt';
 import type { DienstKontext } from '../../kontext';
 import { gleicheId } from '../../rechte';
 import { legeFeststellungAn } from '../feststellungen-ereignisse/gemeinsam';
@@ -87,16 +88,12 @@ type Arbeit<T> = (
   zeitpunkt: Date,
 ) => Promise<{ wert: T; protokoll: Protokoll | Protokoll[] }>;
 
-/** `mitAudit` mit Abbildung von Unique-Verletzungen auf KONFLIKT (TS-05). */
-async function ausfuehren<T>(ctx: DienstKontext, arbeit: Arbeit<T>): Promise<T> {
-  try {
-    return await mitAudit(ctx, arbeit);
-  } catch (e) {
-    if (e && typeof e === 'object' && 'code' in e && (e as { code?: unknown }).code === 'P2002') {
-      throw new DienstFehler('KONFLIKT', 'Gleichzeitige Änderung erkannt. Bitte neu laden.');
-    }
-    throw e;
-  }
+/** `mitAudit` mit Abbildung von Datenbankkonflikten auf KONFLIKT (TS-05, `kern/konflikt.ts`). */
+function ausfuehren<T>(ctx: DienstKontext, arbeit: Arbeit<T>): Promise<T> {
+  return konfliktSicher(
+    () => mitAudit(ctx, arbeit),
+    'Gleichzeitige Änderung erkannt. Bitte neu laden.',
+  );
 }
 
 function kanal(ctx: DienstKontext): 'Portal' | 'Kanzlei' {

@@ -248,7 +248,8 @@ export async function frequenzAbweichungBeantragen(
 /**
  * Entscheidet über eine beantragte Frequenzabweichung: nur eine zweite Person
  * (≠ beantragend, aus den Ständen unter der Sperre ermittelt). Freigabe plant
- * künftige Durchführungen neu; Ablehnung braucht eine Begründung. Genau eine
+ * künftige Durchführungen neu; Ablehnung braucht eine Begründung. Die
+ * beantragende Person zieht ihren Antrag über „Ablehnen“ zurück. Genau eine
  * von gleichzeitigen Entscheidungen wirkt.
  */
 export async function frequenzAbweichungEntscheiden(
@@ -274,7 +275,11 @@ export async function frequenzAbweichungEntscheiden(
         orderBy: [{ version: 'asc' }, { id: 'asc' }],
       });
       const antrag = antragDerAbweichung(staende, alt);
-      if (!zweitePerson(ctx.akteur, antrag.von)) {
+      // Die beantragende Person zieht ihren Antrag über „Ablehnen“ zurück (wie bei
+      // Entfallen und Verwerfen, Befund 104); freigeben darf nur eine zweite Person.
+      const zurueckgezogen =
+        e.entscheidung === 'ABLEHNEN' && antrag.von != null && gleicheId(ctx.akteur.id, antrag.von);
+      if (!zurueckgezogen && !zweitePerson(ctx.akteur, antrag.von)) {
         throw nichtBerechtigt('VIER_AUGEN', ZWEITE_PERSON);
       }
       const ziel: Frequenz = {
@@ -289,7 +294,9 @@ export async function frequenzAbweichungEntscheiden(
         return {
           wert: ergebnis(k.id, neu, vorher.frequenz, null),
           protokoll: {
-            aktion: 'tcms.kontrolle.abweichung_abgelehnt',
+            aktion: zurueckgezogen
+              ? 'tcms.kontrolle.abweichung_zurueckgezogen'
+              : 'tcms.kontrolle.abweichung_abgelehnt',
             objektTyp: 'Kontrolle',
             objektId: k.id,
             programmId: k.programmId,

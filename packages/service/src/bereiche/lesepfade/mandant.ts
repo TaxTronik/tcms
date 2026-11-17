@@ -18,8 +18,9 @@ import {
   type MandantAnkerAntwort,
   type MandantAnkerEingabe,
 } from '@tcms/contract';
-import { Prisma, tenantSperre } from '@tcms/db';
+import { tenantSperre } from '@tcms/db';
 import { mitAudit } from '../../audit';
+import { alsKonflikt } from '../../kern/konflikt';
 import type { DienstKontext } from '../../kontext';
 import { kannBearbeiten, kannLesen } from '../../rechte';
 import { antwortNach, pruefeEingabe } from './hilfen';
@@ -136,9 +137,6 @@ export async function setzeMandantAnker(
     // Schlüssel (tenant_id, id): Eine ID eines anderen Tenants stört nie (kein
     // Existenz-Orakel). Eine Unique-Verletzung bleibt nur bei gleichzeitigem
     // Anlegen im selben Tenant denkbar (die Tenant-Sperre serialisiert das).
-    if (f instanceof Prisma.PrismaClientKnownRequestError && f.code === 'P2002') {
-      throw new DienstFehler('KONFLIKT', 'Der Mandant kann nicht angelegt werden.');
-    }
-    throw f;
+    throw alsKonflikt(f, 'Der Mandant kann nicht angelegt werden.');
   }
 }

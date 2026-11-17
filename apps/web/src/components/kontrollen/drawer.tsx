@@ -482,17 +482,16 @@ export function KontrolleDrawer({
                     <Icon name="Check" className="tx-icon-xs" /> Abweichung freigeben
                   </SubmitButton>
                 </AktionsForm>
+                {/* Die beantragende Person zieht ihren Antrag auf demselben Weg zurück. */}
                 <BegruendungsDialog
-                  ausloeser="Ablehnen…"
-                  titel="Frequenzabweichung ablehnen"
+                  ausloeser={darfEntscheiden ? 'Ablehnen…' : 'Zurückziehen…'}
+                  titel={darfEntscheiden ? 'Frequenzabweichung ablehnen' : 'Antrag zurückziehen'}
                   action={frequenzAbweichungEntscheiden}
                   felder={{ ...felder, entscheidung: 'ablehnen' }}
-                  bestaetigen="Ablehnen"
+                  bestaetigen={darfEntscheiden ? 'Ablehnen' : 'Zurückziehen'}
                   vierAugen={false}
-                  disabled={!!sperre || !darfEntscheiden}
-                  disabledGrund={
-                    sperre ?? 'Von dir beantragt – die Entscheidung trifft eine zweite Person'
-                  }
+                  disabled={!!sperre}
+                  disabledGrund={sperre ?? undefined}
                 />
               </>
             ) : null}

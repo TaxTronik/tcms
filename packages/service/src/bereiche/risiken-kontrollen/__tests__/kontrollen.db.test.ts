@@ -404,7 +404,7 @@ describe.skipIf(!AKTIV)('Kontrollen: Fachoperationen', () => {
     it('Antragsteller nach Version, auch wenn `gueltigAb` zurückspringt (Demo-Uhr, Vier-Augen)', async () => {
       const belegt = new Set(
         monatlich()
-          .slice(0, 3)
+          .slice(0, 4)
           .map((x) => x.id),
       );
       const k = kanzleiKontrollen().find((x) => !belegt.has(x.id) && x.risikoIds.length > 0)!;
@@ -449,6 +449,47 @@ describe.skipIf(!AKTIV)('Kontrollen: Fachoperationen', () => {
       const selbst = await fehlerVon(entscheide(akt.hb));
       expect([selbst.code, selbst.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       await entscheide(akt.bt);
+    });
+
+    it('die beantragende Person zieht ihren Antrag zurück (Befund 104)', async () => {
+      const k = monatlich()[3] ?? monatlich()[0]!;
+      const st = await stand(k.id);
+      const antrag = await rufe(akt.hb, (ctx) =>
+        frequenzAbweichungBeantragen(ctx, {
+          mandantId: a.mandantId,
+          kontrolleId: k.id,
+          standId: st.id,
+          turnus: 'JAEHRLICH',
+          anlass: true,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      const r = await rufe(akt.hb, (ctx) =>
+        frequenzAbweichungEntscheiden(ctx, {
+          mandantId: a.mandantId,
+          kontrolleId: k.id,
+          standId: antrag.standId,
+          entscheidung: 'ABLEHNEN',
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      expect(r.frequenz).toEqual(antrag.frequenz);
+      const offen = await stand(k.id);
+      expect(offen.abweichungTurnus).toBeNull();
+      expect(await audit(k.id, 'tcms.kontrolle.abweichung_zurueckgezogen')).toHaveLength(1);
+      expect(await audit(k.id, 'tcms.kontrolle.abweichung_abgelehnt')).toHaveLength(0);
+      // Der Antragsplatz ist wieder frei.
+      const neu = await rufe(akt.hb, (ctx) =>
+        frequenzAbweichungBeantragen(ctx, {
+          mandantId: a.mandantId,
+          kontrolleId: k.id,
+          standId: r.standId,
+          turnus: 'JAEHRLICH',
+          anlass: true,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      expect(neu.version).toBe(r.version + 1);
     });
 
     it('gleiche Frequenz, offener Antrag, ohne Turnus und Anlass, Rechte', async () => {

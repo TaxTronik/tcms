@@ -39,8 +39,11 @@ export {
 export {
   EINGABE_FEHLERCODES,
   eingabeFehlercode,
+  KONFLIKT_FEHLERCODES,
+  konfliktFehlercode,
   ZEITLIMIT_FEHLERCODES,
   zeitlimitFehlercode,
   type EingabeFehlercode,
+  type KonfliktFehlercode,
   type ZeitlimitFehlercode,
 } from './fehler';

@@ -29,6 +29,8 @@ export interface AkzeptanzView {
   empfaengerId: string;
   anmerkung: string | null;
   erledigtAm: Date | null;
+  /** Erteilt vor der heute gültigen Bewertung (gilt nur bis zur nächsten Neubewertung). */
+  ueberholt: boolean;
 }
 
 export interface RisikoStandView {

@@ -8,6 +8,7 @@ import {
   risikoakzeptanzAnfordern as dienstAkzeptanzAnfordern,
   risikoNeuBewerten as dienstNeuBewerten,
   risikoZurueckweisen,
+  uebersteuerungAufheben as dienstUebersteuerungAufheben,
   uebersteuerungBeantragen as dienstUebersteuerungBeantragen,
   uebersteuerungEntscheiden as dienstUebersteuerungEntscheiden,
 } from '@tcms/service';
@@ -117,8 +118,30 @@ export async function uebersteuerungEntscheiden(_prev: Ergebnis, fd: FormData): 
     ok:
       r.wert.status === 'FREIGEGEBEN'
         ? 'Übersteuerung freigegeben. Der berechnete Wert bleibt sichtbar.'
-        : 'Übersteuerung abgelehnt.',
+        : 'Übersteuerung abgelehnt bzw. zurückgezogen.',
   };
+}
+
+/** Hebt eine freigegebene Übersteuerung auf; danach gilt der berechnete Wert. */
+export async function uebersteuerungAufheben(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
+  if (ausHistorischemStand(fd)) return { fehler: NUR_AKTUELL };
+  const mandantId = feld(fd, 'mandantId');
+  const r = await fuehreAus(
+    mandantId,
+    (ctx) =>
+      dienstUebersteuerungAufheben(ctx, {
+        mandantId,
+        uebersteuerungId: feld(fd, 'id'),
+        begruendung: feld(fd, 'begruendung'),
+      }),
+    {
+      ungueltig: `Das Aufheben braucht ${BEGRUENDUNG_30}.`,
+      nichtGefunden: 'Übersteuerung nicht gefunden.',
+    },
+  );
+  if ('fehler' in r) return r;
+  aktualisiereMandant(mandantId);
+  return { ok: 'Übersteuerung aufgehoben. Es gilt der berechnete Wert.' };
 }
 
 /** Inventarfreigabe: „einreichen" bzw. „freigeben" für die ausgewählten Risiken. */
@@ -131,12 +154,17 @@ export async function risikenFreigabeSchritt(_prev: Ergebnis, fd: FormData): Pro
   if (risikoIds.length === 0) return { fehler: 'Bitte mindestens ein Risiko auswählen.' };
   const aktion = feld(fd, 'aktion');
   if (aktion !== 'einreichen' && aktion !== 'freigeben') return { fehler: 'Unbekannter Schritt.' };
+  // Freigeben nur auf dem gesehenen Stand (TS-05): je Risiko ein Feld `standId:<id>`.
+  const risiken = risikoIds.map((risikoId) => ({
+    risikoId,
+    standId: feld(fd, `standId:${risikoId}`),
+  }));
   const r = await fuehreAus(
     mandantId,
     (ctx) =>
       aktion === 'einreichen'
         ? risikenZurFreigabe(ctx, { mandantId, risikoIds })
-        : risikenFreigeben(ctx, { mandantId, risikoIds }),
+        : risikenFreigeben(ctx, { mandantId, risiken }),
     { ungueltig: 'Bitte die Auswahl prüfen.', nichtGefunden: 'Risiko nicht gefunden.' },
   );
   if ('fehler' in r) return r;

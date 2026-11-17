@@ -11,8 +11,33 @@
 //   3. Objekt in derselben Transaktion sperren, und zwar nur, wenn es zum
 //      Programm dieses Mandanten gehört (RLS trennt nur Tenants), dann den
 //      Zustand unter der Sperre lesen, prüfen und ändern.
-// Sperrreihenfolge, damit sich Operationen nicht gegenseitig blockieren:
-// Programm → Risiken (nach ID) → Kontrollen (nach ID) → Durchführungen.
+//
+// Sperrreihenfolge (TS-05, verbindlich für alle Bereiche, AGENTS.md): Jede
+// Transaktion nimmt ihre Sperren nur in dieser Ordnung, damit sich Operationen
+// nicht verklemmen (eine Verklemmung bleibt ein wiederholbarer KONFLIKT,
+// `kern/konflikt.ts`):
+//   1. Idempotenz- und Anker-Advisory-Locks (`portal-meldung|…`, `mandant.anker.…`)
+//   2. Programm
+//   3. Ereignis
+//   4. Feststellung
+//   5. Freigabe bzw. BeschreibungVersion
+//   6. Risiken (nach ID)
+//   7. Kontrollen (nach ID)
+//   8. Durchführungen (nach ID)
+//   9. Kindzeilen (Ereignisfolge, Maßnahme, Nachweis)
+//  10. Nummernkreis-Advisory-Locks (`nummer.*`, `kern/nummern.ts`)
+//  11. Mandant FOR KEY SHARE (`halteRollenFest`)
+//  12. Audit-Lock (immer zuletzt, nimmt `mitAudit`)
+// Implizite Sperren zählen mit: Ein INSERT bzw. ein UPDATE eines Fremdschlüssels
+// nimmt FOR KEY SHARE auf die referenzierte Elternzeile, ein UPDATE ohne
+// Schlüsseländerung FOR NO KEY UPDATE auf die eigene Zeile. Elternzeilen, an
+// denen nur Nicht-Schlüsselspalten geändert werden (Programm, Risiko,
+// Kontrolle), sperren die Helfer hier deshalb mit FOR NO KEY UPDATE: Das
+// serialisiert Änderungen derselben Zeile wie FOR UPDATE, blockiert aber nicht
+// die FK-Prüfung anderer Transaktionen, die Kindzeilen anlegen (z. B. ein
+// Ereignis, eine Freigabe oder eine RisikoKontrolle) – so entsteht keine Kante
+// „Kind → Eltern“ gegen die Ordnung. Durchführungen bleiben FOR UPDATE, weil
+// die Neuplanung unberührte Durchführungen löscht.
 // =============================================================================
 
 import { DienstFehler, nichtBerechtigt, type Akteur } from '@tcms/contract';
@@ -103,16 +128,19 @@ export async function programmDes(tx: Tx, mandantId: string): Promise<ProgrammRe
 }
 
 // -----------------------------------------------------------------------------
-// Zeilensperren (TS-05). Parametrisiert, feste Tabellennamen; RLS gilt auch für
-// SELECT … FOR UPDATE. Jede Sperre prüft zugleich die Zugehörigkeit zum
-// Programm des Mandanten: eine fremde ID ergibt keine Zeile → NICHT_GEFUNDEN.
+// Zeilensperren (TS-05, Ordnung im Dateikopf). Parametrisiert, feste
+// Tabellennamen; RLS gilt auch für SELECT … FOR NO KEY UPDATE. Jede Sperre
+// prüft zugleich die Zugehörigkeit zum Programm des Mandanten: eine fremde ID
+// ergibt keine Zeile → NICHT_GEFUNDEN. Programm, Risiko und Kontrolle werden
+// nie gelöscht und ihre Schlüssel (id, tenant_id, mandantId bzw. programmId,
+// code) nie geändert – deshalb FOR NO KEY UPDATE.
 // -----------------------------------------------------------------------------
 
 /** Sperrt das Programm des Mandanten (Profil, Risikoaufnahme). */
 export async function sperreProgramm(tx: Tx, mandantId: string): Promise<ProgrammRef> {
   const z = await tx.$queryRaw<ProgrammRef[]>`
     SELECT "id", "mandantId"::text AS "mandantId" FROM "TcmsProgramm"
-    WHERE "mandantId" = ${mandantId}::uuid FOR UPDATE`;
+    WHERE "mandantId" = ${mandantId}::uuid FOR NO KEY UPDATE`;
   if (z.length !== 1) throw new DienstFehler('NICHT_GEFUNDEN');
   return z[0]!;
 }
@@ -120,10 +148,11 @@ export async function sperreProgramm(tx: Tx, mandantId: string): Promise<Program
 /** Sperrt Risiken des Programms in fester Reihenfolge; fehlt eines → NICHT_GEFUNDEN. */
 export async function sperreRisiken(tx: Tx, programmId: string, ids: readonly string[]) {
   const sortiert = [...new Set(ids)].sort();
+  if (sortiert.length === 0) return;
   const z = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "Risiko"
     WHERE "programmId" = ${programmId} AND "id" = ANY(${sortiert}::text[])
-    ORDER BY "id" FOR UPDATE`;
+    ORDER BY "id" FOR NO KEY UPDATE`;
   if (z.length !== sortiert.length) throw new DienstFehler('NICHT_GEFUNDEN');
 }
 
@@ -134,11 +163,14 @@ export async function sperreKontrollen(tx: Tx, programmId: string, ids: readonly
   const z = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "Kontrolle"
     WHERE "programmId" = ${programmId} AND "id" = ANY(${sortiert}::text[])
-    ORDER BY "id" FOR UPDATE`;
+    ORDER BY "id" FOR NO KEY UPDATE`;
   if (z.length !== sortiert.length) throw new DienstFehler('NICHT_GEFUNDEN');
 }
 
-/** Sperrt alle Durchführungen einer Kontrolle (vor einer Neuplanung). */
+/**
+ * Sperrt alle Durchführungen einer Kontrolle (vor einer Neuplanung). FOR
+ * UPDATE, weil die Neuplanung unberührte Durchführungen löscht.
+ */
 export async function sperreDurchfuehrungen(tx: Tx, kontrolleId: string): Promise<void> {
   await tx.$queryRaw`
     SELECT "id" FROM "Durchfuehrung" WHERE "kontrolleId" = ${kontrolleId}
@@ -146,44 +178,10 @@ export async function sperreDurchfuehrungen(tx: Tx, kontrolleId: string): Promis
 }
 
 // -----------------------------------------------------------------------------
-// Datenbankfehler → KONFLIKT
+// Datenbankfehler → KONFLIKT: die eine Abbildung aus dem Kern (Befund 92).
 // -----------------------------------------------------------------------------
 
-const KONFLIKT_CODES = new Set([
-  // Prisma: Unique-Verletzung, Schreibkonflikt/Deadlock
-  'P2002',
-  'P2034',
-  // PostgreSQL: unique_violation, serialization_failure, deadlock_detected
-  '23505',
-  '40001',
-  '40P01',
-]);
-
-function fehlerCodes(e: unknown, tiefe = 0): string[] {
-  if (!e || typeof e !== 'object' || tiefe > 4) return [];
-  const x = e as { code?: unknown; meta?: { code?: unknown }; cause?: unknown };
-  const out: string[] = [];
-  if (typeof x.code === 'string') out.push(x.code);
-  if (x.meta && typeof x.meta.code === 'string') out.push(x.meta.code);
-  return [...out, ...fehlerCodes(x.cause, tiefe + 1)];
-}
-
-/**
- * Übersetzt gleichzeitige Änderungen (eindeutige Schlüssel, Deadlock,
- * Serialisierung) in `KONFLIKT`; alle anderen Fehler unverändert. Die
- * Transaktion ist danach ohnehin abgebrochen und rollt vollständig zurück.
- */
-export async function konfliktSicher<T>(fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (e) {
-    if (e instanceof DienstFehler) throw e;
-    if (fehlerCodes(e).some((c) => KONFLIKT_CODES.has(c))) {
-      throw new DienstFehler('KONFLIKT', 'Der Stand wurde inzwischen geändert. Bitte neu laden.');
-    }
-    throw e;
-  }
-}
+export { konfliktSicher } from '../../kern/konflikt';
 
 export function konflikt(meldung: string): DienstFehler {
   return new DienstFehler('KONFLIKT', meldung);

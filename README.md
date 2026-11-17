@@ -443,6 +443,7 @@ nur Kanzleipersonen mit `cli.id` = Mandant; Lesen mit `?stand=YYYY-MM-DD`, Schre
 | POST    | `/risiken/:risikoId/neu-bewerten`, `…/bewertung-bestaetigen`                                    | Bearbeiten, gesehener Stand (`standId`) |
 | POST    | `/risiken/:risikoId/uebersteuerungen` (201)                                                     | Bearbeiten                              |
 | POST    | `/uebersteuerungen/:uebersteuerungId/entscheiden`                                               | Bearbeiten, zweite Person               |
+| POST    | `/uebersteuerungen/:uebersteuerungId/aufheben`                                                  | Bearbeiten, Begründung                  |
 | POST    | `/risiken-freigabe/einreichen`, `/risiken-freigabe/freigeben`                                   | Bearbeiten; Freigabe zweite Person      |
 | POST    | `/risiken/:risikoId/zurueckweisen`                                                              | Bearbeiten, zweite Person               |
 | POST    | `/risiken/:risikoId/akzeptanz-anfordern` (201)                                                  | Bearbeiten; Empfänger aktive GV         |
@@ -454,6 +455,13 @@ nur Kanzleipersonen mit `cli.id` = Mandant; Lesen mit `?stand=YYYY-MM-DD`, Schre
 
 Versionierte Änderungen beruhen auf dem gesehenen Stand: Ist inzwischen ein anderer Stand gültig,
 antwortet der Dienst mit `409 KONFLIKT`; gleichzeitige Entscheidungen wirken genau einmal.
+„Ablehnen“ durch die beantragende Person zieht einen offenen Antrag (Übersteuerung,
+Frequenzabweichung) zurück; freigeben darf sie nicht. Eine Übersteuerung gilt nur für den
+berechneten Wert, gegen den sie freigegeben wurde: Ändert er sich (Neubewertung, Designbeurteilung,
+Betrieb der Kontrollen), ist sie `ueberholt` und es gilt der berechnete Wert; die Freigabe eines
+Antrags mit inzwischen anderem berechneten Wert ergibt `409`. Die Inventarfreigabe nennt je Risiko
+den gesehenen Stand (`risiken: [{ risikoId, standId }]`); ein inzwischen neu bewertetes Risiko wird
+übersprungen. Eine Neubewertung mit geänderten Werten zieht eine offene Risikoakzeptanz zurück.
 Kontrollen (Kontrollmatrix, Kontrolldetail und Kontext) tragen neben `pflichtattributeOk` die Liste
 `pflichtattributeLuecken` (feste Texte `PFLICHTATTRIBUT_LUECKEN`: Ziel, Schritte, Nachweisanforderung,
 durchführende Person, verschiedene Vertretung, Gegenzeichnung bei Schlüsselkontrollen); beide Felder

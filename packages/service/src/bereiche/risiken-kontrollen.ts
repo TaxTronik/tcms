@@ -19,6 +19,7 @@ export {
   risikoBewertungBestaetigen,
   risikoNeuBewerten,
   risikoZurueckweisen,
+  uebersteuerungAufheben,
   uebersteuerungBeantragen,
   uebersteuerungEntscheiden,
 } from './risiken-kontrollen/risiken';

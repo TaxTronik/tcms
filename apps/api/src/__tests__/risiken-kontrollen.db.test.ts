@@ -22,6 +22,7 @@ import {
   RisikoAufgenommenSchema,
   RisikoDetailSchema,
   RisikoZurueckgewiesenSchema,
+  UebersteuerungAufgehobenSchema,
   UebersteuerungBeantragtSchema,
   UebersteuerungEntschiedenSchema,
   antwortSchema,
@@ -245,6 +246,32 @@ describe.skipIf(!AKTIV)('API risiken-kontrollen gegen PostgreSQL', () => {
     expect(selbst.antwort).toMatchObject({ fehler: { grund: 'VIER_AUGEN' } });
     const ok = await rufe('POST', p(a, pfad), wer(a, 'bt'), { entscheidung: 'FREIGEBEN' });
     expect(erwarte(UebersteuerungEntschiedenSchema, ok.antwort).status).toBe('FREIGEGEBEN');
+
+    // Aufheben (Befund 4): Body nur mit Begründung, Rechte wie beim Beantragen.
+    const auf = `/uebersteuerungen/${u.uebersteuerungId}/aufheben`;
+    await negativ('POST', auf, { begruendung: BEGRUENDUNG });
+    await ungueltig(auf, { begruendung: 'kurz' });
+    await ungueltig(auf, { begruendung: BEGRUENDUNG, klasse: 'GERING' });
+    const leser = await rufe('POST', p(a, auf), wer(a, 'leser'), { begruendung: BEGRUENDUNG });
+    expect([leser.status, leser.antwort]).toMatchObject([403, { fehler: { grund: 'BEARBEITEN' } }]);
+    const fremd = await rufe('POST', p(b, auf), wer(b, 'bt'), { begruendung: BEGRUENDUNG });
+    expect(fremd.status).toBe(404);
+    const aufgehoben = await rufe('POST', p(a, auf), wer(a, 'hb'), { begruendung: BEGRUENDUNG });
+    expect(aufgehoben.status).toBe(200);
+    expect(erwarte(UebersteuerungAufgehobenSchema, aufgehoben.antwort)).toEqual({
+      uebersteuerungId: u.uebersteuerungId,
+      risikoId: r.id,
+      status: 'AUFGEHOBEN',
+    });
+    const nochmal = await rufe('POST', p(a, auf), wer(a, 'bt'), { begruendung: BEGRUENDUNG });
+    expect(nochmal.status).toBe(409);
+    const d = await rufe('GET', p(a, `/risiken/${r.id}`), wer(a, 'bt'));
+    const detail = erwarte(RisikoDetailSchema, d.antwort);
+    expect(detail.risiko.bewertung.uebersteuertDesign).toBe(false);
+    expect(detail.risiko.uebersteuerungen.find((x) => x.id === u.uebersteuerungId)).toMatchObject({
+      status: 'AUFGEHOBEN',
+      ueberholt: false,
+    });
   });
 
   it('Inventarfreigabe: einreichen, freigeben, zurückweisen', async () => {
@@ -266,15 +293,20 @@ describe.skipIf(!AKTIV)('API risiken-kontrollen gegen PostgreSQL', () => {
     await ungueltig('/risiken-freigabe/einreichen', { risikoIds: [r1.id, r1.id] });
     const ein = await rufe('POST', p(a, '/risiken-freigabe/einreichen'), wer(a, 'hb'), body);
     expect(erwarte(FreigabeSchrittErgebnisSchema, ein.antwort).bearbeitet).toHaveLength(2);
-    await negativ('POST', '/risiken-freigabe/freigeben', { risikoIds: [r1.id] });
-    const selbst = await rufe('POST', p(a, '/risiken-freigabe/freigeben'), wer(a, 'hb'), {
-      risikoIds: [r1.id],
-    });
+    // Freigeben mit dem gesehenen Stand je Risiko (TS-05, Befund 20).
+    const gesehen = (await risiken()).risiken.find((x) => x.id === r1.id)!.standId;
+    const fbody = { risiken: [{ risikoId: r1.id, standId: gesehen }] };
+    await negativ('POST', '/risiken-freigabe/freigeben', fbody);
+    await ungueltig('/risiken-freigabe/freigeben', { risikoIds: [r1.id] });
+    await ungueltig('/risiken-freigabe/freigeben', { risiken: [{ risikoId: r1.id }] });
+    const selbst = await rufe('POST', p(a, '/risiken-freigabe/freigeben'), wer(a, 'hb'), fbody);
     expect(selbst.status).toBe(403);
     expect(selbst.antwort).toMatchObject({ fehler: { grund: 'VIER_AUGEN' } });
-    const frei = await rufe('POST', p(a, '/risiken-freigabe/freigeben'), wer(a, 'bt'), {
-      risikoIds: [r1.id],
+    const veraltet = await rufe('POST', p(a, '/risiken-freigabe/freigeben'), wer(a, 'bt'), {
+      risiken: [{ risikoId: r1.id, standId: r1.standId }],
     });
+    expect(veraltet.status).toBe(409);
+    const frei = await rufe('POST', p(a, '/risiken-freigabe/freigeben'), wer(a, 'bt'), fbody);
     expect(erwarte(FreigabeSchrittErgebnisSchema, frei.antwort).bearbeitet).toHaveLength(1);
     const zbody = { begruendung: BEGRUENDUNG };
     await negativ('POST', `/risiken/${r2.id}/zurueckweisen`, zbody);

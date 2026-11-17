@@ -38,6 +38,7 @@ import {
   risikoakzeptanzAnfordern,
   risikoFreigabeZurueckweisen,
   risikoNeuBewerten,
+  uebersteuerungAufheben,
   uebersteuerungBeantragen,
   uebersteuerungEntscheiden,
 } from '@/server/actions/risiken';
@@ -155,8 +156,11 @@ export function RisikoDrawer({
       ? { ...u, status: 'BEANTRAGT' as const, entschiedenVon: null, entschiedenAm: null }
       : u,
   );
-  const wirksamU = (sicht: 'DESIGN' | 'BETRIEB') =>
-    uebersteuerungen.find((u) => u.sicht === sicht && u.status === 'FREIGEGEBEN');
+  // Wirksam ist nur die jüngste freigegebene, nicht überholte Übersteuerung (Service).
+  const wirksamU = (sicht: 'DESIGN' | 'BETRIEB') => {
+    const u = uebersteuerungen.find((x) => x.sicht === sicht && x.status === 'FREIGEGEBEN');
+    return u && !u.ueberholt ? u : undefined;
+  };
   const offeneU = uebersteuerungen.filter((u) => u.status === 'BEANTRAGT');
   const ereignisse = ctx.ereignisse.filter((e) => e.folgen.some((f) => f.ziel === r.code));
   // Maskierte vertrauliche Feststellungen nennen keine Risikocodes (RT-01, Service).
@@ -602,8 +606,18 @@ export function RisikoDrawer({
                     {a.erledigtAm ? ` · entschieden ${fmtDatumZeit(a.erledigtAm)}` : ''}
                     {a.anmerkung ? ` · „${a.anmerkung}"` : ''}
                   </span>
-                  <span className={AKZEPTANZ_STATUS_BADGE[a.status]}>
-                    {AKZEPTANZ_STATUS_LABEL[a.status]}
+                  <span className="row-s">
+                    <span className={AKZEPTANZ_STATUS_BADGE[a.status]}>
+                      {AKZEPTANZ_STATUS_LABEL[a.status]}
+                    </span>
+                    {a.ueberholt ? (
+                      <span
+                        className="badge-gray"
+                        title="Erteilt vor der heute gültigen Bewertung – gilt nur bis zur nächsten Neubewertung"
+                      >
+                        vor Neubewertung
+                      </span>
+                    ) : null}
                   </span>
                 </div>
               ))}
@@ -688,8 +702,15 @@ export function RisikoDrawer({
                       {UEBERSTEUERUNG_STATUS_LABEL[u.status]}
                     </span>
                     {u.status === 'FREIGEGEBEN' ? (
-                      <span className={geltend ? 'badge-brand' : 'badge-gray'}>
-                        {geltend ? 'gilt' : 'abgelöst'}
+                      <span
+                        className={geltend ? 'badge-brand' : 'badge-gray'}
+                        title={
+                          u.ueberholt
+                            ? 'Freigegeben gegen einen anderen berechneten Wert – es gilt der berechnete Wert'
+                            : undefined
+                        }
+                      >
+                        {geltend ? 'gilt' : u.ueberholt ? 'überholt' : 'abgelöst'}
                       </span>
                     ) : null}
                   </span>
@@ -700,7 +721,25 @@ export function RisikoDrawer({
                   {u.entschiedenVon
                     ? ` · entschieden ${personName(ctx, u.entschiedenVon)} · ${fmtDatumZeit(u.entschiedenAm)}`
                     : ''}
+                  {u.aufgehobenVon
+                    ? ` · aufgehoben ${personName(ctx, u.aufgehobenVon)} · ${fmtDatumZeit(u.aufgehobenAm)}`
+                    : ''}
                 </span>
+                {u.status === 'FREIGEGEBEN' ? (
+                  <div className="row-s">
+                    <BegruendungsDialog
+                      ausloeser="Aufheben…"
+                      titel="Übersteuerung aufheben"
+                      hinweis="Danach gilt wieder der berechnete Wert."
+                      action={uebersteuerungAufheben}
+                      felder={{ id: u.id, stand: seite.standIso, mandantId: ctx.mandant.id }}
+                      bestaetigen="Aufheben"
+                      vierAugen={false}
+                      disabled={!!sperre}
+                      disabledGrund={sperre ?? undefined}
+                    />
+                  </div>
+                ) : null}
                 {u.status === 'BEANTRAGT' ? (
                   <div className="row-s">
                     <AktionsForm action={uebersteuerungEntscheiden} className="inline-form">
@@ -716,9 +755,10 @@ export function RisikoDrawer({
                         <Icon name="Check" className="tx-icon-xs" /> Freigeben
                       </SubmitButton>
                     </AktionsForm>
+                    {/* Die beantragende Person zieht ihren Antrag auf demselben Weg zurück. */}
                     <BegruendungsDialog
-                      ausloeser="Ablehnen…"
-                      titel="Übersteuerung ablehnen"
+                      ausloeser={darf ? 'Ablehnen…' : 'Zurückziehen…'}
+                      titel={darf ? 'Übersteuerung ablehnen' : 'Antrag zurückziehen'}
                       action={uebersteuerungEntscheiden}
                       felder={{
                         id: u.id,
@@ -726,10 +766,10 @@ export function RisikoDrawer({
                         stand: seite.standFeld,
                         mandantId: ctx.mandant.id,
                       }}
-                      bestaetigen="Ablehnen"
+                      bestaetigen={darf ? 'Ablehnen' : 'Zurückziehen'}
                       vierAugen={false}
-                      disabled={!!grund}
-                      disabledGrund={grund}
+                      disabled={!!sperre}
+                      disabledGrund={sperre ?? undefined}
                     />
                   </div>
                 ) : null}
@@ -804,6 +844,7 @@ export function RisikoDrawer({
             <div className="row-s">
               <AktionsForm action={risikenFreigabeSchritt} className="inline-form">
                 <input type="hidden" name="ids" value={r.id} />
+                <input type="hidden" name={`standId:${r.id}`} value={r.standId} />
                 <input type="hidden" name="mandantId" value={ctx.mandant.id} />
                 <input type="hidden" name="aktion" value="freigeben" />
                 <input type="hidden" name="stand" value={seite.standFeld} />

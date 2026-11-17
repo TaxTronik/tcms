@@ -123,6 +123,10 @@ export interface RisikoView {
     beantragtAm: Date;
     entschiedenVon: string | null;
     entschiedenAm: Date | null;
+    aufgehobenVon: string | null;
+    aufgehobenAm: Date | null;
+    /** Freigegeben gegen einen anderen als den heute berechneten Wert: nicht wirksam (Befund 4). */
+    ueberholt: boolean;
   }[];
   offeneEreignisse: number;
   wirktAuf: string[];
@@ -1036,26 +1040,40 @@ function berechne(
       .map((x) => kontrolleJe.get(x.kontrolleId))
       .filter((x): x is KontrolleView => !!x);
     const uebers = r.uebersteuerungen.filter((u) => u.beantragtAm.getTime() <= ende.getTime());
-    const wirksamU = (sicht: 'DESIGN' | 'BETRIEB') =>
-      uebers.find(
-        (u) =>
-          u.sicht === sicht &&
-          u.status === 'FREIGEGEBEN' &&
-          (u.entschiedenAm?.getTime() ?? 0) <= ende.getTime(),
-      )?.klasse ?? null;
-    const bewertung = bewerte(
-      s.s,
-      s.w,
-      s.r as 1 | 2 | 3,
-      ks.map((k) => ({
-        code: k.code,
-        art: k.art,
-        design: k.design,
-        schluessel: k.schluessel,
-        betrieb: k.betrieb,
-      })),
-      { design: wirksamU('DESIGN'), betrieb: wirksamU('BETRIEB') },
-    );
+    const fuerNetto = ks.map((k) => ({
+      code: k.code,
+      art: k.art,
+      design: k.design,
+      schluessel: k.schluessel,
+      betrieb: k.betrieb,
+    }));
+    // Berechnete Nettoklassen ohne Übersteuerung (Regel 2).
+    const basis = bewerte(s.s, s.w, s.r as 1 | 2 | 3, fuerNetto);
+    const berechnetJe = { DESIGN: basis.nettoDesign.klasse, BETRIEB: basis.nettoBetrieb.klasse };
+    // Zum Stichtag freigegeben und noch nicht aufgehoben (Liste: jüngster Antrag zuerst).
+    const spaeterAufgehoben = (u: (typeof uebers)[number]) =>
+      u.status === 'AUFGEHOBEN' && u.aufgehobenAm != null && u.aufgehobenAm > ende;
+    const freigegebenZumStand = (u: (typeof uebers)[number]) =>
+      (u.status === 'FREIGEGEBEN' || spaeterAufgehoben(u)) &&
+      u.entschiedenAm != null &&
+      u.entschiedenAm.getTime() <= ende.getTime();
+    // Eine Übersteuerung ist gegen genau einen berechneten Wert freigegeben
+    // (`berechnet`). Ändert er sich (Neubewertung, Designbeurteilung, Betrieb
+    // der Kontrollen), ist sie überholt: Es gilt der berechnete Wert, bis eine
+    // neue Übersteuerung freigegeben ist (Befund 4). Eine ältere Freigabe lebt
+    // dadurch nicht wieder auf.
+    const geltend = (sicht: 'DESIGN' | 'BETRIEB') =>
+      uebers.find((u) => u.sicht === sicht && freigegebenZumStand(u)) ?? null;
+    const wirksamU = (sicht: 'DESIGN' | 'BETRIEB') => {
+      const u = geltend(sicht);
+      return u && u.berechnet === berechnetJe[sicht] ? u.klasse : null;
+    };
+    const ueberholt = (u: (typeof uebers)[number]) =>
+      freigegebenZumStand(u) && u.berechnet !== berechnetJe[u.sicht];
+    const bewertung = bewerte(s.s, s.w, s.r as 1 | 2 | 3, fuerNetto, {
+      design: wirksamU('DESIGN'),
+      betrieb: wirksamU('BETRIEB'),
+    });
     const netto = betriebAktiv ? bewertung.wirksamBetrieb : bewertung.wirksamDesign;
     const gruppe = (kat?.gruppe ?? (r.code.split('-')[1] as RisikoGruppe)) || 'UST';
     return {
@@ -1092,11 +1110,15 @@ function berechne(
         klasse: u.klasse,
         berechnet: u.berechnet,
         begruendung: u.begruendung,
-        status: u.status,
         beantragtVon: u.beantragtVon,
         beantragtAm: u.beantragtAm,
         entschiedenVon: u.entschiedenVon,
         entschiedenAm: u.entschiedenAm,
+        // Zum Stichtag: eine spätere Aufhebung ist noch nicht geschehen.
+        ...(spaeterAufgehoben(u)
+          ? { status: 'FREIGEGEBEN' as const, aufgehobenVon: null, aufgehobenAm: null }
+          : { status: u.status, aufgehobenVon: u.aufgehobenVon, aufgehobenAm: u.aufgehobenAm }),
+        ueberholt: ueberholt(u),
       })),
       offeneEreignisse: offeneEreignisseJe.get(r.code) ?? 0,
       wirktAuf: kat?.wirktAuf ?? [],
