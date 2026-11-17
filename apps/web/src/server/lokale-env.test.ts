@@ -20,7 +20,8 @@ describe('Demo nach pnpm env:lokal', () => {
 
   it('nimmt SESSION_SECRET und TCMS_CODE_SCHLUESSEL aus der erzeugten .env an', () => {
     copyFileSync(BEISPIEL, join(w, '.env.example'));
-    writeFileSync(join(w, '.gitignore'), '.env\n');
+    // Wie im Repo: auch die Temporärdatei `.env.tmp-…` des Skripts ist ignoriert.
+    writeFileSync(join(w, '.gitignore'), '.env*\n!.env.example\n');
     execFileSync('git', ['-C', w, 'init', '-q'], { stdio: 'pipe' });
     const r = spawnSync(process.execPath, [SKRIPT, '--wurzel', w], {
       encoding: 'utf8',
