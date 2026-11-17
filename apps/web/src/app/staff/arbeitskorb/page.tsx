@@ -23,6 +23,7 @@ const VIER_AUGEN: Record<VierAugenArt, { label: string; icon: IconName }> = {
   FREQUENZ: { label: 'Frequenzabweichung', icon: 'CalendarClock' },
   VERWERFEN: { label: 'Verwerfen', icon: 'Ban' },
   RISIKOFREIGABE: { label: 'Inventarfreigabe', icon: 'UserCheck' },
+  ENTFALLEN: { label: 'Entfallen', icon: 'Calendar' },
 };
 
 const RING: Record<string, string> = {

@@ -782,9 +782,12 @@ export const ArbeitskorbAntwortSchema = z
       z
         .object({
           mandant: mandantKurz,
-          art: z.enum(['UEBERSTEUERUNG', 'FREQUENZ', 'VERWERFEN', 'RISIKOFREIGABE']),
+          art: z.enum(['UEBERSTEUERUNG', 'FREQUENZ', 'VERWERFEN', 'RISIKOFREIGABE', 'ENTFALLEN']),
           key: text(200),
-          /** Objekt, auf das sich die Bestätigung bezieht (Risiko, Kontrolle, Feststellung). */
+          /**
+           * Objekt, auf das sich die Bestätigung bezieht (Risiko, Kontrolle,
+           * Feststellung; bei ENTFALLEN die Durchführung).
+           */
           objektId: objektId.nullable(),
           titel: text(1000),
           detail: text(1000),

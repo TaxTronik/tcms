@@ -155,6 +155,26 @@ export async function ladeArbeitskorb(
         orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
       })
     : [];
+  // Offene Entfallen-Anträge (Freigabe durch eine zweite Person mit
+  // Würdigungsrecht); nur offene Durchführungen – eingereichte sind erst nach
+  // der Zurückweisung entscheidbar.
+  const entfallen = programmIds.length
+    ? await ctx.tx.durchfuehrung.findMany({
+        where: {
+          kontrolle: { programmId: { in: programmIds } },
+          status: { in: ['GEPLANT', 'IN_DURCHFUEHRUNG', 'ZURUECKGEWIESEN'] },
+          entfallenBegruendung: { not: null },
+        },
+        select: {
+          id: true,
+          periodeLabel: true,
+          entfallenBegruendung: true,
+          entfallenVon: true,
+          kontrolle: { select: { code: true, programmId: true } },
+        },
+        orderBy: [{ periodeVon: 'asc' }, { id: 'asc' }],
+      })
+    : [];
   const staendeJe = new Map<string, AbweichungsStand[]>();
   for (const st of abweichungsStaende) {
     staendeJe.set(st.kontrolleId, [...(staendeJe.get(st.kontrolleId) ?? []), st]);
@@ -291,6 +311,22 @@ export async function ladeArbeitskorb(
           beantragtVon: f.verwerfenBeantragtVon ? [f.verwerfenBeantragtVon] : [],
           beantragtAm: null,
         });
+      }
+      if (kannWuerdigen(nutzer, m.id)) {
+        for (const d of entfallen.filter((x) => x.kontrolle.programmId === c.programm!.id)) {
+          if (!zweitePerson(nutzer, d.entfallenVon)) continue;
+          korb.vierAugen.push({
+            mandant,
+            art: 'ENTFALLEN',
+            key: d.id,
+            objektId: d.id,
+            titel: `${d.kontrolle.code} · ${d.periodeLabel}`,
+            detail: 'Entfallen der Durchführung',
+            begruendung: d.entfallenBegruendung,
+            beantragtVon: d.entfallenVon ? [d.entfallenVon] : [],
+            beantragtAm: null,
+          });
+        }
       }
       const zurFreigabe = c.risiken.filter(
         (r) => r.freigabe === 'ZUR_FREIGABE' && zweitePerson(nutzer, r.freigabeEingereichtVon),
