@@ -62,7 +62,7 @@ model Mandant {
 /// Rolle eines Mandantenkontakts (ID der kanzleikonsole) beim Mandanten
 /// (ADR 0001 §5). Ohne aktive Rolle hat ein Mandantenkontakt keinen Zugriff.
 model MandantKontaktRolle {
-  id        String       @id @default(cuid())
+  id        String       @id @default(cuid(2))
   tenantId  String       @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   mandantId String       @db.Uuid
   mandant   Mandant      @relation(fields: [tenantId, mandantId], references: [tenantId, id])
@@ -95,7 +95,7 @@ enum ProgrammStatus {
 
 /// Höchstens ein Programm je Mandant (TS-05): eindeutig über (tenant_id, mandantId).
 model TcmsProgramm {
-  id                     String                @id @default(cuid())
+  id                     String                @id @default(cuid(2))
   tenantId               String                @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   mandantId              String                @db.Uuid
   mandant                Mandant               @relation(fields: [tenantId, mandantId], references: [tenantId, id])
@@ -126,7 +126,7 @@ model TcmsProgramm {
 }
 
 model Teilbereich {
-  id           String           @id @default(cuid())
+  id           String           @id @default(cuid(2))
   tenantId     String           @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId   String
   programm     TcmsProgramm     @relation(fields: [tenantId, programmId], references: [tenantId, id])
@@ -142,7 +142,7 @@ model Teilbereich {
 }
 
 model ProfilStand {
-  id          String       @id @default(cuid())
+  id          String       @id @default(cuid(2))
   tenantId    String       @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId  String
   programm    TcmsProgramm @relation(fields: [tenantId, programmId], references: [tenantId, id])
@@ -172,7 +172,7 @@ enum FreigabeStand {
 }
 
 model ComplianceZiel {
-  id                String        @id @default(cuid())
+  id                String        @id @default(cuid(2))
   tenantId          String        @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   teilbereichId     String
   teilbereich       Teilbereich   @relation(fields: [tenantId, teilbereichId], references: [tenantId, id])
@@ -229,7 +229,7 @@ enum GovernanceTyp {
 }
 
 model Risiko {
-  id                     String               @id @default(cuid())
+  id                     String               @id @default(cuid(2))
   tenantId               String               @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId             String
   programm               TcmsProgramm         @relation(fields: [tenantId, programmId], references: [tenantId, id])
@@ -259,7 +259,7 @@ model Risiko {
 }
 
 model RisikoStand {
-  id           String             @id @default(cuid())
+  id           String             @id @default(cuid(2))
   tenantId     String             @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   risikoId     String
   risiko       Risiko             @relation(fields: [tenantId, risikoId], references: [tenantId, id])
@@ -296,7 +296,7 @@ enum UebersteuerungStatus {
 }
 
 model Uebersteuerung {
-  id             String               @id @default(cuid())
+  id             String               @id @default(cuid(2))
   tenantId       String               @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   risikoId       String
   risiko         Risiko               @relation(fields: [tenantId, risikoId], references: [tenantId, id])
@@ -343,7 +343,7 @@ enum Design {
 }
 
 model Kontrolle {
-  id              String            @id @default(cuid())
+  id              String            @id @default(cuid(2))
   tenantId        String            @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId      String
   programm        TcmsProgramm      @relation(fields: [tenantId, programmId], references: [tenantId, id])
@@ -361,7 +361,7 @@ model Kontrolle {
 }
 
 model KontrolleStand {
-  id                       String          @id @default(cuid())
+  id                       String          @id @default(cuid(2))
   tenantId                 String          @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   kontrolleId              String
   kontrolle                Kontrolle       @relation(fields: [tenantId, kontrolleId], references: [tenantId, id])
@@ -432,7 +432,7 @@ enum Ergebnis {
 }
 
 model Durchfuehrung {
-  id                   String              @id @default(cuid())
+  id                   String              @id @default(cuid(2))
   tenantId             String              @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   kontrolleId          String
   kontrolle            Kontrolle           @relation(fields: [tenantId, kontrolleId], references: [tenantId, id])
@@ -487,7 +487,7 @@ model Durchfuehrung {
 /// filtert `entferntAm IS NULL`, die Bindung einer Dokument-ID an Mandant und
 /// Inhalt gilt weiter.
 model Nachweis {
-  id              String        @id @default(cuid())
+  id              String        @id @default(cuid(2))
   tenantId        String        @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   durchfuehrungId String
   durchfuehrung   Durchfuehrung @relation(fields: [tenantId, durchfuehrungId], references: [tenantId, id])
@@ -548,7 +548,7 @@ enum P153Entscheidung {
 }
 
 model Feststellung {
-  id                     String                 @id @default(cuid())
+  id                     String                 @id @default(cuid(2))
   tenantId               String                 @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId             String
   programm               TcmsProgramm           @relation(fields: [tenantId, programmId], references: [tenantId, id])
@@ -599,7 +599,7 @@ model FeststellungRisiko {
 }
 
 model BetroffeneErklaerung {
-  id             String       @id @default(cuid())
+  id             String       @id @default(cuid(2))
   tenantId       String       @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   feststellungId String
   feststellung   Feststellung @relation(fields: [tenantId, feststellungId], references: [tenantId, id])
@@ -617,7 +617,7 @@ enum MassnahmeStatus {
 }
 
 model Massnahme {
-  id              String          @id @default(cuid())
+  id              String          @id @default(cuid(2))
   tenantId        String          @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   feststellungId  String
   feststellung    Feststellung    @relation(fields: [tenantId, feststellungId], references: [tenantId, id])
@@ -671,7 +671,7 @@ enum FolgeStatus {
 }
 
 model Ereignis {
-  id                    String                   @id @default(cuid())
+  id                    String                   @id @default(cuid(2))
   tenantId              String                   @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId            String
   programm              TcmsProgramm             @relation(fields: [tenantId, programmId], references: [tenantId, id])
@@ -699,7 +699,7 @@ model Ereignis {
 }
 
 model EreignisFolge {
-  id         String      @id @default(cuid())
+  id         String      @id @default(cuid(2))
   tenantId   String      @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   ereignisId String
   ereignis   Ereignis    @relation(fields: [tenantId, ereignisId], references: [tenantId, id])
@@ -725,7 +725,7 @@ enum DatenQuelle {
 }
 
 model LandStand {
-  id                      String       @id @default(cuid())
+  id                      String       @id @default(cuid(2))
   tenantId                String       @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId              String
   programm                TcmsProgramm @relation(fields: [tenantId, programmId], references: [tenantId, id])
@@ -758,7 +758,7 @@ enum BeschreibungStatus {
 }
 
 model BeschreibungVersion {
-  id                    String             @id @default(cuid())
+  id                    String             @id @default(cuid(2))
   tenantId              String             @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId            String
   programm              TcmsProgramm       @relation(fields: [tenantId, programmId], references: [tenantId, id])
@@ -803,7 +803,7 @@ enum FreigabeStatus {
 }
 
 model Freigabe {
-  id               String         @id @default(cuid())
+  id               String         @id @default(cuid(2))
   tenantId         String         @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   programmId       String
   programm         TcmsProgramm   @relation(fields: [tenantId, programmId], references: [tenantId, id])
@@ -869,7 +869,7 @@ enum NachrichtUnzustellbarGrund {
 /// ersetzt) leeren `text` und `code`; zugestellt und unzustellbar schließen sich
 /// aus. CHECKs in den Migrationen erzwingen das.
 model Nachricht {
-  id                String                      @id @default(cuid())
+  id                String                      @id @default(cuid(2))
   tenantId          String                      @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   mandantId         String                      @db.Uuid
   mandant           Mandant                     @relation(fields: [tenantId, mandantId], references: [tenantId, id])
@@ -909,6 +909,11 @@ model Nachricht {
 /// Lücken darin verrieten die Audit-Aktivität anderer Kanzleien (RT-03).
 /// Nach außen gilt `pos`, die laufende Position je Tenant (1, 2, 3, …),
 /// vergeben unter der Tenant-Sperre in `schreibeAudit`.
+///
+/// Zusätzlich (nur in der Migration 20261117070000, Prisma kennt sie nicht):
+/// generierte Spalten `detailDurchfuehrungId` und `detailNachtragZuId`
+/// (`detail->>'…'`, STORED) mit Teilindex je Tenant für Verlauf und Beteiligte
+/// einer Durchführung; gelesen nur per Raw-SQL (durchfuehrung/lage.ts, lesen.ts).
 model AuditEvent {
   seq           Int      @id @default(autoincrement())
   pos           Int
@@ -954,7 +959,7 @@ model AkteurJti {
 /// bei der nächsten Verwendung ersetzt. Die App-Rolle liest, legt an und löscht
 /// (kein UPDATE): Bindung und Inhalt eines Schlüssels ändern sich nie.
 model PortalMeldungIdempotenz {
-  id           String   @id @default(cuid())
+  id           String   @id @default(cuid(2))
   tenantId     String   @default(dbgenerated("tcms_aktueller_tenant()")) @map("tenant_id") @db.Uuid
   mandantId    String   @db.Uuid
   mandant      Mandant  @relation(fields: [tenantId, mandantId], references: [tenantId, id])

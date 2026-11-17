@@ -13,7 +13,13 @@
 --   Rechte   tcms_app nirgends TRUNCATE/REFERENCES/TRIGGER (TRUNCATE umgeht
 --            RLS), auf AuditEvent kein UPDATE/DELETE, auf akteur_jti genau
 --            SELECT/INSERT/DELETE, auf dem Ledger nichts; kein CREATE im Schema
---            für tcms_app und PUBLIC, kein TEMP in der Datenbank.
+--            für tcms_app und PUBLIC, kein TEMP in der Datenbank, PUBLIC ohne
+--            CONNECT auf die Datenbank.
+--            SELECT, INSERT, UPDATE und REFERENCES gibt es auch je Spalte; die
+--            verbotenen prüft `has_any_column_privilege` (wahr bei einem Recht
+--            auf der Tabelle oder auf irgendeiner Spalte), `has_table_privilege`
+--            sähe einen reinen Spalten-Grant nicht. DELETE, TRUNCATE und
+--            TRIGGER kennen keine Spaltenrechte.
 -- =============================================================================
 
 \set ON_ERROR_STOP on
@@ -85,14 +91,14 @@ BEGIN
       befunde := befunde || pg_catalog.format('Tabelle %I gehört nicht tcms_owner', r.relname);
     END IF;
     IF pg_catalog.has_table_privilege(app, r.oid, 'TRUNCATE')
-       OR pg_catalog.has_table_privilege(app, r.oid, 'REFERENCES')
+       OR pg_catalog.has_any_column_privilege(app, r.oid, 'REFERENCES')
        OR pg_catalog.has_table_privilege(app, r.oid, 'TRIGGER') THEN
       befunde := befunde || pg_catalog.format('tcms_app hat TRUNCATE/REFERENCES/TRIGGER auf %I', r.relname);
     END IF;
     IF r.relname = '_prisma_migrations' THEN
-      IF pg_catalog.has_table_privilege(app, r.oid, 'SELECT')
-         OR pg_catalog.has_table_privilege(app, r.oid, 'INSERT')
-         OR pg_catalog.has_table_privilege(app, r.oid, 'UPDATE')
+      IF pg_catalog.has_any_column_privilege(app, r.oid, 'SELECT')
+         OR pg_catalog.has_any_column_privilege(app, r.oid, 'INSERT')
+         OR pg_catalog.has_any_column_privilege(app, r.oid, 'UPDATE')
          OR pg_catalog.has_table_privilege(app, r.oid, 'DELETE') THEN
         befunde := befunde || 'tcms_app hat Rechte auf dem Migrations-Ledger'::text;
       END IF;
@@ -100,7 +106,7 @@ BEGIN
       IF NOT (pg_catalog.has_table_privilege(app, r.oid, 'SELECT')
               AND pg_catalog.has_table_privilege(app, r.oid, 'INSERT')
               AND pg_catalog.has_table_privilege(app, r.oid, 'DELETE'))
-         OR pg_catalog.has_table_privilege(app, r.oid, 'UPDATE') THEN
+         OR pg_catalog.has_any_column_privilege(app, r.oid, 'UPDATE') THEN
         befunde := befunde || 'tcms_app hat auf akteur_jti nicht genau SELECT/INSERT/DELETE'::text;
       END IF;
     ELSE
@@ -114,7 +120,7 @@ BEGIN
   END LOOP;
   IF to_regclass('public."AuditEvent"') IS NULL THEN
     befunde := befunde || 'Tabelle AuditEvent fehlt'::text;
-  ELSIF pg_catalog.has_table_privilege(app, 'public."AuditEvent"', 'UPDATE')
+  ELSIF pg_catalog.has_any_column_privilege(app, 'public."AuditEvent"', 'UPDATE')
      OR pg_catalog.has_table_privilege(app, 'public."AuditEvent"', 'DELETE') THEN
     befunde := befunde || 'tcms_app darf AuditEvent ändern oder löschen'::text;
   END IF;
@@ -131,6 +137,9 @@ BEGIN
   END IF;
   IF pg_catalog.has_database_privilege(app, pg_catalog.current_database(), 'TEMPORARY') THEN
     befunde := befunde || 'tcms_app darf temporäre Tabellen anlegen'::text;
+  END IF;
+  IF pg_catalog.has_database_privilege('public', pg_catalog.current_database(), 'CONNECT') THEN
+    befunde := befunde || 'PUBLIC darf sich mit der Datenbank verbinden'::text;
   END IF;
 
   IF pg_catalog.cardinality(befunde) > 0 THEN

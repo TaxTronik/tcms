@@ -152,6 +152,19 @@ beides liegt im Hash der Kette. Logs nennen `akteurArt`.
   die App-Rolle nichts. Jede API-Anfrage läuft vollständig in genau einer
   solchen Transaktion (Lesen wie Schreiben). Vor dem Commit prüft `mitTenant`,
   dass der Kontext unverändert ist; sonst Rollback (Abschnitt 10.1).
+- Zeitlimits je Transaktion: Prisma begrenzt die Transaktion (30 s, Warten auf
+  eine Verbindung 10 s), bricht aber eine Anweisung, die in der Datenbank wartet,
+  nicht ab – sein ROLLBACK steht hinter ihr, die Poolverbindung bleibt belegt,
+  bis der Sperrinhaber endet. `mitTenant` setzt deshalb zusammen mit dem Tenant
+  transaktionslokal `lock_timeout` = 5 s (Sperren werden sonst nur Millisekunden
+  gehalten, die Transaktion ruft kein Netz auf; wer länger wartet, steht hinter
+  einer hängenden oder fremden Transaktion, z. B. einer Migration) und
+  `statement_timeout` = halbes Transaktionslimit (15 s; eine einzelne Anweisung
+  endet in der Datenbank, die Verbindung wird frei). Beide sind je Aufruf
+  einstellbar (`sperrWartezeitMs`, `anweisungsdauerMs`). Die Abbrüche (55P03, 57014) beantworten Dienst und Dienstkern mit `503 ZEITLIMIT` und fester
+  Meldung, ins Log nur der Code. Nicht gesetzt: `idle_in_transaction_session_timeout`
+  (zwischen zwei Anweisungen begrenzt das Prisma-Limit, dessen ROLLBACK dann
+  sofort läuft); Poolgröße bleibt der Standard von `pg` (10 je Prozess).
 - Tabelle `akteur_jti (jti PK, exp)`: nicht mandantengebunden, nur INSERT und
   Löschen abgelaufener Einträge.
 - Audit: Kette **je Tenant**; Advisory-Lock je Tenant (nicht global); der Hash
@@ -307,7 +320,9 @@ Routentabelle weisen mehrdeutige Muster ab).
   `401 NICHT_AUTHENTIFIZIERT`,
   `403 NICHT_BERECHTIGT` (mit fachlichem Grund, z. B. Vier-Augen),
   `404 NICHT_GEFUNDEN` (auch fremder Tenant/Mandant), `409 KONFLIKT`
-  (Status hat sich geändert, Doppelentscheidung), `413 ZU_GROSS`. Wo der
+  (Status hat sich geändert, Doppelentscheidung), `413 ZU_GROSS`,
+  `503 ZEITLIMIT` (Zeitlimit der Datenbank – Sperre oder Anweisung, 55P03 bzw.
+  57014, Abschnitt 4 –, nichts geändert, wiederholbar). Wo der
   Aufrufer den gesehenen Status mitschickt (Feststellung weiterschalten,
   `von`), ist ein auf diesem Stand fachlich gesperrter Schritt `400` mit
   Feldfehler, `409` nur die gleichzeitige Änderung.
@@ -497,8 +512,15 @@ Stufe 2). Ein `Dockerfile` mit zwei Zielen, Basisimages per Digest gepinnt
   `prisma/init/rollen.psql` – derselben Datei, die `01_bootstrap.sql` in der
   Entwicklung einbindet; psql liest `TCMS_DB_OWNER_PASSWORD` und
   `TCMS_DB_APP_PASSWORD` selbst (`\getenv`) und setzt sie mit `format('%L')`,
-  nachdem die Transaktion Anweisungsprotokoll und `pg_stat_statements`
-  abgeschaltet hat. (2) Migrationen als `tcms_owner` (`TCMS_DB_OWNER_URL`) in
+  nachdem die Transaktion Anweisungsprotokoll (auch die Stichproben je
+  Anweisung und je Transaktion), Aktivitätsanzeige, `auto_explain` und
+  `pg_stat_statements` abgeschaltet hat. Gleichzeitige Bootstraps laufen
+  nacheinander, auch gegen verschiedene Datenbanken desselben Clusters (Sperre
+  auf dem gemeinsamen Katalog `pg_authid`). Mit der Datenbank verbinden dürfen
+  sich nur `tcms_owner`, `tcms_app` und Superuser (`REVOKE CONNECT … FROM
+PUBLIC`); ob `tcms_app` andere Datenbanken desselben Clusters erreicht, regelt
+  der Clusterbetrieb (pg_hba.conf bzw. CONNECT in den Nachbardatenbanken), nicht
+  der Bootstrap. (2) Migrationen als `tcms_owner` (`TCMS_DB_OWNER_URL`) in
   einer psql-Sitzung unter Advisory-Lock, Ledger `_prisma_migrations` mit den
   Spalten von Prisma und SHA-256 der `migration.sql`; abweichende Prüfsumme,
   unvollständige oder dem Image unbekannte Migration → Abbruch; jede Migration
@@ -511,7 +533,8 @@ Stufe 2). Ein `Dockerfile` mit zwei Zielen, Basisimages per Digest gepinnt
   Superuser-URL noch fremde Passwörter. (3) Prüfung
   (`betrieb/pruefung.sql`): `tcms_app` kein Superuser, NOBYPASSRLS, keine
   Mitgliedschaft, besitzt nichts, kein TRUNCATE/REFERENCES/TRIGGER, Audit nur
-  anhängen; ENABLE+FORCE RLS mit Policy auf allen Tabellen außer Ledger und
+  anhängen (Rechte je Spalte eingeschlossen: `has_any_column_privilege`), PUBLIC
+  ohne CONNECT; ENABLE+FORCE RLS mit Policy auf allen Tabellen außer Ledger und
   `akteur_jti`. Kein Passwort steht je in einer Kommandozeile (URLs werden in der
   Shell zerlegt und als `PG*`-Umgebung übergeben) oder in der Ausgabe. Kein Seed.
 
@@ -609,7 +632,11 @@ Gegenmittel:
   `packages/db/src/__tests__/roh-sql.test.ts` prüft alle Quelltexte (Apps, Pakete,
   Seed, Skripte) mit dem TypeScript-Parser: kein `$queryRawUnsafe` oder
   `$executeRawUnsafe`, kein `Prisma.raw`, `sql.raw` oder `.raw(…)`;
-  `$queryRaw`/`$executeRaw` nur als Tagged Template (Werte werden Parameter);
+  `$queryRaw`/`$executeRaw` nur als Tagged Template (Werte werden Parameter), auch
+  ohne Alias aus einer Destrukturierung; keine rohen Bausteine im Template
+  (`Prisma.sql` nur als Tag, nie `Prisma.sql([text])` oder `new Prisma.Sql(…)`,
+  `Prisma.join` nur mit festen Literalen als Trenner, Präfix und Suffix,
+  Prisma-Bausteine nur über `Prisma.…`, nie importiert oder destrukturiert);
   `pg`-Abfragen nur mit festem SQL-Text; `set_config` und `tcms.tenant_id` nur in
   `packages/db/src/tenant.ts`. Ausnahmen nur für Tests und den Seed, je Datei und
   Regel begründet; Laufzeitcode kann nicht freigestellt werden.
@@ -638,6 +665,15 @@ Kontexts innerhalb derselben Transaktion.
   Kettenprüfung verlangt sie lückenlos. Eine Änderung setzt UPDATE-Rechte voraus,
   die die Laufzeitrolle nicht hat. Der globale Schlüssel `seq` bleibt in der
   Datenbank lesbar (nur mit SQL, siehe 10.1).
+- **Objekt-IDs.** Prisma erzeugt die IDs im Client. Seit dem 17.11.2026 sind sie
+  cuid2 (`@default(cuid(2))`, ein Hash ohne ablesbare Bestandteile); cuid
+  Version 1 trug Zeitstempel, einen prozessweiten Zähler über alle Tenants und
+  einen Fingerabdruck des Hosts – derselbe Seitenkanal wie `seq` (Zahl der
+  zwischen zwei eigenen Objekten angelegten Zeilen anderer Kanzleien). Bereits
+  vergebene v1-IDs bleiben gültig und nennen weiter ihren Entstehungszeitpunkt
+  und Zählerstand; die Vertragsmuster nehmen beide Formen an. Ein statischer Test
+  (`packages/db/src/__tests__/objekt-ids.test.ts`) weist `cuid()` ohne Version
+  ab.
 - **Vertraulichkeit (RT-01)** gilt für die Feststellung selbst. Texte außerhalb der
   Feststellung bleiben für alle mit Leserecht sichtbar: Beschreibung und Folgetexte
   eines Ereignisses, aus dem eine Feststellung entstand, der Ergebniskommentar einer

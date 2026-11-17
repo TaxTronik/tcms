@@ -39,11 +39,11 @@ import {
 const AKTIV = process.env['DB_TESTS'] === '1';
 
 /**
- * Alle Texte eines Audit-Details ohne IDs (cuid, UUID, SHA-256): Ziffernfolgen
+ * Alle Texte eines Audit-Details ohne IDs (cuid v1/cuid2, UUID, SHA-256): Ziffernfolgen
  * in IDs könnten zufällig einem Code gleichen, ohne einer zu sein.
  */
 function ohneIds(wert: unknown): string {
-  const ID = /^(c[a-z0-9]{20,30}|[0-9a-f-]{36}|[0-9a-f]{64})$/;
+  const ID = /^([a-z][a-z0-9]{20,30}|[0-9a-f-]{36}|[0-9a-f]{64})$/;
   const texte: string[] = [];
   const sammle = (x: unknown): void => {
     if (typeof x === 'string') {

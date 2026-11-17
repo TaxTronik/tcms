@@ -61,13 +61,12 @@ describe.skipIf(!AKTIV)('Nachweise je Dokument (Service, PostgreSQL)', () => {
     for (const a of [A.bt, A.kollege]) {
       const r = await lies(a, { mandantId: f.mandant, dokumentId: dok.toUpperCase() });
       expect(NachweiseJeDokumentSchema.parse(r)).toEqual(r);
-      expect(r).toEqual({
-        dokumentId: dok,
-        nachweise: [
-          { id: n1, durchfuehrungId: d1, entfernt: false },
-          { id: n2, durchfuehrungId: d2, entfernt: true },
-        ],
-      });
+      // Gleicher Hochladezeitpunkt (Testuhr): dann nach ID – cuid2 ist nicht zeitlich geordnet.
+      const erwartet = [
+        { id: n1, durchfuehrungId: d1, entfernt: false },
+        { id: n2, durchfuehrungId: d2, entfernt: true },
+      ].sort((x, y) => (x.id < y.id ? -1 : 1));
+      expect(r).toEqual({ dokumentId: dok, nachweise: erwartet });
     }
   });
 

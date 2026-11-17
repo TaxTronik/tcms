@@ -428,8 +428,12 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
     const z = await neueDb();
     const marke = randomBytes(12).toString('hex');
     const pw = { owner: `owner-${marke}`, app: `app-${marke}` };
-    // Diese Datenbank protokolliert jede Anweisung (wie ein falsch konfigurierter Server).
+    // Diese Datenbank protokolliert jede Anweisung (wie ein falsch konfigurierter Server),
+    // auch über die Stichproben je Anweisung und je Transaktion (Befund 17).
     await abfrage(SUPER!, `ALTER DATABASE "${z.name}" SET log_statement = 'all'`);
+    await abfrage(SUPER!, `ALTER DATABASE "${z.name}" SET log_min_duration_sample = 0`);
+    await abfrage(SUPER!, `ALTER DATABASE "${z.name}" SET log_statement_sample_rate = 1`);
+    await abfrage(SUPER!, `ALTER DATABASE "${z.name}" SET log_transaction_sample_rate = 1`);
     const logVorher = SERVERLOG && existsSync(SERVERLOG) ? statSync(SERVERLOG).size : 0;
     const r = await migriere(z, pw);
     expect(r.code, ausgabe(r)).toBe(0);
@@ -495,6 +499,46 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
     } finally {
       await abfrage(SUPER!, 'REVOKE tcms_owner FROM tcms_app').catch(() => undefined);
     }
+  });
+
+  it('Prüfung erkennt reine Spaltenrechte und CONNECT für PUBLIC (Befunde 78, 126)', async () => {
+    const z = await neueDb();
+    expect((await migriere(z)).code).toBe(0);
+    const [db] = await abfrage<{ public: boolean; app: boolean }>(
+      z.superUrl,
+      `SELECT has_database_privilege('public', current_database(), 'CONNECT') AS public,
+              has_database_privilege('tcms_app', current_database(), 'CONNECT') AS app`,
+    );
+    expect(db).toEqual({ public: false, app: true });
+    // has_table_privilege sieht keinen dieser Spalten-Grants.
+    for (const [recht, meldung] of [
+      ['UPDATE ("hash", "pos") ON "AuditEvent"', 'tcms_app darf AuditEvent ändern oder löschen'],
+      [
+        'UPDATE ("exp") ON "akteur_jti"',
+        'tcms_app hat auf akteur_jti nicht genau SELECT/INSERT/DELETE',
+      ],
+      ['SELECT ("id") ON "_prisma_migrations"', 'tcms_app hat Rechte auf dem Migrations-Ledger'],
+      [
+        'REFERENCES ("id") ON "TcmsProgramm"',
+        'tcms_app hat TRUNCATE/REFERENCES/TRIGGER auf "TcmsProgramm"',
+      ],
+    ] as const) {
+      await abfrage(z.superUrl, `GRANT ${recht} TO tcms_app`);
+      try {
+        const p = await psqlSuper(z, ['-f', PRUEFUNG]);
+        expect(p.code, recht).toBe(3);
+        expect(p.stderr).toContain(meldung);
+      } finally {
+        await abfrage(z.superUrl, `REVOKE ${recht} FROM tcms_app`);
+      }
+    }
+    await abfrage(z.superUrl, `GRANT CONNECT ON DATABASE "${z.name}" TO PUBLIC`);
+    const p = await psqlSuper(z, ['-f', PRUEFUNG]);
+    expect(p.code).toBe(3);
+    expect(p.stderr).toContain('PUBLIC darf sich mit der Datenbank verbinden');
+    // Der Bootstrap entzieht es wieder.
+    const r = await migriere(z);
+    expect(r.code, ausgabe(r)).toBe(0);
   });
 
   it('weist Konfigurationsfehler vor jeder Verbindung ab, ohne Werte zu nennen', async () => {
@@ -586,6 +630,17 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
     expect(b.code, ausgabe(b)).toBe(0);
     const zeilen = await ledger(z);
     expect(zeilen.map((l) => l.migration_name)).toEqual(migrationen().map((m) => m.name));
+  });
+
+  it('gleichzeitige Läufe gegen verschiedene Datenbanken des Clusters: Bootstrap nacheinander (Befund 49)', async () => {
+    // Rollen sind clusterweit; eine datenbanklokale Sperre ließe beide Läufe
+    // gleichzeitig ALTER ROLE ausführen ("tuple concurrently updated", Exit 2).
+    for (let runde = 0; runde < 3; runde++) {
+      const [x, y] = [await neueDb(), await neueDb()];
+      const [a, b] = await Promise.all([migriere(x), migriere(y)]);
+      expect(a.code, ausgabe(a)).toBe(0);
+      expect(b.code, ausgabe(b)).toBe(0);
+    }
   });
 
   it('Entwicklungs- und Produktions-Bootstrap ergeben dieselben Rechte', async () => {

@@ -25,7 +25,7 @@ import { ProfilAntwortenGespeichertSchema, ProfilAntwortenSchema } from './risik
 import { FreigabeZustellungSchema, NachrichtUnzustellbarGrundSchema } from './zustellung';
 
 const uuid = z.uuid();
-/** ID eines Tax-CMS-Objekts (cuid). */
+/** ID eines Tax-CMS-Objekts (cuid2, ältere Objekte cuid v1). */
 const objektId = z
   .string()
   .min(1)

@@ -134,6 +134,10 @@ const AUSNAHMEN: Record<string, { regeln: Partial<Record<Regel, number>>; begrue
     regeln: { 'text-matcher': 20 },
     begruendung: 'Signieren und Prüfen der Akteursbestätigung (node:crypto), ohne Datenbank.',
   },
+  'packages/db/src/__tests__/storage.test.ts': {
+    regeln: { 'text-matcher': 2 },
+    begruendung: 'Demo-Ablage im Dateisystem (eigene Meldungen von leseDatei), keine Datenbank.',
+  },
   'packages/service/src/__tests__/kontext.test.ts': {
     regeln: { 'text-matcher': 3 },
     begruendung:

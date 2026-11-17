@@ -134,6 +134,16 @@ export interface TenantOptionen {
   timeoutMs?: number;
   /** Höchste Wartezeit auf eine Verbindung in ms (Standard 10 000). */
   maxWaitMs?: number;
+  /**
+   * Höchste Wartezeit einer Anweisung auf eine Sperre in ms (`lock_timeout`,
+   * transaktionslokal). Standard 5 000, höchstens die Anweisungsdauer.
+   */
+  sperrWartezeitMs?: number;
+  /**
+   * Höchstdauer einer Anweisung in ms (`statement_timeout`, transaktionslokal).
+   * Standard: die Hälfte von `timeoutMs` (15 000 bei 30 000).
+   */
+  anweisungsdauerMs?: number;
   isolationLevel?: Prisma.TransactionIsolationLevel;
   /** Nur für Tests: andere Verbindung als `DATABASE_URL` (wird ebenso geprüft). */
   client?: PrismaClient;
@@ -167,11 +177,50 @@ async function pruefeKontextUnveraendert(tx: Tx, tenant: string): Promise<void> 
   }
 }
 
+/** Standard der Transaktionsdauer (Prisma `timeout`) in ms. */
+export const TRANSAKTION_MS = 30_000;
+/** Standard der Wartezeit auf eine Sperre (`lock_timeout`) in ms. */
+export const SPERR_WARTEZEIT_MS = 5_000;
+
+const positiveMs = (wert: number | undefined, standard: number): number => {
+  const ms = wert ?? standard;
+  if (!Number.isSafeInteger(ms) || ms <= 0) throw new TenantFehler('Ungültiges Zeitlimit.');
+  return ms;
+};
+
+/**
+ * Zeitlimits einer Transaktion (Befund 33, ADR 0001 §4). Das Prisma-Limit
+ * (`timeoutMs`) bricht eine Anweisung, die in der Datenbank wartet, nicht ab:
+ * Prisma stellt sein ROLLBACK nur hinter die wartende Anweisung, und die
+ * Poolverbindung bleibt belegt, bis der Sperrinhaber endet. Deshalb setzt
+ * `mitTenant` die Grenzen auch in der Datenbank, transaktionslokal:
+ *
+ *   lock_timeout       5 s: Sperren halten Operationen sonst Millisekunden
+ *                      (keine Netzaufrufe in der Transaktion); wer länger
+ *                      wartet, steht hinter einer hängenden oder fremden
+ *                      Transaktion (z. B. einer Migration). Abbruch mit 55P03.
+ *   statement_timeout  halbes Transaktionslimit (15 s): Eine einzelne Anweisung
+ *                      endet in der Datenbank spätestens dann, die Verbindung
+ *                      wird frei, auch wenn Prisma die Transaktion schon
+ *                      aufgegeben hat. Abbruch mit 57014.
+ *
+ * Beide Abbrüche beantworten Dienst und Dienstkern mit `503 ZEITLIMIT`
+ * (`zeitlimitFehlercode`), ohne Interna.
+ */
+function zeitlimits(opts: TenantOptionen) {
+  const transaktion = positiveMs(opts.timeoutMs, TRANSAKTION_MS);
+  const anweisung = positiveMs(opts.anweisungsdauerMs, Math.ceil(transaktion / 2));
+  const sperre = positiveMs(opts.sperrWartezeitMs, Math.min(SPERR_WARTEZEIT_MS, anweisung));
+  return { transaktion, anweisung, sperre };
+}
+
 /**
  * Führt `fn` in einer Transaktion im Kontext des Tenants aus. Lesen wie
  * Schreiben einer Anfrage laufen vollständig in genau einer solchen
  * Transaktion (ADR 0001 §4). `fn` darf `tx` nicht über das Ende hinaus halten.
  * Hat `fn` den Tenant-Kontext umgesetzt, wird zurückgerollt (`TenantFehler`).
+ * Wartet eine Anweisung zu lange auf eine Sperre oder dauert zu lange, bricht
+ * die Datenbank sie ab (`zeitlimits`).
  */
 export async function mitTenant<T>(
   tenantId: string,
@@ -179,20 +228,24 @@ export async function mitTenant<T>(
   opts: TenantOptionen = {},
 ): Promise<T> {
   const tenant = pruefeTenantId(tenantId);
+  const grenzen = zeitlimits(opts);
   const client = opts.client ?? laufzeitClient();
   await stelleLaufzeitRolleSicher(client);
   return client.$transaction(
     async (tx) => {
       // is_local = true: gilt nur bis zum Ende dieser Transaktion, nie für die
       // Poolverbindung danach.
-      await tx.$executeRaw`SELECT pg_catalog.set_config(${TENANT_EINSTELLUNG}, ${tenant}, true)`;
+      await tx.$executeRaw`
+        SELECT pg_catalog.set_config(${TENANT_EINSTELLUNG}, ${tenant}, true),
+               pg_catalog.set_config('lock_timeout', ${`${grenzen.sperre}ms`}, true),
+               pg_catalog.set_config('statement_timeout', ${`${grenzen.anweisung}ms`}, true)`;
       const ergebnis = await fn(tx);
       // RT-02: vor dem Commit, im selben Zug wie die Änderungen von `fn`.
       await pruefeKontextUnveraendert(tx, tenant);
       return ergebnis;
     },
     {
-      timeout: opts.timeoutMs ?? 30_000,
+      timeout: grenzen.transaktion,
       maxWait: opts.maxWaitMs ?? 10_000,
       ...(opts.isolationLevel ? { isolationLevel: opts.isolationLevel } : {}),
     },

@@ -17,6 +17,7 @@ import {
   eingabeFehlercode,
   mitTenant,
   pruefeTenantId,
+  zeitlimitFehlercode,
   type TenantOptionen,
   type Tx,
 } from '@tcms/db';
@@ -216,6 +217,24 @@ export function alsEingabefehler(e: unknown): unknown {
   return eingabeFehlercode(e) ? new DienstFehler('UNGUELTIG', EINGABE_NICHT_SPEICHERBAR) : e;
 }
 
+/** Meldung, wenn die Datenbank die Anfrage nach ihrem Zeitlimit abbricht (Befund 33). */
+export const ZEITLIMIT_MELDUNG =
+  'Die Anfrage konnte nicht rechtzeitig bearbeitet werden. Bitte erneut versuchen.';
+
+/**
+ * Zeitlimit der Datenbank (`zeitlimitFehlercode`: 55P03 Sperre, 57014
+ * Anweisung, gesetzt von `mitTenant`) als `ZEITLIMIT` statt als roher Fehler
+ * (sonst `500 INTERN`); alle anderen Fehler unverändert. Die Transaktion ist
+ * zurückgerollt; die Meldung nennt keine Interna.
+ */
+export function alsZeitlimit(e: unknown): unknown {
+  if (e instanceof DienstFehler) return e;
+  return zeitlimitFehlercode(e) ? new DienstFehler('ZEITLIMIT', ZEITLIMIT_MELDUNG) : e;
+}
+
+/** Datenbankfehler, die der Dienstkern selbst abbildet (Eingabe, Zeitlimit). */
+const alsDienstfehler = (e: unknown): unknown => alsZeitlimit(alsEingabefehler(e));
+
 /**
  * Führt `fn` in genau einer Transaktion im Tenant des Akteurs aus (ADR 0001
  * §4). Der Tenant kommt ausschließlich aus dem Akteur, nie aus der Eingabe.
@@ -231,7 +250,7 @@ export async function imDienst<T>(
   try {
     return await mitTenant(a.tenantId, (tx) => fn({ tx, akteur: a, ...ports }), opts);
   } catch (e) {
-    throw alsEingabefehler(e);
+    throw alsDienstfehler(e);
   }
 }
 
@@ -250,6 +269,6 @@ export async function imSystemdienst<T>(
   try {
     return await mitTenant(a.tenantId, (tx) => fn({ tx, akteur: a, ...ports }), opts);
   } catch (e) {
-    throw alsEingabefehler(e);
+    throw alsDienstfehler(e);
   }
 }

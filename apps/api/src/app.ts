@@ -35,7 +35,7 @@ import {
   type Fehler,
   type PruefGrund,
 } from '@tcms/contract';
-import { eingabeFehlercode } from '@tcms/db';
+import { eingabeFehlercode, zeitlimitFehlercode } from '@tcms/db';
 import { Hono, type Context } from 'hono';
 import { ZodError } from 'zod';
 import { kuendigtBodyAn, leseBodyRoh, pruefeContentLength } from './body';
@@ -293,6 +293,10 @@ const SCHLIESSEN: Readonly<Record<string, string>> = { connection: 'close' };
 const EINGABE_NICHT_SPEICHERBAR =
   'Die Eingabe enthält Zeichen, die nicht gespeichert werden können.';
 
+/** Meldung bei einem Zeitlimit der Datenbank (wie im Dienstkern, Befund 33). */
+const ZEITLIMIT_MELDUNG =
+  'Die Anfrage konnte nicht rechtzeitig bearbeitet werden. Bitte erneut versuchen.';
+
 /**
  * Übersetzt jeden Fehler in den Umschlag; Details nur ins Log. `schliessen`:
  * Ein angekündigter Body wurde nicht (ganz) gelesen – Verbindung schließen,
@@ -356,6 +360,15 @@ function fehlerAntwort(
       requestId,
       zusatz,
     );
+  }
+  // Befund 33: Die Datenbank hat nach lock_timeout (55P03) bzw. statement_timeout
+  // (57014) abgebrochen (`mitTenant`), die Transaktion ist zurückgerollt.
+  // Wiederholbar; ins Log nur der feste Code, keine Meldung und kein SQL.
+  const zeitCode = zeitlimitFehlercode(e);
+  if (zeitCode !== null) {
+    felder.fehler = 'ZEITLIMIT';
+    felder.dbFehler = zeitCode;
+    return fehler(503, { code: 'ZEITLIMIT', meldung: ZEITLIMIT_MELDUNG }, requestId, zusatz);
   }
   felder.fehler = 'INTERN';
   Object.assign(felder, fehlerKennung(e));

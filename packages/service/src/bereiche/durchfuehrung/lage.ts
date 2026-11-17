@@ -145,7 +145,9 @@ export async function ladeBeteiligte(
   merke(d.durchgefuehrtVon);
   for (const n of d.nachweise) merke(n.hochgeladenVon);
   // Zwei Zweige als UNION, damit je ein Index greift: (tenant_id, objektTyp, objektId)
-  // und – vorgeschlagen – (tenant_id, (detail->>'durchfuehrungId')).
+  // und (tenant_id, detailDurchfuehrungId). Die generierte Spalte statt
+  // `detail->>'durchfuehrungId'`: `->>` ist nicht LEAKPROOF, unter RLS darf
+  // PostgreSQL damit keinen Index nutzen (Migration 20261117070000).
   const aktionen = [...DURCHFUEHRUNGS_AKTIONEN];
   const audit = await tx.$queryRaw<{ actorId: string | null }[]>`
     SELECT "actorId" FROM "AuditEvent"
@@ -154,7 +156,7 @@ export async function ladeBeteiligte(
     UNION
     SELECT "actorId" FROM "AuditEvent"
      WHERE aktion = ANY(${aktionen}::text[])
-       AND detail->>'durchfuehrungId' = ${d.id}`;
+       AND "detailDurchfuehrungId" = ${d.id}`;
   for (const e of audit) merke(e.actorId);
   return [...ids].sort();
 }
