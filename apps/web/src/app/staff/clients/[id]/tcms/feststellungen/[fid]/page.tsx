@@ -397,7 +397,7 @@ export default async function FeststellungDetailSeite({
                       >
                         {r.code}
                       </Link>
-                      {rv ? <KlasseBadge klasse={rv.netto} title="Nettoklasse (wirksam)" /> : null}
+                      {rv ? <KlasseBadge klasse={rv.netto} title="Nettoklasse (gilt)" /> : null}
                       {rv ? <GtBadge gt={rv.gt} /> : null}
                     </span>
                   );
@@ -513,7 +513,7 @@ export default async function FeststellungDetailSeite({
                           name="auswirkungEur"
                           className="input"
                           inputMode="decimal"
-                          placeholder="leer = zu klären"
+                          placeholder="z. B. 1.234,56 · leer = zu klären"
                         />
                       </div>
                     </div>
@@ -793,14 +793,15 @@ export default async function FeststellungDetailSeite({
                     </div>
                   </div>
                   <span className="text-xs text-muted">
-                    Wirksamkeit der Maßnahmen wird mit dieser Durchführung belegt.
+                    Nachkontrolle der Maßnahmen: geschlossen wird nach „abgeschlossen – ohne Befund“
+                    und Gegenzeichnung.
                   </span>
                 </div>
               ) : (
                 <div className="text-sm text-muted">
-                  Die Wirksamkeit der Maßnahmen wird mit einer Kontrolldurchführung belegt (ab
-                  Status „Maßnahmen offen“). Geschlossen wird erst nach Nachkontrolle ohne Befund
-                  und Gegenzeichnung.
+                  Die Umsetzung der Maßnahmen wird mit einer Kontrolldurchführung nachkontrolliert
+                  (ab Status „Maßnahmen offen“). Geschlossen wird erst nach Nachkontrolle
+                  „abgeschlossen – ohne Befund“ und Gegenzeichnung.
                 </div>
               )}
               {nkErsetzbar && offen ? (

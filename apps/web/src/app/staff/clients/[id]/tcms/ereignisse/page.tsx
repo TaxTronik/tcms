@@ -190,7 +190,8 @@ export default async function EreignisseSeite({
       />
       <div className="row-between mb-4" style={{ flexWrap: 'wrap', gap: 12 }}>
         <p className="text-sm text-muted">
-          Jede Meldung wird triagiert; verworfen nur begründet — alle Schritte auditgesichert.
+          Jede Meldung wird triagiert; verworfen nur begründet — alle Schritte im Audit
+          protokolliert.
         </p>
         {erfassen}
       </div>
@@ -419,7 +420,7 @@ function TriagePanel({
                           {code}
                         </Link>
                         {r ? (
-                          <KlasseBadge klasse={r.netto} title="Nettoklasse (wirksam)" />
+                          <KlasseBadge klasse={r.netto} title="Nettoklasse (gilt)" />
                         ) : (
                           <span className="text-11 text-muted">nicht aktiv</span>
                         )}

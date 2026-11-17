@@ -58,7 +58,7 @@ function kurzfassung(
 ): string {
   switch (n) {
     case 1:
-      return `${e.teilbereich.name} · Angemessenheit zum ${fmtDatum(plan.zeitraum?.stichtag)} · Wirksamkeit ${fmtDatum(plan.zeitraum?.ab)} – ${fmtDatum(plan.zeitraum?.bis)} · Erklärungsturnus ${TURNUS_LABEL[e.zeitraum.erklaerungsTurnus]}`;
+      return `${e.teilbereich.name} · Angemessenheit zum ${fmtDatum(plan.zeitraum?.stichtag)} · Wirksamkeitszeitraum ${fmtDatum(plan.zeitraum?.ab)} – ${fmtDatum(plan.zeitraum?.bis)} · Erklärungsturnus ${TURNUS_LABEL[e.zeitraum.erklaerungsTurnus]}`;
     case 2: {
       const kanaele = (e.profil.p1.eigenerShop ? 1 : 0) + e.profil.p1.marktplaetze.length;
       const n = (x: number, eins: string, viele: string) => `${x} ${x === 1 ? eins : viele}`;

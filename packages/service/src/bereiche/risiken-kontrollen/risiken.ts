@@ -497,8 +497,8 @@ export async function uebersteuerungBeantragen(
       if (e.klasse === wirksam) {
         throw new DienstFehler(
           'UNGUELTIG',
-          `Die Zielklasse ist bereits wirksam (${KLASSE_LABEL[wirksam]}).`,
-          { klasse: ['bereits wirksam'] },
+          `Die Zielklasse gilt bereits (${KLASSE_LABEL[wirksam]}).`,
+          { klasse: ['gilt bereits'] },
         );
       }
       const u = await tx.uebersteuerung.create({

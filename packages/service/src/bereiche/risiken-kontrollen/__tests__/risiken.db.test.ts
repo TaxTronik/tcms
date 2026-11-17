@@ -324,6 +324,20 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
         ),
       );
       expect(nochmal.code).toBe('KONFLIKT');
+      // Die geltende Klasse als neues Ziel → UNGUELTIG (Text ohne „wirksam“, UI-Sprache).
+      const gilt = await fehlerVon(
+        rufe(akt.hb, (ctx) =>
+          uebersteuerungBeantragen(ctx, {
+            mandantId: a.mandantId,
+            risikoId: z.id,
+            sicht: 'DESIGN',
+            klasse: z.klasse,
+            begruendung: BEGRUENDUNG,
+          }),
+        ),
+      );
+      expect(gilt).toMatchObject({ code: 'UNGUELTIG', felder: { klasse: ['gilt bereits'] } });
+      expect(gilt.message).toMatch(/^Die Zielklasse gilt bereits \(/);
     });
 
     it('berechneter Wert als Ziel, kurze Begründung, Ablehnung ohne Begründung → UNGUELTIG', async () => {

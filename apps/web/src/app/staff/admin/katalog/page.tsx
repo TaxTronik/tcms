@@ -525,8 +525,8 @@ function MatrixTab() {
             <div className="font-m">Netto (Design)</div>
             <div className="text-xs text-secondary mt-1">
               −1 Klasse bei mindestens einer zugeordneten Kontrolle mit Designbeurteilung
-              „angemessen"; −2, wenn zusätzlich eine präventive und eine detektive Kontrolle
-              angemessen sind oder eine präventive Schlüsselkontrolle besteht. Untergrenze gering.
+              „angemessen"; −2, wenn zusätzlich je eine präventive und eine detektive Kontrolle so
+              beurteilt sind oder eine präventive Schlüsselkontrolle besteht. Untergrenze gering.
             </div>
           </div>
           <div>
