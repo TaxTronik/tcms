@@ -8,6 +8,7 @@ import {
   risikoakzeptanzAnfordern as dienstAkzeptanzAnfordern,
   risikoNeuBewerten as dienstNeuBewerten,
   risikoZurueckweisen,
+  uebersteuerungAufheben as dienstUebersteuerungAufheben,
   uebersteuerungBeantragen as dienstUebersteuerungBeantragen,
   uebersteuerungEntscheiden as dienstUebersteuerungEntscheiden,
 } from '@tcms/service';
@@ -116,8 +117,30 @@ export async function uebersteuerungEntscheiden(_prev: Ergebnis, fd: FormData): 
     ok:
       r.wert.status === 'FREIGEGEBEN'
         ? 'Übersteuerung freigegeben. Der berechnete Wert bleibt sichtbar.'
-        : 'Übersteuerung abgelehnt.',
+        : 'Übersteuerung abgelehnt bzw. zurückgezogen.',
   };
+}
+
+/** Hebt eine freigegebene Übersteuerung auf; danach gilt der berechnete Wert. */
+export async function uebersteuerungAufheben(_prev: Ergebnis, fd: FormData): Promise<Ergebnis> {
+  if (historisch(fd)) return { fehler: NUR_AKTUELL };
+  const mandantId = feld(fd, 'mandantId');
+  const r = await fuehreAus(
+    mandantId,
+    (ctx) =>
+      dienstUebersteuerungAufheben(ctx, {
+        mandantId,
+        uebersteuerungId: feld(fd, 'id'),
+        begruendung: feld(fd, 'begruendung'),
+      }),
+    {
+      ungueltig: `Das Aufheben braucht ${BEGRUENDUNG_30}.`,
+      nichtGefunden: 'Übersteuerung nicht gefunden.',
+    },
+  );
+  if ('fehler' in r) return r;
+  aktualisiereMandant(mandantId);
+  return { ok: 'Übersteuerung aufgehoben. Es gilt der berechnete Wert.' };
 }
 
 /** Inventarfreigabe: „einreichen" bzw. „freigeben" für die ausgewählten Risiken. */

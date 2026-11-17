@@ -185,6 +185,8 @@ import {
   RisikoPfadSchema,
   RisikoZurueckgewiesenSchema,
   RisikoZurueckweisenBodySchema,
+  UebersteuerungAufgehobenSchema,
+  UebersteuerungAufhebenBodySchema,
   UebersteuerungBeantragenBodySchema,
   UebersteuerungBeantragtSchema,
   UebersteuerungEntscheidenBodySchema,
@@ -773,6 +775,13 @@ export const ENDPUNKTE = register({
     params: UebersteuerungPfadSchema,
     body: UebersteuerungEntscheidenBodySchema,
     antwort: UebersteuerungEntschiedenSchema,
+  },
+  uebersteuerungAufheben: {
+    methode: 'POST',
+    pfad: `${M}/uebersteuerungen/:uebersteuerungId/aufheben`,
+    params: UebersteuerungPfadSchema,
+    body: UebersteuerungAufhebenBodySchema,
+    antwort: UebersteuerungAufgehobenSchema,
   },
   risikenFreigabeEinreichen: {
     methode: 'POST',

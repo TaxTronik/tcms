@@ -23,6 +23,7 @@ import {
   RisikoBestaetigenSchema,
   RisikoNeuBewertenSchema,
   RisikoZurueckweisenSchema,
+  UebersteuerungAufhebenSchema,
   UebersteuerungBeantragenSchema,
   UebersteuerungEntscheidenSchema,
   type FreigabeSchrittErgebnis,
@@ -35,6 +36,8 @@ import {
   type RisikoNeuBewerten,
   type RisikoZurueckgewiesen,
   type RisikoZurueckweisen,
+  type UebersteuerungAufgehoben,
+  type UebersteuerungAufheben,
   type UebersteuerungBeantragen,
   type UebersteuerungBeantragt,
   type UebersteuerungEntscheiden,
@@ -63,7 +66,7 @@ import { mitAudit, type Protokoll } from '../../audit';
 import { ladeKontext } from '../../kern/tcms-kontext';
 import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
-import { zweitePerson } from '../../rechte';
+import { gleicheId, zweitePerson } from '../../rechte';
 import { halteRollenFest } from '../../rollen';
 import { legeNachrichtAn } from '../programm-beschreibung/nachrichten';
 import {
@@ -601,8 +604,40 @@ export async function uebersteuerungBeantragen(
 }
 
 /**
- * Entscheidet über eine beantragte Übersteuerung. Nur eine zweite Person
- * (≠ beantragend); Ablehnung mit Begründung. Genau eine von gleichzeitigen
+ * Sperrt das Risiko einer Übersteuerung des Mandanten und liest die
+ * Übersteuerung unter der Sperre (fremde oder unbekannte ID → NICHT_GEFUNDEN).
+ */
+async function uebersteuerungUnterSperre(tx: Tx, mandantId: string, uebersteuerungId: string) {
+  const programm = await programmDes(tx, mandantId);
+  const ref = await tx.uebersteuerung.findFirst({
+    where: { id: uebersteuerungId, risiko: { programmId: programm.id } },
+    select: { risikoId: true },
+  });
+  if (!ref) throw new DienstFehler('NICHT_GEFUNDEN');
+  await sperreRisiken(tx, programm.id, [ref.risikoId]);
+  const u = await tx.uebersteuerung.findFirst({
+    where: { id: uebersteuerungId, risikoId: ref.risikoId },
+    include: { risiko: { select: { code: true, programmId: true } } },
+  });
+  if (!u) throw new DienstFehler('NICHT_GEFUNDEN');
+  return u;
+}
+
+/** Berechnete Nettoklasse einer Sicht im aktuellen Stand (ohne Übersteuerung). */
+function berechnetIn(
+  sicht: 'DESIGN' | 'BETRIEB',
+  b: { nettoDesign: { klasse: Klasse }; nettoBetrieb: { klasse: Klasse } },
+): Klasse {
+  return sicht === 'DESIGN' ? b.nettoDesign.klasse : b.nettoBetrieb.klasse;
+}
+
+/**
+ * Entscheidet über eine beantragte Übersteuerung. Freigeben nur eine zweite
+ * Person (≠ beantragend) und nur, solange der berechnete Wert der Sicht noch
+ * dem beim Antrag entspricht (sonst KONFLIKT: Die Begründung bezog sich auf
+ * einen anderen Wert, Befund 4). Ablehnen mit Begründung durch eine zweite
+ * Person; die beantragende Person zieht ihren Antrag auf demselben Weg zurück
+ * (wie bei Entfallen und Verwerfen). Genau eine von gleichzeitigen
  * Entscheidungen wirkt, jede weitere erhält KONFLIKT.
  */
 export async function uebersteuerungEntscheiden(
@@ -614,23 +649,24 @@ export async function uebersteuerungEntscheiden(
   pruefeBearbeiten(ctx.akteur, mandantId);
   return konfliktSicher(() =>
     mitAudit(ctx, async (tx, zeitpunkt) => {
-      const programm = await programmDes(tx, mandantId);
-      const ref = await tx.uebersteuerung.findFirst({
-        where: { id: e.uebersteuerungId, risiko: { programmId: programm.id } },
-        select: { risikoId: true },
-      });
-      if (!ref) throw new DienstFehler('NICHT_GEFUNDEN');
-      await sperreRisiken(tx, programm.id, [ref.risikoId]);
-      const u = await tx.uebersteuerung.findFirst({
-        where: { id: e.uebersteuerungId, risikoId: ref.risikoId },
-        include: { risiko: { select: { code: true, programmId: true } } },
-      });
-      if (!u) throw new DienstFehler('NICHT_GEFUNDEN');
+      const u = await uebersteuerungUnterSperre(tx, mandantId, e.uebersteuerungId);
       if (u.status !== 'BEANTRAGT') {
         throw konflikt('Über diese Übersteuerung wurde bereits entschieden.');
       }
-      if (!zweitePerson(ctx.akteur, u.beantragtVon)) {
+      const zurueckgezogen =
+        e.entscheidung === 'ABLEHNEN' && gleicheId(ctx.akteur.id, u.beantragtVon);
+      if (!zurueckgezogen && !zweitePerson(ctx.akteur, u.beantragtVon)) {
         throw nichtBerechtigt('VIER_AUGEN', ZWEITE_PERSON);
+      }
+      let berechnetJetzt: Klasse | null = null;
+      if (e.entscheidung === 'FREIGEBEN') {
+        const { risiko: sicht } = await aktuelleSicht(ctx, mandantId, u.risikoId);
+        berechnetJetzt = berechnetIn(u.sicht, sicht.bewertung);
+        if (berechnetJetzt !== u.berechnet) {
+          throw konflikt(
+            `Der berechnete Wert hat sich seit dem Antrag geändert (${KLASSE_LABEL[u.berechnet]} → ${KLASSE_LABEL[berechnetJetzt]}). Bitte ablehnen und bei Bedarf neu beantragen.`,
+          );
+        }
       }
       const status = e.entscheidung === 'FREIGEBEN' ? 'FREIGEGEBEN' : 'ABGELEHNT';
       const z = await tx.uebersteuerung.updateMany({
@@ -644,7 +680,9 @@ export async function uebersteuerungEntscheiden(
           aktion:
             status === 'FREIGEGEBEN'
               ? 'tcms.risiko.uebersteuerung_freigegeben'
-              : 'tcms.risiko.uebersteuerung_abgelehnt',
+              : zurueckgezogen
+                ? 'tcms.risiko.uebersteuerung_zurueckgezogen'
+                : 'tcms.risiko.uebersteuerung_abgelehnt',
           objektTyp: 'Risiko',
           objektId: u.risikoId,
           programmId: u.risiko.programmId,
@@ -656,6 +694,64 @@ export async function uebersteuerungEntscheiden(
             berechnet: u.berechnet,
             beantragtVon: u.beantragtVon,
             ...(e.begruendung ? { begruendung: e.begruendung } : {}),
+          },
+        },
+      };
+    }),
+  );
+}
+
+/**
+ * Hebt eine freigegebene Übersteuerung auf: Es gilt wieder der berechnete
+ * Wert (Regel 2). Wie das Aufheben einer Frequenzabweichung durch jede Person
+ * mit Bearbeitungsrecht, mit Begründung (≥ 30 Zeichen) und Protokoll; eine
+ * zweite Person ist nicht nötig, weil der berechnete Wert nie einer Freigabe
+ * bedarf (Regel 2/4 verlangen sie nur für die Abweichung davon). Auch eine
+ * überholte Übersteuerung (Befund 4) lässt sich so ausdrücklich beenden.
+ */
+export async function uebersteuerungAufheben(
+  ctx: DienstKontext,
+  eingabe: UebersteuerungAufheben,
+): Promise<UebersteuerungAufgehoben> {
+  const e = pruefeEingabe(UebersteuerungAufhebenSchema, eingabe);
+  const mandantId = kanonisch(e.mandantId);
+  pruefeBearbeiten(ctx.akteur, mandantId);
+  return konfliktSicher(() =>
+    mitAudit(ctx, async (tx, zeitpunkt) => {
+      const u = await uebersteuerungUnterSperre(tx, mandantId, e.uebersteuerungId);
+      if (u.status !== 'FREIGEGEBEN') {
+        throw konflikt(
+          u.status === 'BEANTRAGT'
+            ? 'Die Übersteuerung ist erst beantragt – bitte entscheiden bzw. zurückziehen.'
+            : 'Die Übersteuerung ist nicht freigegeben.',
+        );
+      }
+      // Nur für das Protokoll: berechneter Wert heute (ein inaktives Risiko hat keinen).
+      const sicht = (await ladeKontext(ctx, { mandantId })).risiken.find(
+        (r) => r.id === u.risikoId,
+      );
+      const berechnetJetzt = sicht ? berechnetIn(u.sicht, sicht.bewertung) : null;
+      const z = await tx.uebersteuerung.updateMany({
+        where: { id: u.id, status: 'FREIGEGEBEN' },
+        data: { status: 'AUFGEHOBEN', aufgehobenVon: ctx.akteur.id, aufgehobenAm: zeitpunkt },
+      });
+      if (z.count !== 1) throw konflikt('Die Übersteuerung wurde inzwischen geändert.');
+      return {
+        wert: { uebersteuerungId: u.id, risikoId: u.risikoId, status: 'AUFGEHOBEN' as const },
+        protokoll: {
+          aktion: 'tcms.risiko.uebersteuerung_aufgehoben',
+          objektTyp: 'Risiko',
+          objektId: u.risikoId,
+          programmId: u.risiko.programmId,
+          detail: {
+            code: u.risiko.code,
+            uebersteuerungId: u.id,
+            sicht: u.sicht,
+            klasse: u.klasse,
+            berechnetBeiAntrag: u.berechnet,
+            berechnet: berechnetJetzt,
+            freigegebenVon: u.entschiedenVon,
+            begruendung: e.begruendung,
           },
         },
       };

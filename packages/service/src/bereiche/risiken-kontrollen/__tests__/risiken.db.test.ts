@@ -20,6 +20,7 @@ import {
   risikoBewertungBestaetigen,
   risikoNeuBewerten,
   risikoZurueckweisen,
+  uebersteuerungAufheben,
   uebersteuerungBeantragen,
   uebersteuerungEntscheiden,
 } from '../risiken';
@@ -497,6 +498,266 @@ describe.skipIf(!AKTIV)('Risiken: Fachoperationen', () => {
         tx.uebersteuerung.findUniqueOrThrow({ where: { id: uB.uebersteuerungId } }),
       );
       expect(unveraendert.status).toBe('BEANTRAGT');
+    });
+
+    /** Werte, die die Bruttoklasse sicher ändern (KRITISCH bzw. GERING). */
+    async function andereBewertung(id: string) {
+      const alt = await offenerStand(id);
+      const d = await rufe(akt.bt, (ctx) =>
+        ladeRisiko(ctx, { mandantId: a.mandantId, risikoId: id }),
+      );
+      const hoch = d.risiko.bewertung.brutto.klasse !== 'KRITISCH';
+      return {
+        mandantId: a.mandantId,
+        risikoId: id,
+        standId: alt.id,
+        s: hoch ? ('H' as const) : ('N' as const),
+        w: hoch ? ('HAEUFIG' as const) : ('SELTEN' as const),
+        r: hoch ? (3 as const) : (1 as const),
+        gt: alt.gt,
+        begruendung: BEGRUENDUNG,
+      };
+    }
+
+    async function beantrage(id: string, akteur = akt.hb) {
+      const d = await rufe(akt.bt, (ctx) =>
+        ladeRisiko(ctx, { mandantId: a.mandantId, risikoId: id }),
+      );
+      const b = d.risiko.bewertung;
+      const klasse = (['GERING', 'MITTEL', 'HOCH', 'KRITISCH'] as const).find(
+        (k) => k !== b.nettoDesign.klasse && k !== b.wirksamDesign,
+      )!;
+      return rufe(akteur, (ctx) =>
+        uebersteuerungBeantragen(ctx, {
+          mandantId: a.mandantId,
+          risikoId: id,
+          sicht: 'DESIGN',
+          klasse,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+    }
+
+    it('geänderter berechneter Wert: Freigabe → KONFLIKT, freigegebene Übersteuerung überholt (Befund 4)', async () => {
+      const id = risiko([...a.risiken.keys()][4]);
+      // Antrag, danach Neubewertung: Die Begründung bezog sich auf einen anderen Wert.
+      const alt = await beantrage(id);
+      await rufe(akt.hb, async (ctx) => risikoNeuBewerten(ctx, await andereBewertung(id)));
+      const veraltet = await fehlerVon(
+        rufe(akt.bt, (ctx) =>
+          uebersteuerungEntscheiden(ctx, {
+            mandantId: a.mandantId,
+            uebersteuerungId: alt.uebersteuerungId,
+            entscheidung: 'FREIGEBEN',
+          }),
+        ),
+      );
+      expect(veraltet.code).toBe('KONFLIKT');
+      expect(
+        (
+          await lies((tx) =>
+            tx.uebersteuerung.findUniqueOrThrow({ where: { id: alt.uebersteuerungId } }),
+          )
+        ).status,
+      ).toBe('BEANTRAGT');
+      await rufe(akt.bt, (ctx) =>
+        uebersteuerungEntscheiden(ctx, {
+          mandantId: a.mandantId,
+          uebersteuerungId: alt.uebersteuerungId,
+          entscheidung: 'ABLEHNEN',
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      // Neuer Antrag, freigegeben – wirksam.
+      const neu = await beantrage(id);
+      await rufe(akt.bt, (ctx) =>
+        uebersteuerungEntscheiden(ctx, {
+          mandantId: a.mandantId,
+          uebersteuerungId: neu.uebersteuerungId,
+          entscheidung: 'FREIGEBEN',
+        }),
+      );
+      const vorher = await rufe(akt.bt, (ctx) =>
+        ladeRisiko(ctx, { mandantId: a.mandantId, risikoId: id }),
+      );
+      expect(vorher.risiko.bewertung.wirksamDesign).toBe(neu.klasse);
+      expect(
+        vorher.risiko.uebersteuerungen.find((u) => u.id === neu.uebersteuerungId),
+      ).toMatchObject({ status: 'FREIGEGEBEN', ueberholt: false });
+      // Neubewertung ändert den berechneten Wert: Die Freigabe deckt ihn nicht mehr.
+      await rufe(akt.hb, async (ctx) => risikoNeuBewerten(ctx, await andereBewertung(id)));
+      const nachher = await rufe(akt.bt, (ctx) =>
+        ladeRisiko(ctx, { mandantId: a.mandantId, risikoId: id }),
+      );
+      const b = nachher.risiko.bewertung;
+      expect(b.nettoDesign.klasse).not.toBe(neu.berechnet);
+      expect([b.uebersteuertDesign, b.wirksamDesign]).toEqual([false, b.nettoDesign.klasse]);
+      expect(
+        nachher.risiko.uebersteuerungen.find((u) => u.id === neu.uebersteuerungId),
+      ).toMatchObject({ status: 'FREIGEGEBEN', ueberholt: true });
+    });
+
+    it('aufheben: freigegebene Übersteuerung endet, berechneter Wert gilt, Protokoll (Befund 4)', async () => {
+      const id = risiko([...a.risiken.keys()][5]);
+      const u = await beantrage(id);
+      // Nur eine freigegebene Übersteuerung lässt sich aufheben.
+      const offen = await fehlerVon(
+        rufe(akt.admin, (ctx) =>
+          uebersteuerungAufheben(ctx, {
+            mandantId: a.mandantId,
+            uebersteuerungId: u.uebersteuerungId,
+            begruendung: BEGRUENDUNG,
+          }),
+        ),
+      );
+      expect(offen.code).toBe('KONFLIKT');
+      await rufe(akt.bt, (ctx) =>
+        uebersteuerungEntscheiden(ctx, {
+          mandantId: a.mandantId,
+          uebersteuerungId: u.uebersteuerungId,
+          entscheidung: 'FREIGEBEN',
+        }),
+      );
+      const kurz = await fehlerVon(
+        rufe(akt.hb, (ctx) =>
+          uebersteuerungAufheben(ctx, {
+            mandantId: a.mandantId,
+            uebersteuerungId: u.uebersteuerungId,
+            begruendung: 'zu kurz',
+          }),
+        ),
+      );
+      expect(kurz.code).toBe('UNGUELTIG');
+      const r = await rufe(akt.hb, (ctx) =>
+        uebersteuerungAufheben(ctx, {
+          mandantId: a.mandantId,
+          uebersteuerungId: u.uebersteuerungId,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      expect(r).toEqual({
+        uebersteuerungId: u.uebersteuerungId,
+        risikoId: id,
+        status: 'AUFGEHOBEN',
+      });
+      const d = await rufe(akt.bt, (ctx) =>
+        ladeRisiko(ctx, { mandantId: a.mandantId, risikoId: id }),
+      );
+      expect(d.risiko.bewertung.uebersteuertDesign).toBe(false);
+      expect(d.risiko.bewertung.wirksamDesign).toBe(d.risiko.bewertung.nettoDesign.klasse);
+      expect(d.risiko.uebersteuerungen.find((x) => x.id === u.uebersteuerungId)).toMatchObject({
+        status: 'AUFGEHOBEN',
+        aufgehobenVon: a.personen.hb,
+        ueberholt: false,
+      });
+      const ev = await audit(id, 'tcms.risiko.uebersteuerung_aufgehoben');
+      expect(ev).toHaveLength(1);
+      expect(ev[0]!.detail).toMatchObject({
+        uebersteuerungId: u.uebersteuerungId,
+        begruendung: BEGRUENDUNG,
+      });
+      // Zweites Aufheben → KONFLIKT; gleichzeitiges Aufheben wirkt genau einmal.
+      const nochmal = await fehlerVon(
+        rufe(akt.admin, (ctx) =>
+          uebersteuerungAufheben(ctx, {
+            mandantId: a.mandantId,
+            uebersteuerungId: u.uebersteuerungId,
+            begruendung: BEGRUENDUNG,
+          }),
+        ),
+      );
+      expect(nochmal.code).toBe('KONFLIKT');
+      const v = await beantrage(id);
+      await rufe(akt.bt, (ctx) =>
+        uebersteuerungEntscheiden(ctx, {
+          mandantId: a.mandantId,
+          uebersteuerungId: v.uebersteuerungId,
+          entscheidung: 'FREIGEBEN',
+        }),
+      );
+      const lauf = (client?: PrismaClient) =>
+        rufe(
+          akt.admin,
+          (ctx) =>
+            uebersteuerungAufheben(ctx, {
+              mandantId: a.mandantId,
+              uebersteuerungId: v.uebersteuerungId,
+              begruendung: BEGRUENDUNG,
+            }),
+          client,
+        );
+      expect(
+        await gleichzeitig(
+          () => lauf(),
+          () => lauf(zweite),
+        ),
+      ).toEqual({ erfolge: 1, codes: ['KONFLIKT'] });
+    });
+
+    it('aufheben: Rechte negativ, fremde Übersteuerung → NICHT_GEFUNDEN', async () => {
+      await rechteNegativ((ctx, mandantId) =>
+        uebersteuerungAufheben(ctx, {
+          mandantId,
+          uebersteuerungId: 'beliebig',
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      const akteureB = akteureVon(b);
+      const idB = [...b.risiken.values()][1]!;
+      const dB = await rufe(akteureB.bt, (ctx) =>
+        ladeRisiko(ctx, { mandantId: b.mandantId, risikoId: idB }),
+      );
+      const uB = await rufe(akteureB.hb, (ctx) =>
+        uebersteuerungBeantragen(ctx, {
+          mandantId: b.mandantId,
+          risikoId: idB,
+          sicht: 'DESIGN',
+          klasse: dB.risiko.bewertung.nettoDesign.klasse === 'KRITISCH' ? 'HOCH' : 'KRITISCH',
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      await rufe(akteureB.bt, (ctx) =>
+        uebersteuerungEntscheiden(ctx, {
+          mandantId: b.mandantId,
+          uebersteuerungId: uB.uebersteuerungId,
+          entscheidung: 'FREIGEBEN',
+        }),
+      );
+      const f = await fehlerVon(
+        rufe(akt.bt, (ctx) =>
+          uebersteuerungAufheben(ctx, {
+            mandantId: a.mandantId,
+            uebersteuerungId: uB.uebersteuerungId,
+            begruendung: BEGRUENDUNG,
+          }),
+        ),
+      );
+      expect([f.code, f.message]).toEqual(['NICHT_GEFUNDEN', 'NICHT_GEFUNDEN']);
+      expect(
+        (
+          await lies((tx) =>
+            tx.uebersteuerung.findUniqueOrThrow({ where: { id: uB.uebersteuerungId } }),
+          )
+        ).status,
+      ).toBe('FREIGEGEBEN');
+    });
+
+    it('die beantragende Person zieht ihren Antrag zurück, freigeben darf sie nicht (Befund 104)', async () => {
+      const id = risiko([...a.risiken.keys()][6]);
+      const u = await beantrage(id);
+      const r = await rufe(akt.hb, (ctx) =>
+        uebersteuerungEntscheiden(ctx, {
+          mandantId: a.mandantId,
+          uebersteuerungId: u.uebersteuerungId,
+          entscheidung: 'ABLEHNEN',
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+      expect(r.status).toBe('ABGELEHNT');
+      expect(await audit(id, 'tcms.risiko.uebersteuerung_zurueckgezogen')).toHaveLength(1);
+      expect(await audit(id, 'tcms.risiko.uebersteuerung_abgelehnt')).toHaveLength(0);
+      // Der Platz ist frei: ein neuer Antrag derselben Sicht ist möglich.
+      expect((await beantrage(id)).sicht).toBe('DESIGN');
     });
   });
 

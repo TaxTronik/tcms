@@ -263,6 +263,9 @@ function risikoEintrag(
       beantragtAm: u.beantragtAm.toISOString(),
       entschiedenVon: u.entschiedenVon,
       entschiedenAm: iso(u.entschiedenAm),
+      aufgehobenVon: u.aufgehobenVon,
+      aufgehobenAm: iso(u.aufgehobenAm),
+      ueberholt: u.ueberholt,
     })),
     offeneEreignisse: r.offeneEreignisse,
     wirktAuf: [...r.wirktAuf],
@@ -276,7 +279,7 @@ function personenDesRisikos(r: RisikoEintrag): (string | null)[] {
     r.freigabeEingereichtVon,
     r.freigegebenVon,
     r.ownerId,
-    ...r.uebersteuerungen.flatMap((u) => [u.beantragtVon, u.entschiedenVon]),
+    ...r.uebersteuerungen.flatMap((u) => [u.beantragtVon, u.entschiedenVon, u.aufgehobenVon]),
     ...r.akzeptanzen.flatMap((a) => [a.angefordertVon, a.empfaengerId]),
   ];
 }

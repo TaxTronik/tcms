@@ -250,6 +250,7 @@ const MEHRZEILIG = new Set([
   'risikoBewertungBestaetigen body.begruendung',
   'uebersteuerungBeantragen body.begruendung',
   'uebersteuerungEntscheiden body.begruendung',
+  'uebersteuerungAufheben body.begruendung',
   'risikoZurueckweisen body.begruendung',
   'risikoakzeptanzAnfordern body.begruendung',
   'kontrolleDesignBeurteilen body.begruendung',

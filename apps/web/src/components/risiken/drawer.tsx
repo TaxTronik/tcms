@@ -37,6 +37,7 @@ import {
   risikoakzeptanzAnfordern,
   risikoFreigabeZurueckweisen,
   risikoNeuBewerten,
+  uebersteuerungAufheben,
   uebersteuerungBeantragen,
   uebersteuerungEntscheiden,
 } from '@/server/actions/risiken';
@@ -149,8 +150,11 @@ export function RisikoDrawer({
       ? { ...u, status: 'BEANTRAGT' as const, entschiedenVon: null, entschiedenAm: null }
       : u,
   );
-  const wirksamU = (sicht: 'DESIGN' | 'BETRIEB') =>
-    uebersteuerungen.find((u) => u.sicht === sicht && u.status === 'FREIGEGEBEN');
+  // Wirksam ist nur die jüngste freigegebene, nicht überholte Übersteuerung (Service).
+  const wirksamU = (sicht: 'DESIGN' | 'BETRIEB') => {
+    const u = uebersteuerungen.find((x) => x.sicht === sicht && x.status === 'FREIGEGEBEN');
+    return u && !u.ueberholt ? u : undefined;
+  };
   const offeneU = uebersteuerungen.filter((u) => u.status === 'BEANTRAGT');
   const ereignisse = ctx.ereignisse.filter((e) => e.folgen.some((f) => f.ziel === r.code));
   // Maskierte vertrauliche Feststellungen nennen keine Risikocodes (RT-01, Service).
@@ -682,8 +686,15 @@ export function RisikoDrawer({
                       {UEBERSTEUERUNG_STATUS_LABEL[u.status]}
                     </span>
                     {u.status === 'FREIGEGEBEN' ? (
-                      <span className={wirksam ? 'badge-brand' : 'badge-gray'}>
-                        {wirksam ? 'gilt' : 'abgelöst'}
+                      <span
+                        className={wirksam ? 'badge-brand' : 'badge-gray'}
+                        title={
+                          u.ueberholt
+                            ? 'Freigegeben gegen einen anderen berechneten Wert – es gilt der berechnete Wert'
+                            : undefined
+                        }
+                      >
+                        {wirksam ? 'gilt' : u.ueberholt ? 'überholt' : 'abgelöst'}
                       </span>
                     ) : null}
                   </span>
@@ -694,7 +705,25 @@ export function RisikoDrawer({
                   {u.entschiedenVon
                     ? ` · entschieden ${personName(ctx, u.entschiedenVon)} · ${fmtDatumZeit(u.entschiedenAm)}`
                     : ''}
+                  {u.aufgehobenVon
+                    ? ` · aufgehoben ${personName(ctx, u.aufgehobenVon)} · ${fmtDatumZeit(u.aufgehobenAm)}`
+                    : ''}
                 </span>
+                {u.status === 'FREIGEGEBEN' ? (
+                  <div className="row-s">
+                    <BegruendungsDialog
+                      ausloeser="Aufheben…"
+                      titel="Übersteuerung aufheben"
+                      hinweis="Danach gilt wieder der berechnete Wert."
+                      action={uebersteuerungAufheben}
+                      felder={{ id: u.id, stand: seite.standIso, mandantId: ctx.mandant.id }}
+                      bestaetigen="Aufheben"
+                      vierAugen={false}
+                      disabled={!!sperre}
+                      disabledGrund={sperre ?? undefined}
+                    />
+                  </div>
+                ) : null}
                 {u.status === 'BEANTRAGT' ? (
                   <div className="row-s">
                     <AktionsForm action={uebersteuerungEntscheiden} className="inline-form">
@@ -710,9 +739,10 @@ export function RisikoDrawer({
                         <Icon name="Check" className="tx-icon-xs" /> Freigeben
                       </SubmitButton>
                     </AktionsForm>
+                    {/* Die beantragende Person zieht ihren Antrag auf demselben Weg zurück. */}
                     <BegruendungsDialog
-                      ausloeser="Ablehnen…"
-                      titel="Übersteuerung ablehnen"
+                      ausloeser={darf ? 'Ablehnen…' : 'Zurückziehen…'}
+                      titel={darf ? 'Übersteuerung ablehnen' : 'Antrag zurückziehen'}
                       action={uebersteuerungEntscheiden}
                       felder={{
                         id: u.id,
@@ -720,10 +750,10 @@ export function RisikoDrawer({
                         stand: seite.standIso,
                         mandantId: ctx.mandant.id,
                       }}
-                      bestaetigen="Ablehnen"
+                      bestaetigen={darf ? 'Ablehnen' : 'Zurückziehen'}
                       vierAugen={false}
-                      disabled={!!grund}
-                      disabledGrund={grund}
+                      disabled={!!sperre}
+                      disabledGrund={sperre ?? undefined}
                     />
                   </div>
                 ) : null}

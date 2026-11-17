@@ -29,7 +29,7 @@ describe('Routen risiken-kontrollen', () => {
   it('lassen sich eindeutig eintragen (keine mehrdeutigen Muster)', () => {
     const t = new RoutenTabelle<Tx>();
     expect(() => registriereRisikenKontrollen(t.registrar())).not.toThrow();
-    expect(definitionen()).toHaveLength(20);
+    expect(definitionen()).toHaveLength(21);
   });
 
   it('nur Kanzleipersonen, nur unter /v1/mandanten/:mandantId/', () => {

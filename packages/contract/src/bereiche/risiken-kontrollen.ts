@@ -163,6 +163,13 @@ export const UebersteuerungEntscheidenSchema = z
   .strict()
   .superRefine(ablehnungBegruendet);
 
+/** Hebt eine freigegebene Übersteuerung auf; danach gilt der berechnete Wert (Regel 2). */
+const uebersteuerungAufheben = { begruendung: BegruendungSchema };
+export const UebersteuerungAufhebenBodySchema = z.object(uebersteuerungAufheben).strict();
+export const UebersteuerungAufhebenSchema = z
+  .object({ mandantId, uebersteuerungId: ObjektIdSchema, ...uebersteuerungAufheben })
+  .strict();
+
 /** Risiken zur Freigabe einreichen bzw. freigeben (Auswahl, ohne Dubletten). */
 const freigabeSchritt = {
   risikoIds: z
@@ -442,6 +449,7 @@ export type RisikoNeuBewerten = z.infer<typeof RisikoNeuBewertenSchema>;
 export type RisikoBestaetigen = z.infer<typeof RisikoBestaetigenSchema>;
 export type UebersteuerungBeantragen = z.infer<typeof UebersteuerungBeantragenSchema>;
 export type UebersteuerungEntscheiden = z.infer<typeof UebersteuerungEntscheidenSchema>;
+export type UebersteuerungAufheben = z.infer<typeof UebersteuerungAufhebenSchema>;
 export type RisikenFreigabeSchritt = z.infer<typeof RisikenFreigabeSchrittSchema>;
 export type RisikoZurueckweisen = z.infer<typeof RisikoZurueckweisenSchema>;
 export type RisikoakzeptanzAnfordern = z.infer<typeof RisikoakzeptanzAnfordernSchema>;
@@ -560,6 +568,14 @@ export const UebersteuerungEintragSchema = z
     beantragtAm: zeitpunkt,
     entschiedenVon: personRef,
     entschiedenAm: zeitpunkt.nullable(),
+    aufgehobenVon: personRef,
+    aufgehobenAm: zeitpunkt.nullable(),
+    /**
+     * Freigegeben, aber gegen einen anderen berechneten Wert als den heutigen
+     * (Neubewertung, Designbeurteilung, Betrieb der Kontrollen): nicht wirksam,
+     * es gilt der berechnete Wert (Befund 4).
+     */
+    ueberholt: z.boolean(),
   })
   .strict();
 
@@ -721,6 +737,14 @@ export const UebersteuerungEntschiedenSchema = z
     uebersteuerungId: z.string(),
     risikoId: z.string(),
     status: z.enum(['FREIGEGEBEN', 'ABGELEHNT']),
+  })
+  .strict();
+
+export const UebersteuerungAufgehobenSchema = z
+  .object({
+    uebersteuerungId: z.string(),
+    risikoId: z.string(),
+    status: z.literal('AUFGEHOBEN'),
   })
   .strict();
 
@@ -1022,6 +1046,7 @@ export type RisikoDetail = z.infer<typeof RisikoDetailSchema>;
 export type NeuBewertungErgebnis = z.infer<typeof NeuBewertungErgebnisSchema>;
 export type UebersteuerungBeantragt = z.infer<typeof UebersteuerungBeantragtSchema>;
 export type UebersteuerungEntschieden = z.infer<typeof UebersteuerungEntschiedenSchema>;
+export type UebersteuerungAufgehoben = z.infer<typeof UebersteuerungAufgehobenSchema>;
 export type FreigabeSchrittErgebnis = z.infer<typeof FreigabeSchrittErgebnisSchema>;
 export type RisikoZurueckgewiesen = z.infer<typeof RisikoZurueckgewiesenSchema>;
 export type RisikoakzeptanzAngefordert = z.infer<typeof RisikoakzeptanzAngefordertSchema>;

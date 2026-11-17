@@ -22,6 +22,7 @@ import {
   RisikoAufgenommenSchema,
   RisikoDetailSchema,
   RisikoZurueckgewiesenSchema,
+  UebersteuerungAufgehobenSchema,
   UebersteuerungBeantragtSchema,
   UebersteuerungEntschiedenSchema,
   antwortSchema,
@@ -245,6 +246,32 @@ describe.skipIf(!AKTIV)('API risiken-kontrollen gegen PostgreSQL', () => {
     expect(selbst.antwort).toMatchObject({ fehler: { grund: 'VIER_AUGEN' } });
     const ok = await rufe('POST', p(a, pfad), wer(a, 'bt'), { entscheidung: 'FREIGEBEN' });
     expect(erwarte(UebersteuerungEntschiedenSchema, ok.antwort).status).toBe('FREIGEGEBEN');
+
+    // Aufheben (Befund 4): Body nur mit Begründung, Rechte wie beim Beantragen.
+    const auf = `/uebersteuerungen/${u.uebersteuerungId}/aufheben`;
+    await negativ('POST', auf, { begruendung: BEGRUENDUNG });
+    await ungueltig(auf, { begruendung: 'kurz' });
+    await ungueltig(auf, { begruendung: BEGRUENDUNG, klasse: 'GERING' });
+    const leser = await rufe('POST', p(a, auf), wer(a, 'leser'), { begruendung: BEGRUENDUNG });
+    expect([leser.status, leser.antwort]).toMatchObject([403, { fehler: { grund: 'BEARBEITEN' } }]);
+    const fremd = await rufe('POST', p(b, auf), wer(b, 'bt'), { begruendung: BEGRUENDUNG });
+    expect(fremd.status).toBe(404);
+    const aufgehoben = await rufe('POST', p(a, auf), wer(a, 'hb'), { begruendung: BEGRUENDUNG });
+    expect(aufgehoben.status).toBe(200);
+    expect(erwarte(UebersteuerungAufgehobenSchema, aufgehoben.antwort)).toEqual({
+      uebersteuerungId: u.uebersteuerungId,
+      risikoId: r.id,
+      status: 'AUFGEHOBEN',
+    });
+    const nochmal = await rufe('POST', p(a, auf), wer(a, 'bt'), { begruendung: BEGRUENDUNG });
+    expect(nochmal.status).toBe(409);
+    const d = await rufe('GET', p(a, `/risiken/${r.id}`), wer(a, 'bt'));
+    const detail = erwarte(RisikoDetailSchema, d.antwort);
+    expect(detail.risiko.bewertung.uebersteuertDesign).toBe(false);
+    expect(detail.risiko.uebersteuerungen.find((x) => x.id === u.uebersteuerungId)).toMatchObject({
+      status: 'AUFGEHOBEN',
+      ueberholt: false,
+    });
   });
 
   it('Inventarfreigabe: einreichen, freigeben, zurückweisen', async () => {

@@ -28,6 +28,7 @@ import {
   risikoBewertungBestaetigen,
   risikoNeuBewerten,
   risikoZurueckweisen,
+  uebersteuerungAufheben,
   uebersteuerungBeantragen,
   uebersteuerungEntscheiden,
   verantwortlicheAendern,
@@ -60,6 +61,13 @@ export function registriereRisikenKontrollen(r: Routen<Tx>): void {
   );
   r.endpunkt(ENDPUNKTE.uebersteuerungEntscheiden, (c) =>
     uebersteuerungEntscheiden(dienstKontext(c), {
+      ...c.body,
+      ...mandant(c),
+      uebersteuerungId: c.params.uebersteuerungId!,
+    }),
+  );
+  r.endpunkt(ENDPUNKTE.uebersteuerungAufheben, (c) =>
+    uebersteuerungAufheben(dienstKontext(c), {
       ...c.body,
       ...mandant(c),
       uebersteuerungId: c.params.uebersteuerungId!,
