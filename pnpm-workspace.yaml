@@ -46,6 +46,10 @@ overrides:
   # GHSA-333x-w4r6-6crp (Scheme-Spoofing, Host-Verwechslung, Pfadäquivalenz,
   # Scheme-Injektion); transitiv über ajv unter der Prisma-CLI.
   fast-uri: '3.1.9'
+  # GHSA-g3hv-75wg-m249 (DoS über globparts amplification); transitiv nur über
+  # eslint/typescript-eslint (devDependencies, Lint). 11.x behält die API von
+  # minimatch 10 (geprüft: `pnpm lint` und die Fehlerprobe).
+  minimatch: '11.0.5'
 
 # Install-Skripte, die laufen dürfen (alle anderen sind gesperrt):
 #   @prisma/engines  lädt die Schema-Engine für `prisma migrate` (Entwicklung);
