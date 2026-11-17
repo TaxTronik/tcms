@@ -220,7 +220,16 @@ export async function bestaetigeVerwerfen(_prev: Ergebnis, fd: FormData): Promis
     akteur,
     mandantId,
     (ctx) =>
-      bestaetigeFeststellungVerwerfen(ctx, eingabe({ mandantId, feststellungId: feld(fd, 'id') })),
+      bestaetigeFeststellungVerwerfen(
+        ctx,
+        // Gesehener Antrag und gesehene Auswirkung (sonst KONFLIKT, Dienst).
+        eingabe({
+          mandantId,
+          feststellungId: feld(fd, 'id'),
+          antragId: feld(fd, 'antragId'),
+          auswirkung: feld(fd, 'auswirkung'),
+        }),
+      ),
     () => 'Feststellung verworfen.',
   );
 }

@@ -141,7 +141,9 @@ export async function ladeArbeitskorb(
           programmId: { in: programmIds },
           verwerfenBeantragtVon: { not: null },
           verwerfenBestaetigtVon: null,
-          status: { not: 'VERWORFEN' },
+          // Nur offene Feststellungen: auf geschlossenen ist der Antrag nicht mehr
+          // entscheidbar (Altbestand; das Schließen verlangt heute die Entscheidung).
+          status: { notIn: ['VERWORFEN', 'GESCHLOSSEN'] },
         },
         select: {
           id: true,

@@ -14,6 +14,11 @@
 // (tenant_id, mandantId, personId, schluessel) hält zusätzlich. Rechte werden
 // vor dem Schlüssel geprüft: Eine Wiederholung ohne Recht bleibt abgewiesen.
 // Jedes `409` trägt einen Grund (Registereintrag portalMeldungErfassen).
+//
+// Mengenbegrenzung (wie Codes, H1): höchstens 20 Meldungen je Person und
+// Mandant in einer Stunde (echte Zeit), sonst `409 ZU_VIELE_MELDUNGEN`. Rollen
+// werden vor dem Anlegen unter `halteRollenFest` neu gelesen und geprüft
+// (TS-05, RT4-T-05).
 // =============================================================================
 
 import { createHash } from 'node:crypto';
@@ -35,7 +40,7 @@ import { mitAudit } from '../../audit';
 import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { kannLesen, kannPortalLesen, siehtPortalMeldung, type KontaktRolle } from '../../rechte';
-import { ladeKontaktRollen } from '../../rollen';
+import { halteRollenFest, ladeKontaktRollen } from '../../rollen';
 import { legeNachrichtAn } from '../programm-beschreibung/nachrichten';
 import { legeEreignisAn } from './ereignisse';
 import {
@@ -46,6 +51,7 @@ import {
   namenListe,
   programmVon,
   pruefe,
+  pruefeEreignisDatum,
   pruefeMandant,
 } from './gemeinsam';
 
@@ -59,7 +65,6 @@ export const NUR_GV_TCB =
   'Ereignisse melden die Geschäftsführung und die bzw. der Tax-Compliance-Beauftragte. Bitte wenden Sie sich an diese Personen.';
 const KEIN_TCMS =
   'Für Ihr Unternehmen ist noch kein Tax-CMS eingerichtet. Bitte wenden Sie sich an Ihre Kanzlei.';
-const ZWEI_JAHRE_MS = 730 * 86_400_000;
 /** Gültigkeit eines Idempotenzschlüssels (echte Zeit, ab der Erstmeldung). */
 export const IDEMPOTENZ_FENSTER_MS = 24 * 3_600_000;
 const ABWEICHUNG =
@@ -79,20 +84,62 @@ function kanonisch(wert: unknown): string {
   return JSON.stringify(wert);
 }
 
-/** SHA-256 des geprüften Inhalts einer Meldung ohne Schlüssel (IDs kanonisch klein). */
-function inhaltHash(x: PortalMeldung, mandantId: string): string {
+/**
+ * SHA-256 des geprüften Inhalts einer Meldung ohne Schlüssel (IDs kanonisch
+ * klein). `benachrichtigen.name` geht nicht ein: Er hat keine Wirkung (adressiert
+ * wird nur über die ID), und eine anders aufgelöste Anzeige derselben Person
+ * soll eine Wiederholung nicht abweisen.
+ */
+export function inhaltHash(x: PortalMeldung, mandantId: string): string {
   const { idempotenzSchluessel: _schluessel, ...inhalt } = x;
   return createHash('sha256')
     .update(
       kanonisch({
         ...inhalt,
         mandantId,
-        benachrichtigen: x.benachrichtigen
-          ? { id: x.benachrichtigen.id.toLowerCase(), name: x.benachrichtigen.name }
-          : null,
+        benachrichtigen: x.benachrichtigen ? { id: x.benachrichtigen.id.toLowerCase() } : null,
       }),
     )
     .digest('hex');
+}
+
+/** Höchstzahl der Portal-Meldungen je Person und Mandant in `MELDUNGEN_FENSTER_MS` (echte Zeit). */
+export const MAX_MELDUNGEN_JE_STUNDE = 20;
+export const MELDUNGEN_FENSTER_MS = 3_600_000;
+const ZU_VIELE =
+  'Sie haben in der letzten Stunde bereits viele Ereignisse gemeldet. Bitte versuchen Sie es später erneut oder wenden Sie sich an Ihre Kanzlei.';
+
+/**
+ * Mengenbegrenzung (wie die Codes, H1): höchstens `MAX_MELDUNGEN_JE_STUNDE`
+ * Meldungen je Person und Mandant in der letzten Stunde, gezählt an den
+ * Audit-Einträgen der Meldungen (Zeitstempel echte Zeit, unabhängig von der
+ * Uhr der Demo) unter der Sperre `sperreMeldungen` (vom Aufrufer zuerst
+ * genommen). Darüber `409 ZU_VIELE_MELDUNGEN`. Wiederholungen mit
+ * Idempotenzschlüssel zählen nicht (sie legen nichts an).
+ */
+async function pruefeMeldungsmenge(
+  tx: Tx,
+  k: { personId: string; programmId: string },
+): Promise<void> {
+  const n = await tx.auditEvent.count({
+    where: {
+      aktion: 'tcms.ereignis.gemeldet',
+      objektTyp: 'Ereignis',
+      programmId: k.programmId,
+      actorId: { equals: k.personId, mode: 'insensitive' },
+      at: { gt: new Date(Date.now() - MELDUNGEN_FENSTER_MS) },
+    },
+  });
+  if (n >= MAX_MELDUNGEN_JE_STUNDE) throw konfliktMitGrund('ZU_VIELE_MELDUNGEN', ZU_VIELE);
+}
+
+/**
+ * Meldungen derselben Person beim selben Mandanten nacheinander (erste Sperre
+ * jeder Meldung, vor der Sperre des Idempotenzschlüssels): Zählung und
+ * Bereinigung abgelaufener Schlüssel sehen das Ergebnis der vorigen Meldung.
+ */
+async function sperreMeldungen(tx: Tx, mandantId: string, personId: string): Promise<void> {
+  await tenantSperre(tx, `portal-meldung-menge|${mandantId}|${personId}`);
 }
 
 /**
@@ -163,15 +210,15 @@ export async function meldeEreignis(
     throw new DienstFehler('UNGUELTIG', text, { typ: [text] });
   }
   const datum = alsTag(x.datum);
-  if (Math.abs(datum.getTime() - heuteDatum(ctx.uhr).getTime()) > ZWEI_JAHRE_MS) {
-    const text = 'Bitte prüfen Sie das Datum.';
-    throw new DienstFehler('UNGUELTIG', text, { datum: [text] });
-  }
+  pruefeEreignisDatum(datum, heuteDatum(ctx.uhr), 'Bitte prüfen Sie das Datum.');
   const akteurName = ctx.akteur.name;
   const schluessel = x.idempotenzSchluessel?.toLowerCase() ?? null;
   const idempotenz = schluessel
     ? { mandantId, personId: ctx.akteur.id, schluessel, inhaltSha256: inhaltHash(x, mandantId) }
     : null;
+  // Sperrreihenfolge: Meldungen der Person → Idempotenzschlüssel → Programm →
+  // Nummernkreis → Mandantenzeile (Rollen) → Audit.
+  await sperreMeldungen(ctx.tx, mandantId, ctx.akteur.id);
   if (idempotenz) {
     // Gleiche Schlüssel nacheinander: Die zweite Anfrage wartet und sieht die erste.
     await tenantSperre(
@@ -188,6 +235,16 @@ export async function meldeEreignis(
       select: { name: true },
     });
     if (!programm || !mandant) throw new DienstFehler('NICHT_GEFUNDEN', KEIN_TCMS);
+    await pruefeMeldungsmenge(tx, { personId: ctx.akteur.id, programmId: programm.id });
+    // Abgelaufene Schlüssel dieser Person räumen (sonst blieben sie, bis derselbe
+    // Schlüssel wiederkommt); gleiche Grenze wie `frueheresErgebnis`.
+    await tx.portalMeldungIdempotenz.deleteMany({
+      where: {
+        mandantId,
+        personId: ctx.akteur.id,
+        createdAt: { lte: new Date(Date.now() - IDEMPOTENZ_FENSTER_MS) },
+      },
+    });
     const e = await legeEreignisAn(tx, {
       programmId: programm.id,
       typ: x.typ,
@@ -197,6 +254,17 @@ export async function meldeEreignis(
       gemeldetVon: ctx.akteur.id,
       ereignisDatum: datum,
       zeitpunkt,
+      // Rollen erst unter `halteRollenFest` (Mandantenzeile FOR KEY SHARE) neu
+      // lesen und prüfen (TS-05, RT4-T-05): Eine gleichzeitig entzogene Rolle
+      // gilt entweder schon hier oder erst nach dieser Meldung.
+      vorDemAnlegen: async () => {
+        await halteRollenFest(tx, mandantId);
+        const rollen = await ladeKontaktRollen(tx, ctx.akteur);
+        if (!darfEreignisMelden(ctx.akteur, mandantId, rollen)) {
+          if (!kannLesen(ctx.akteur, mandantId, rollen)) throw new DienstFehler('NICHT_GEFUNDEN');
+          throw nichtBerechtigt('PORTAL_ROLLE', NUR_GV_TCB);
+        }
+      },
     });
     const typTitel = ereignistyp(x.typ)?.titel ?? PORTAL_SONSTIGES.titel;
     // Benachrichtigung der von der kanzleikonsole genannten Person über den

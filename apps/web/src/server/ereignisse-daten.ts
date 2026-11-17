@@ -143,8 +143,16 @@ export interface EreignisDetail {
   id: string;
   folgen: FolgeDetail[];
   anlagen: Anlage[];
-  meldung: { aktion: string; at: Date; hash: string } | null;
-  verwerfenAntrag: { vonId: string | null; von: string; am: Date; begruendung: string } | null;
+  /** `hash` nur für die Kanzleileitung (sonst null, Dienst). */
+  meldung: { aktion: string; at: Date; hash: string | null } | null;
+  verwerfenAntrag: {
+    vonId: string | null;
+    von: string;
+    am: Date;
+    begruendung: string;
+    /** Kennung des Antrags; die Bestätigung nennt sie. */
+    antragId: string;
+  } | null;
   verwerfen: { begruendung: string; von: string; am: Date } | null;
   verlauf: { id: number; at: Date; actorName: string; text: string }[];
 }
@@ -208,6 +216,7 @@ export async function ladeEreignisDetail(
           von: name(d.verwerfenAntrag.vonId),
           am: datum(d.verwerfenAntrag.am),
           begruendung: d.verwerfenAntrag.begruendung,
+          antragId: d.verwerfenAntrag.antragId,
         }
       : null,
     verwerfen: d.verwerfen

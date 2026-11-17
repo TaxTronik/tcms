@@ -219,6 +219,7 @@ const INVENTAR: Record<string, string[]> = {
     'VERSION_NICHT_VORGELEGT', // Version gleichzeitig geändert
   ],
   [PORTAL]: [
+    'ZU_VIELE_MELDUNGEN', // Höchstzahl der Meldungen je Person und Stunde erreicht
     'IDEMPOTENZ_ABWEICHUNG', // gleicher Schlüssel, anderer Inhalt (24 h)
     'ZWISCHENZEITLICH_GEAENDERT', // Unique-Verletzung oder Schreibkonflikt der Meldung
   ],

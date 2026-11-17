@@ -178,6 +178,34 @@ export async function sperreMassnahme(
   return feststellungId;
 }
 
+/**
+ * Hält die Programmzeile bis zum Ende der Transaktion fest (`FOR KEY SHARE`,
+ * wie die Fremdschlüsselprüfung eines INSERT). Wer unter dem Programm Zeilen
+ * anlegt und dafür einen Nummernkreis sperrt, nimmt diese Sperre vorher: So
+ * gilt überall Programm → Nummernkreis (TS-05), und eine Operation, die das
+ * Programm `FOR UPDATE` hält und danach eine Nummer zieht (Profiländerung,
+ * Länder-Monitor), verklemmt sich nicht mit einer Meldung. Unbekannt →
+ * `NICHT_GEFUNDEN`.
+ */
+export async function halteProgramm(tx: Tx, programmId: string): Promise<void> {
+  const zeilen = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM "TcmsProgramm" WHERE id = ${programmId} FOR KEY SHARE`;
+  if (zeilen.length !== 1) throw new DienstFehler('NICHT_GEFUNDEN');
+}
+
+/**
+ * Wie `halteProgramm`, über den Mandanten; liefert die Programm-ID. Ohne
+ * Programm schlicht `NICHT_GEFUNDEN` (die Operation fände ihr Objekt ohnehin
+ * nicht; kein Hinweis auf den Mandanten).
+ */
+export async function halteProgrammDes(tx: Tx, mandantId: string): Promise<string> {
+  const zeilen = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM "TcmsProgramm" WHERE "mandantId" = ${mandantId}::uuid FOR KEY SHARE`;
+  const id = zeilen[0]?.id;
+  if (zeilen.length !== 1 || !id) throw new DienstFehler('NICHT_GEFUNDEN');
+  return id;
+}
+
 /** Sperrt das Programm des Mandanten (serialisiert z. B. Länderstände je Programm). */
 export async function sperreProgramm(tx: Tx, mandantId: string): Promise<string> {
   const zeilen = await tx.$queryRaw<{ id: string }[]>`
@@ -207,6 +235,39 @@ export function isoZeitOderNull(d: Date | null | undefined): string | null {
 /** `YYYY-MM-DD` als Date auf UTC-Mitternacht. */
 export function alsTag(iso: string): Date {
   return new Date(`${iso}T00:00:00Z`);
+}
+
+const TAG_MS = 86_400_000;
+/** Höchstens so viele Tage nach heute liegt eine Frist oder Fälligkeit (Tippfehler wie 2062). */
+export const MAX_FRIST_TAGE = 5 * 366;
+
+export const FRIST_ZU_WEIT = 'Das Datum liegt zu weit in der Zukunft (höchstens fünf Jahre).';
+
+/**
+ * Frist oder Fälligkeit im Fenster [heute, heute + `MAX_FRIST_TAGE`]: nicht in
+ * der Vergangenheit und nicht beliebig weit in der Zukunft (sonst würde sie nie
+ * fällig, etwa nach einem Tippfehler). Liefert den Grund oder null.
+ */
+export function fristFehler(tag: Date, heute: Date, vergangen: string): string | null {
+  if (tag.getTime() < heute.getTime()) return vergangen;
+  if (tag.getTime() > heute.getTime() + MAX_FRIST_TAGE * TAG_MS) return FRIST_ZU_WEIT;
+  return null;
+}
+
+/** Wie `fristFehler`, aber als `UNGUELTIG` mit Feldfehler. */
+export function pruefeFrist(tag: Date, heute: Date, feld: string, vergangen: string): void {
+  const text = fristFehler(tag, heute, vergangen);
+  if (text) throw new DienstFehler('UNGUELTIG', text, { [feld]: [text] });
+}
+
+/** Ein Ereignis liegt höchstens zwei Jahre vor oder nach heute (Kanzlei wie Portal). */
+export const EREIGNIS_DATUM_TAGE = 730;
+
+/** Datum eines Ereignisses im Fenster heute ± `EREIGNIS_DATUM_TAGE`, sonst `UNGUELTIG`. */
+export function pruefeEreignisDatum(datum: Date, heute: Date, text: string): void {
+  if (Math.abs(datum.getTime() - heute.getTime()) > EREIGNIS_DATUM_TAGE * TAG_MS) {
+    throw new DienstFehler('UNGUELTIG', text, { datum: [text] });
+  }
 }
 
 /** Anzeigenamen über den Port (im Dienst leer, ADR 0001 §5) als sortierte Liste. */
@@ -274,19 +335,27 @@ export async function legeFeststellungAn(
   f: NeueFeststellung,
 ): Promise<AngelegteFeststellung> {
   const tx = ctx.tx;
-  const risikoIds = [...new Set(f.risikoIds ?? [])];
+  const risikoIds = [...new Set(f.risikoIds ?? [])].sort();
+  // Elternzeilen vor dem Nummernkreis festhalten (FOR KEY SHARE wie die
+  // Fremdschlüsselprüfung des INSERT, TS-05): Programm → Risiken (nach ID) →
+  // Durchführung → Nummernkreis. Sonst wartete der INSERT mit gehaltenem
+  // Nummernkreis auf eine Zeilensperre (Verklemmung mit der Gegenzeichnung, die
+  // die Durchführung hält und danach eine Nummer zieht).
+  await halteProgramm(tx, f.programmId);
   if (risikoIds.length > 0) {
-    const gefunden = await tx.risiko.count({
-      where: { id: { in: risikoIds }, programmId: f.programmId },
-    });
-    if (gefunden !== risikoIds.length) throw new DienstFehler('NICHT_GEFUNDEN');
+    const gefunden = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "Risiko"
+      WHERE "programmId" = ${f.programmId} AND id = ANY(${risikoIds}::text[])
+      ORDER BY id FOR KEY SHARE`;
+    if (gefunden.length !== risikoIds.length) throw new DienstFehler('NICHT_GEFUNDEN');
   }
   if (f.durchfuehrungId) {
-    const d = await tx.durchfuehrung.findFirst({
-      where: { id: f.durchfuehrungId, kontrolle: { programmId: f.programmId } },
-      select: { id: true },
-    });
-    if (!d) throw new DienstFehler('NICHT_GEFUNDEN');
+    const d = await tx.$queryRaw<{ id: string }[]>`
+      SELECT d.id FROM "Durchfuehrung" d
+      JOIN "Kontrolle" k ON k.tenant_id = d.tenant_id AND k.id = d."kontrolleId"
+      WHERE d.id = ${f.durchfuehrungId} AND k."programmId" = ${f.programmId}
+      FOR KEY SHARE OF d`;
+    if (d.length !== 1) throw new DienstFehler('NICHT_GEFUNDEN');
   }
   const auswirkung = auswirkungBeimAnlegen(ctx.akteur, f.mandantId, f.auswirkung);
   const herabgestuft = auswirkung !== f.auswirkung;

@@ -6,13 +6,24 @@
 // (Zugehörigkeit zum Mandanten geprüft), dann Recht, Status und Folgen aus
 // der gesperrten Zeile prüfen, ändern und protokollieren. Folgen werden mit
 // bedingtem Update übernommen (Status unverändert, sonst KONFLIKT).
+//
+// Sperrreihenfolge: Programm → Ereignis → Risiken (nach ID) → Kontrollen (nach
+// ID) → Folgen und neue Zeilen → Nummernkreise. Wer eine Folge ändert, die ein
+// Risiko betrifft, sperrt das Risiko vor der Folge (die Neubewertung ändert
+// dieselbe Folge unter der Risikosperre).
+//
+// Ein offener Antrag auf Verwerfen friert die Folgen ein: Solange er besteht,
+// werden keine Folgen angelegt oder vorgeschlagen (erst ablehnen bzw.
+// zurückziehen). Die Bestätigung nennt die Kennung des gesehenen Antrags.
 // =============================================================================
 
+import { randomUUID } from 'node:crypto';
 import {
   DienstFehler,
   EreignisAktionSchema,
   EreignisErfassenSchema,
   EreignisVerwerfenBeantragenSchema,
+  EreignisVerwerfenBestaetigenSchema,
   FolgeAktionSchema,
   FolgeHinzufuegenSchema,
   FolgenAnlegenSchema,
@@ -24,6 +35,7 @@ import {
   type EreignisErfasst,
   type EreignisErgebnis,
   type EreignisVerwerfenBeantragen,
+  type EreignisVerwerfenBestaetigen,
   type FolgeAktion,
   type FolgeErgebnis,
   type FolgeHinzufuegen,
@@ -46,9 +58,12 @@ import { naechsteEreignisnummer } from '../../kern/nummern';
 import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { gleicheId, kannBearbeiten, zweitePerson } from '../../rechte';
+import { sperreKontrollen, sperreRisiken } from '../risiken-kontrollen/gemeinsam';
 import {
   alsTag,
   GEAENDERT,
+  halteProgramm,
+  halteProgrammDes,
   isoTag,
   KEIN_PROGRAMM,
   KEIN_RECHT,
@@ -56,6 +71,8 @@ import {
   legeFeststellungAn,
   programmVon,
   pruefe,
+  fristFehler,
+  pruefeEreignisDatum,
   pruefeKanzleiZugriff,
   pruefeMandant,
   sperreEreignis,
@@ -65,12 +82,21 @@ import {
 
 const ABGESCHLOSSEN = 'Das Ereignis ist bereits erledigt oder verworfen.';
 const KEIN_ANTRAG = 'Es liegt kein offener Antrag auf Verwerfen vor.';
+const ANTRAG_OFFEN =
+  'Das Verwerfen des Ereignisses ist beantragt. Den Antrag zuerst ablehnen bzw. zurückziehen.';
+const FOLGEN_MIT_WIRKUNG =
+  'Es sind bereits Folgen angelegt. Diese einzeln erledigen oder verwerfen und das Ereignis dann abschließen.';
 
 // ---------------------------------------------------------------------------
 // Anlegen (gemeinsam für Kanzlei, Portal und Länder-Monitor)
 // ---------------------------------------------------------------------------
 
-/** Legt ein Ereignis mit den Katalogfolgen als Vorschläge an (Triage folgt in S11). */
+/**
+ * Legt ein Ereignis mit den Katalogfolgen als Vorschläge an (Triage folgt in
+ * S11). Hält zuerst die Programmzeile (`FOR KEY SHARE`), dann den Nummernkreis
+ * des Programms (TS-05: Programm → Nummernkreis). `vorDemAnlegen` läuft nach
+ * der Nummernvergabe und vor dem INSERT (Portal: Rollen festhalten und prüfen).
+ */
 export async function legeEreignisAn(
   tx: Tx,
   a: {
@@ -82,9 +108,12 @@ export async function legeEreignisAn(
     gemeldetVon: string;
     ereignisDatum: Date;
     zeitpunkt: Date;
+    vorDemAnlegen?: () => Promise<void>;
   },
 ): Promise<{ id: string; nummer: string; folgen: number }> {
-  const nummer = await naechsteEreignisnummer(tx, a.zeitpunkt.getUTCFullYear());
+  await halteProgramm(tx, a.programmId);
+  const nummer = await naechsteEreignisnummer(tx, a.programmId, a.zeitpunkt.getUTCFullYear());
+  if (a.vorDemAnlegen) await a.vorDemAnlegen();
   const kat = ereignistyp(a.typ);
   const folgen: { art: FolgeArt; ziel: string | null; text: string }[] = kat
     ? kat.folgen.map((f) => ({ art: f.art, ziel: f.ziel ?? null, text: f.text }))
@@ -135,6 +164,21 @@ async function ladeZumAendern(ctx: DienstKontext, mandantId: string, ereignisId:
   return e;
 }
 
+/** Folgen anlegen oder vorschlagen: nicht bei offenem Antrag auf Verwerfen. */
+function pruefeKeinAntrag(e: { verwerfenBegruendung: string | null }): void {
+  if (e.verwerfenBegruendung) throw new DienstFehler('KONFLIKT', ANTRAG_OFFEN);
+}
+
+/**
+ * Folge mit fachlicher Wirkung: mit einem Objekt verknüpft (markiertes bzw.
+ * benanntes Risiko, außerplanmäßige Durchführung, Feststellung). Folgen ohne
+ * Objekt (Hinweis, Profil ändern, Risiko aktivieren ohne Risiko im Programm)
+ * erledigt jede bearbeitende Person ohne Nachweis.
+ */
+export function folgeMitWirkung(f: { objektId: string | null }): boolean {
+  return f.objektId != null;
+}
+
 /** „In Triage" beim ersten Triage-Schritt (Status NEU), sonst nichts. */
 async function triageStart(
   ctx: DienstKontext,
@@ -169,9 +213,35 @@ async function zuweisungZulaessig(
   return n > 0;
 }
 
+/** Folge, die die Neubewertungs-Markierung eines Risikos tragen kann. */
+function risikoDerFolge(folge: { art: FolgeArt; objektId: string | null }): string | null {
+  return folge.art === 'RISIKO_NEU_BEWERTEN' || folge.art === 'RISIKO_AKTIVIEREN'
+    ? folge.objektId
+    : null;
+}
+
+/**
+ * Sperrt das Risiko einer Folge, bevor die Folge geändert wird (TS-05:
+ * Ereignis → Risiko → Folge; die Neubewertung sperrt das Risiko und ändert
+ * danach dieselbe Folge). Liefert, ob ein Risiko des Programms gesperrt ist.
+ */
+async function sperreRisikoDerFolge(
+  ctx: DienstKontext,
+  e: Pick<Gesperrt, 'programmId'>,
+  folge: { art: FolgeArt; objektId: string | null },
+): Promise<boolean> {
+  const risikoId = risikoDerFolge(folge);
+  if (!risikoId) return false;
+  const r = await ctx.tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM "Risiko" WHERE id = ${risikoId} AND "programmId" = ${e.programmId}
+    FOR UPDATE`;
+  return r.length === 1;
+}
+
 /**
  * Hebt die Neubewertungs-Markierung eines Risikos auf, wenn keine andere
- * angelegte Folge sie braucht. Die Risiko-Zeile wird gesperrt, damit ein
+ * angelegte Folge sie braucht. Die Risiko-Zeile hat der Aufrufer vor der
+ * Änderung der Folge gesperrt (`sperreRisikoDerFolge`), damit ein
  * gleichzeitiges Markieren nicht verloren geht (TS-05).
  */
 async function gibMarkierungFrei(
@@ -179,14 +249,10 @@ async function gibMarkierungFrei(
   e: Pick<Gesperrt, 'programmId' | 'nummer'>,
   folge: { id: string; art: FolgeArt; objektId: string | null; ziel: string | null },
   anlass: string,
+  risikoGesperrt: boolean,
 ): Promise<Protokoll | null> {
-  if ((folge.art !== 'RISIKO_NEU_BEWERTEN' && folge.art !== 'RISIKO_AKTIVIEREN') || !folge.objektId)
-    return null;
+  if (!risikoGesperrt || !folge.objektId) return null;
   const tx = ctx.tx;
-  const r = await tx.$queryRaw<{ id: string }[]>`
-    SELECT id FROM "Risiko" WHERE id = ${folge.objektId} AND "programmId" = ${e.programmId}
-    FOR UPDATE`;
-  if (r.length !== 1) return null;
   const andere = await tx.ereignisFolge.count({
     where: {
       id: { not: folge.id },
@@ -248,7 +314,13 @@ interface Plan {
  * außerplanmäßige Durchführungen ein oder legt Feststellungen an (TS-04 über
  * `legeFeststellungAn`). Alle Eingaben werden geprüft, bevor etwas
  * geschrieben wird; eine Folge, die nicht mehr vorgeschlagen ist (auch durch
- * eine gleichzeitige Anfrage), ergibt KONFLIKT.
+ * eine gleichzeitige Anfrage), ergibt KONFLIKT. Bei offenem Antrag auf
+ * Verwerfen werden keine Folgen angelegt (KONFLIKT).
+ *
+ * Sperren (TS-05) unabhängig von der Reihenfolge der Eingabe: Programm (KEY
+ * SHARE) → Ereignis → betroffene Risiken (nach ID) → Kontrollen (nach ID);
+ * erst unter diesen Sperren werden Risiken und Kontrollen geprüft und die
+ * Folgen umgesetzt.
  */
 export async function legeFolgenAn(
   ctx: DienstKontext,
@@ -259,8 +331,47 @@ export async function legeFolgenAn(
   pruefeKanzleiZugriff(ctx, mandantId);
   const heute = heuteDatum(ctx.uhr);
   return aendere(ctx, async (tx, zeitpunkt) => {
+    // Programm vor dem Ereignis: Feststellungen aus Folgen halten es ohnehin
+    // (Fremdschlüssel), hier in der Reihenfolge der übrigen Operationen.
+    await halteProgrammDes(tx, mandantId);
     const e = await ladeZumAendern(ctx, mandantId, x.ereignisId);
+    pruefeKeinAntrag(e);
     const t = zeitpunkt.getTime();
+    // Betroffene Risiken und Kontrollen vorab nach ID sperren (Codes → IDs sind fest).
+    const gewaehlt = x.folgen.flatMap((w) => e.folgen.filter((f) => f.id === w.folgeId));
+    const codes = (arten: FolgeArt[]) => [
+      ...new Set(
+        gewaehlt.filter((f) => arten.includes(f.art) && f.ziel).map((f) => f.ziel as string),
+      ),
+    ];
+    const risikoCodes = codes(['RISIKO_NEU_BEWERTEN', 'RISIKO_AKTIVIEREN']);
+    const kontrollCodes = codes(['KONTROLLE_AUSSERPLANMAESSIG']);
+    const risikoIds = risikoCodes.length
+      ? await tx.risiko.findMany({
+          where: { programmId: e.programmId, code: { in: risikoCodes } },
+          select: { id: true },
+          orderBy: { id: 'asc' },
+        })
+      : [];
+    const kontrollIds = kontrollCodes.length
+      ? await tx.kontrolle.findMany({
+          where: { programmId: e.programmId, code: { in: kontrollCodes } },
+          select: { id: true },
+          orderBy: { id: 'asc' },
+        })
+      : [];
+    if (risikoIds.length) {
+      await sperreRisiken(
+        tx,
+        e.programmId,
+        risikoIds.map((r) => r.id),
+      );
+    }
+    await sperreKontrollen(
+      tx,
+      e.programmId,
+      kontrollIds.map((k) => k.id),
+    );
     const plaene: Plan[] = [];
     const fehler: string[] = [];
     const felder: Record<string, string[]> = {};
@@ -283,8 +394,9 @@ export async function legeFolgenAn(
       let frist: Date | null = null;
       if (wahl.frist) {
         frist = alsTag(wahl.frist);
-        if (frist.getTime() < heute.getTime()) {
-          melde(i, `${label}: Frist liegt in der Vergangenheit.`);
+        const fehlerFrist = fristFehler(frist, heute, 'Frist liegt in der Vergangenheit.');
+        if (fehlerFrist) {
+          melde(i, `${label}: ${fehlerFrist}`);
           continue;
         }
       }
@@ -475,6 +587,7 @@ export async function fuegeFolgeHinzu(
   }
   return aendere(ctx, async (tx) => {
     const e = await ladeZumAendern(ctx, mandantId, x.ereignisId);
+    pruefeKeinAntrag(e);
     const f = await tx.ereignisFolge.create({
       data: { ereignisId: e.id, art: x.art, ziel, text: x.text },
       select: { id: true },
@@ -542,6 +655,7 @@ export async function erledigeFolge(
         );
       }
     }
+    const risikoGesperrt = await sperreRisikoDerFolge(ctx, e, f);
     const n = await tx.ereignisFolge.updateMany({
       where: { id: f.id, ereignisId: e.id, status: 'ANGELEGT' },
       data: { status: 'ERLEDIGT', erledigtAm: zeitpunkt },
@@ -556,7 +670,7 @@ export async function erledigeFolge(
         detail: { ereignis: e.nummer, art: f.art, label: FOLGE_LABEL[f.art], ziel: f.ziel },
       },
     ];
-    const frei = await gibMarkierungFrei(ctx, e, f, `Ereignis ${e.nummer}`);
+    const frei = await gibMarkierungFrei(ctx, e, f, `Ereignis ${e.nummer}`, risikoGesperrt);
     if (frei) protokoll.push(frei);
     return { wert: { id: f.id, status: 'ERLEDIGT' as const }, protokoll };
   });
@@ -585,6 +699,7 @@ export async function verwerfeFolge(
     const protokoll: Protokoll[] = [];
     const start = await triageStart(ctx, e, zeitpunkt);
     if (start) protokoll.push(start);
+    const risikoGesperrt = f.status === 'ANGELEGT' && (await sperreRisikoDerFolge(ctx, e, f));
     const n = await tx.ereignisFolge.updateMany({
       where: { id: f.id, ereignisId: e.id, status: f.status },
       data: { status: 'VERWORFEN' },
@@ -605,7 +720,13 @@ export async function verwerfeFolge(
       },
     });
     if (f.status === 'ANGELEGT') {
-      const frei = await gibMarkierungFrei(ctx, e, f, `Folge verworfen (Ereignis ${e.nummer})`);
+      const frei = await gibMarkierungFrei(
+        ctx,
+        e,
+        f,
+        `Folge verworfen (Ereignis ${e.nummer})`,
+        risikoGesperrt,
+      );
       if (frei) protokoll.push(frei);
     }
     return { wert: { id: f.id, status: 'VERWORFEN' as const }, protokoll };
@@ -621,7 +742,17 @@ export interface EreignisStand {
   status: string;
   verwerfenBegruendung: string | null;
   verwerfenBeantragtVon: string | null;
-  folgen: readonly { status: 'VORGESCHLAGEN' | 'ANGELEGT' | 'ERLEDIGT' | 'VERWORFEN' }[];
+  folgen: readonly {
+    status: 'VORGESCHLAGEN' | 'ANGELEGT' | 'ERLEDIGT' | 'VERWORFEN';
+    objektId: string | null;
+  }[];
+}
+
+/** Eine Folge mit fachlicher Wirkung ist angelegt oder erledigt (dann kein Verwerfen). */
+function folgenMitWirkungUmgesetzt(e: EreignisStand): boolean {
+  return e.folgen.some(
+    (f) => (f.status === 'ANGELEGT' || f.status === 'ERLEDIGT') && folgeMitWirkung(f),
+  );
 }
 
 export type EreignisSchritt = 'abschliessen' | 'verwerfenBeantragen' | 'verwerfenBestaetigen';
@@ -659,21 +790,30 @@ export function hindernisEreignis(
           'Keine Folge ist erledigt. Bitte „Ereignis verwerfen“ verwenden – das bestätigt eine zweite Person.',
         );
       }
+      // Ebenso, wenn Folgen verworfen sind und nur Folgen ohne Wirkung (Hinweis,
+      // Profil) erledigt: Diese erledigt jede bearbeitende Person ohne Nachweis,
+      // sie ersetzen die zweite Person nicht.
+      if (
+        e.folgen.some((f) => f.status === 'VERWORFEN') &&
+        !e.folgen.some((f) => f.status === 'ERLEDIGT' && folgeMitWirkung(f))
+      ) {
+        return new DienstFehler(
+          'KONFLIKT',
+          'Folgen sind verworfen, erledigt sind nur Folgen ohne verknüpftes Objekt (Hinweis, Profil). Bitte „Ereignis verwerfen“ verwenden – das bestätigt eine zweite Person.',
+        );
+      }
       return null;
     case 'verwerfenBeantragen':
       if (e.verwerfenBegruendung) {
         return new DienstFehler('KONFLIKT', 'Das Verwerfen ist bereits beantragt.');
       }
-      if (e.folgen.some((f) => f.status === 'ANGELEGT' || f.status === 'ERLEDIGT')) {
-        return new DienstFehler(
-          'KONFLIKT',
-          'Es sind bereits Folgen angelegt. Diese einzeln erledigen oder verwerfen und das Ereignis dann abschließen.',
-        );
-      }
+      if (folgenMitWirkungUmgesetzt(e)) return new DienstFehler('KONFLIKT', FOLGEN_MIT_WIRKUNG);
       return null;
     case 'verwerfenBestaetigen':
       if (!e.verwerfenBegruendung) return new DienstFehler('KONFLIKT', KEIN_ANTRAG);
       if (!zweitePerson(a, antragsteller(e))) return nichtBerechtigt('VIER_AUGEN', ZWEITE_PERSON);
+      // Dieselbe Vorbedingung wie beim Antrag, auf dem Stand unter der Sperre.
+      if (folgenMitWirkungUmgesetzt(e)) return new DienstFehler('KONFLIKT', FOLGEN_MIT_WIRKUNG);
       return null;
   }
 }
@@ -739,7 +879,12 @@ export async function beantrageEreignisVerwerfen(
     if (hindernis) throw hindernis;
     await tx.ereignis.update({
       where: { id: e.id },
-      data: { verwerfenBegruendung: x.begruendung, verwerfenBeantragtVon: ctx.akteur.id },
+      data: {
+        verwerfenBegruendung: x.begruendung,
+        verwerfenBeantragtVon: ctx.akteur.id,
+        // Neue Kennung je Antrag: Die Bestätigung bindet sich an den gesehenen Antrag.
+        verwerfenAntragId: randomUUID(),
+      },
     });
     return {
       wert: ergebnis(e, e.status),
@@ -763,23 +908,39 @@ function antragsteller(e: Pick<EreignisStand, 'verwerfenBeantragtVon'>): string 
   return e.verwerfenBeantragtVon;
 }
 
+/**
+ * Bestätigt das Verwerfen (zweite Person). `antragId` ist die Kennung des
+ * Antrags, den die Person gesehen hat (`verwerfenAntrag.antragId` im Detail):
+ * Wurde der Antrag inzwischen zurückgezogen und neu gestellt, ergibt das
+ * KONFLIKT. Verworfen werden die vorgeschlagenen Folgen und angelegte Folgen
+ * ohne Wirkung (Folgen mit Wirkung schließen das Verwerfen aus).
+ */
 export async function bestaetigeEreignisVerwerfen(
   ctx: DienstKontext,
-  eingabe: EreignisAktion,
+  eingabe: EreignisVerwerfenBestaetigen,
 ): Promise<EreignisErgebnis> {
-  const x = pruefe(EreignisAktionSchema, eingabe);
+  const x = pruefe(EreignisVerwerfenBestaetigenSchema, eingabe);
   const mandantId = x.mandantId.toLowerCase();
   pruefeKanzleiZugriff(ctx, mandantId);
   return aendere(ctx, async (tx, zeitpunkt) => {
     const e = await ladeGesperrt(ctx, mandantId, x.ereignisId);
     const hindernis = hindernisEreignis('verwerfenBestaetigen', ctx.akteur, mandantId, e);
     if (hindernis) throw hindernis;
+    if (!gleicheId(e.verwerfenAntragId, x.antragId)) throw new DienstFehler('KONFLIKT', GEAENDERT);
     const von = antragsteller(e);
-    const offene = e.folgen.filter((f) => f.status === 'VORGESCHLAGEN');
-    await tx.ereignisFolge.updateMany({
-      where: { ereignisId: e.id, status: 'VORGESCHLAGEN' },
-      data: { status: 'VERWORFEN' },
-    });
+    const offene = e.folgen.filter(
+      (f) => f.status === 'VORGESCHLAGEN' || (f.status === 'ANGELEGT' && !folgeMitWirkung(f)),
+    );
+    if (offene.length > 0) {
+      await tx.ereignisFolge.updateMany({
+        where: {
+          ereignisId: e.id,
+          id: { in: offene.map((f) => f.id) },
+          status: { in: ['VORGESCHLAGEN', 'ANGELEGT'] },
+        },
+        data: { status: 'VERWORFEN' },
+      });
+    }
     await tx.ereignis.update({
       where: { id: e.id },
       data: {
@@ -794,7 +955,12 @@ export async function bestaetigeEreignisVerwerfen(
         objektTyp: 'Ereignis',
         objektId: e.id,
         programmId: e.programmId,
-        detail: { nummer: e.nummer, beantragtVon: von, folgenVerworfen: offene.length },
+        detail: {
+          nummer: e.nummer,
+          beantragtVon: von,
+          begruendung: e.verwerfenBegruendung,
+          folgenVerworfen: offene.length,
+        },
       },
     };
   });
@@ -849,6 +1015,12 @@ export async function erfasseEreignis(
     const text = 'Unbekannter Ereignistyp.';
     throw new DienstFehler('UNGUELTIG', text, { typ: [text] });
   }
+  const datum = alsTag(x.datum);
+  pruefeEreignisDatum(
+    datum,
+    heuteDatum(ctx.uhr),
+    'Bitte das Datum prüfen (höchstens zwei Jahre vor oder nach heute).',
+  );
   return aendere(ctx, async (tx, zeitpunkt) => {
     await pruefeMandant(tx, mandantId);
     if (!kannBearbeiten(ctx.akteur, mandantId)) throw nichtBerechtigt('BEARBEITEN', KEIN_RECHT);
@@ -861,7 +1033,7 @@ export async function erfasseEreignis(
       beschreibung: x.beschreibung,
       quelle: x.quelle,
       gemeldetVon: ctx.akteur.id,
-      ereignisDatum: alsTag(x.datum),
+      ereignisDatum: datum,
       zeitpunkt,
     });
     return {

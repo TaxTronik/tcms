@@ -223,7 +223,12 @@ export async function profilAendern(
         });
       }
 
-      const nummern = await naechsteEreignisnummern(tx, zeitpunkt.getUTCFullYear(), typen.length);
+      const nummern = await naechsteEreignisnummern(
+        tx,
+        programm.id,
+        zeitpunkt.getUTCFullYear(),
+        typen.length,
+      );
       const ereignisse: string[] = [];
       for (const [i, t] of typen.entries()) {
         const kat = ereignistyp(t.typ);

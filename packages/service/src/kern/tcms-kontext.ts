@@ -43,6 +43,7 @@ import {
   katalogRisiko,
   leiteFrequenzAb,
   monatSchluessel,
+  p153Offen,
   pruflast,
   statusAm,
   ueber,
@@ -1006,9 +1007,14 @@ function berechne(
       const massnahmen = f.massnahmen.filter(
         (m) => m.createdAt.getTime() <= ende.getTime() || true,
       );
-      const offen = massnahmen.filter(
-        (m) => m.status === 'OFFEN' || (m.erledigtAm && m.erledigtAm.getTime() > ende.getTime()),
-      );
+      // Maßnahmen verworfener Feststellungen sind nicht mehr zu erledigen (wie die Liste).
+      const offen =
+        f.status === 'VERWORFEN'
+          ? []
+          : massnahmen.filter(
+              (m) =>
+                m.status === 'OFFEN' || (m.erledigtAm && m.erledigtAm.getTime() > ende.getTime()),
+            );
       const fristen = offen.map((m) => m.frist.getTime()).sort((a, b) => a - b);
       const geschlossenBisStand =
         f.status === 'GESCHLOSSEN' && f.geschlossenAm && f.geschlossenAm.getTime() > ende.getTime()
@@ -1029,10 +1035,8 @@ function berechne(
         vertraulich: f.vertraulich,
         beteiligte: beteiligteVon(f),
         p153Entscheidung: p153Entschieden ? f.p153Entscheidung : null,
-        p153Offen:
-          (f.auswirkung === 'JA' || f.auswirkung === 'UNKLAR') &&
-          !p153Entschieden &&
-          f.status !== 'VERWORFEN',
+        // „Weitere Klärung" lässt die Würdigung offen (eine Regel, @tcms/domain).
+        p153Offen: p153Offen(f, ende),
         massnahmenOffen: offen.length,
         massnahmen: massnahmen.length,
         aeltesteFrist: fristen.length ? new Date(fristen[0]!) : null,
@@ -1087,6 +1091,9 @@ function berechne(
     }));
 
   // ---- Länder (jüngster Stand je Land bis zum Stichtag) ----
+  // Jüngster = größtes (Datenstand, createdAt, id) wie im Länder-Monitor
+  // (`ladeLaender`, Schreibprüfung `gesehenerStandId`); die Liste ist danach
+  // aufsteigend sortiert, bei Gleichstand gewinnt also die spätere Zeile.
   const laenderJe = new Map<string, (typeof programm.laender)[number]>();
   for (const l of programm.laender) {
     if (l.stand.getTime() > ende.getTime() || l.createdAt.getTime() > ende.getTime()) continue;
@@ -1094,7 +1101,7 @@ function berechne(
     if (
       !bisher ||
       l.stand.getTime() > bisher.stand.getTime() ||
-      (l.stand.getTime() === bisher.stand.getTime() && l.createdAt > bisher.createdAt)
+      (l.stand.getTime() === bisher.stand.getTime() && l.createdAt >= bisher.createdAt)
     )
       laenderJe.set(l.land, l);
   }

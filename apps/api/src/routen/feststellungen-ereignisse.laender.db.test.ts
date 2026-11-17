@@ -56,9 +56,14 @@ const faelle: Fall[] = [
         land: landEingabe(code),
       });
       expect(r.status).toBe(201);
+      // Gesehener Stand: der eben angelegte (jüngster Stand des Landes).
+      const gesehenerStandId = (r.json['daten'] as { staende: { id: string }[] }).staende[0]!.id;
       return {
         pfad: `${B}/laender/staende`,
-        body: { datenstand: '2026-10-05', laender: [landEingabe(code)] },
+        body: {
+          datenstand: '2026-10-05',
+          laender: [{ ...landEingabe(code), gesehenerStandId }],
+        },
       };
     },
   },

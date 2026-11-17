@@ -613,6 +613,7 @@ function TriagePanel({
               <AktionsForm action={bestaetigeEreignisVerwerfen}>
                 <input type="hidden" name="mandantId" value={mandantId} />
                 <input type="hidden" name="id" value={e.id} />
+                <input type="hidden" name="antragId" value={detail.verwerfenAntrag.antragId} />
                 <Gesperrt
                   blass
                   grund={
@@ -747,8 +748,8 @@ function TriagePanel({
       <div className="card-footer" style={{ display: 'block' }}>
         {detail.meldung ? (
           <span className="text-11 mono text-muted">
-            Ereignis in Audit-Chain: {detail.meldung.aktion} · {fmtDatumZeit(detail.meldung.at)} ·
-            Hash {kurzHash(detail.meldung.hash)}
+            Ereignis in Audit-Chain: {detail.meldung.aktion} · {fmtDatumZeit(detail.meldung.at)}
+            {detail.meldung.hash ? ` · Hash ${kurzHash(detail.meldung.hash)}` : ''}
           </span>
         ) : (
           <span className="text-11 text-muted">Kein Meldungseintrag im Audit-Log.</span>

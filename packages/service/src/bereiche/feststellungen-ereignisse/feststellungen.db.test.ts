@@ -62,6 +62,22 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
 
   const feststellung = (a: Akteur, id: string) => ({ mandantId: w.mandant, feststellungId: id, a });
 
+  /** Antrag und Auswirkung, wie die zweite Person sie sieht (Detail: `verwerfen.antragId`). */
+  async function gesehen(feststellungId: string) {
+    const f = await inTenant(w, (tx) =>
+      tx.feststellung.findUniqueOrThrow({ where: { id: feststellungId } }),
+    );
+    return { antragId: f.verwerfenAntragId, auswirkung: f.auswirkung };
+  }
+
+  /** Bestätigt das Verwerfen auf dem aktuellen Stand (Antrag und Auswirkung). */
+  async function bestaetige(a: Akteur, feststellungId: string) {
+    const g = await gesehen(feststellungId);
+    return im(a, (ctx) =>
+      bestaetigeFeststellungVerwerfen(ctx, { mandantId: w.mandant, feststellungId, ...g }),
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // Zugriff für alle Operationen (TS-03): kein Bezug, fremder Mandant, fremder
   // Tenant, Mandantenkontakte, Objekt-ID eines anderen Mandanten, unbekannte ID
@@ -167,7 +183,12 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
       name: 'verwerfen bestätigen',
       ohneRecht: 'leser',
       lauf: (ctx, id) =>
-        bestaetigeFeststellungVerwerfen(ctx, { mandantId: w.mandant, feststellungId: id }),
+        bestaetigeFeststellungVerwerfen(ctx, {
+          mandantId: w.mandant,
+          feststellungId: id,
+          antragId: '00000000-0000-4000-8000-000000000001',
+          auswirkung: 'JA',
+        }),
     },
     {
       name: 'verwerfen ablehnen',
@@ -597,6 +618,51 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
     });
   });
 
+  it('§ 153: jede Begründung steht im Audit; die Folgeentscheidung bewahrt die frühere; „weitere Klärung“ bleibt offen', async () => {
+    const f = await neueFeststellung(w);
+    const erste = 'Belege der Marktplatzabrechnung fehlen noch, Klärung mit dem Mandanten läuft.';
+    const zweite = 'Nach Prüfung der Abrechnungen keine Berichtigungspflicht, Fehler unter 1 %.';
+    await im(A.zbt, (ctx) =>
+      entscheideP153(ctx, {
+        mandantId: w.mandant,
+        feststellungId: f.id,
+        entscheidung: 'WEITERE_KLAERUNG',
+        begruendung: erste,
+        frist: '2026-12-01',
+        bisher: null,
+      }),
+    );
+    // „Weitere Klärung“ ist nicht abschließend: Liste und Kennzeichen zeigen die Würdigung offen.
+    const offen = await im(A.zbt, (ctx) => ladeFeststellungen(ctx, { mandantId: w.mandant }));
+    expect(offen.feststellungen.find((x) => x.id === f.id)).toMatchObject({ p153Offen: true });
+    await im(A.admin, (ctx) =>
+      entscheideP153(ctx, {
+        mandantId: w.mandant,
+        feststellungId: f.id,
+        entscheidung: 'KEINE_PFLICHT',
+        begruendung: zweite,
+        bisher: 'WEITERE_KLAERUNG',
+      }),
+    );
+    const audits = await inTenant(w, (tx) =>
+      tx.auditEvent.findMany({
+        where: { objektId: f.id, aktion: 'tcms.feststellung.p153_entschieden' },
+        orderBy: { pos: 'asc' },
+      }),
+    );
+    expect(audits.map((a) => a.detail)).toEqual([
+      expect.objectContaining({ entscheidung: 'WEITERE_KLAERUNG', begruendung: erste }),
+      expect.objectContaining({
+        entscheidung: 'KEINE_PFLICHT',
+        begruendung: zweite,
+        vorher: 'WEITERE_KLAERUNG',
+        vorherBegruendung: erste,
+      }),
+    ]);
+    const danach = await im(A.zbt, (ctx) => ladeFeststellungen(ctx, { mandantId: w.mandant }));
+    expect(danach.feststellungen.find((x) => x.id === f.id)).toMatchObject({ p153Offen: false });
+  });
+
   it('§ 153: ohne steuerliche Auswirkung gibt es keinen §-153-Pfad', async () => {
     const f = await neueFeststellung(w, { auswirkung: 'NEIN' });
     const e = await fehlerVon(
@@ -849,22 +915,14 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
     // Auch in anderer Schreibweise der ID ist es dieselbe Person.
     const gross = { ...A.hb, id: A.hb.id.toUpperCase() } as Akteur;
     for (const a of [A.hb, gross]) {
-      const e = await fehlerVon(
-        im(a, (ctx) =>
-          bestaetigeFeststellungVerwerfen(ctx, { mandantId: w.mandant, feststellungId: f.id }),
-        ),
-      );
+      const e = await fehlerVon(bestaetige(a, f.id));
       expect(e).toMatchObject({
         code: 'NICHT_BERECHTIGT',
         grund: 'VIER_AUGEN',
         message: 'Die Bestätigung muss durch eine zweite Person erfolgen.',
       });
     }
-    await expect(
-      im(A.zbt, (ctx) =>
-        bestaetigeFeststellungVerwerfen(ctx, { mandantId: w.mandant, feststellungId: f.id }),
-      ),
-    ).resolves.toMatchObject({ status: 'VERWORFEN' });
+    await expect(bestaetige(A.zbt, f.id)).resolves.toMatchObject({ status: 'VERWORFEN' });
     const x = await inTenant(w, (tx) => tx.feststellung.findUniqueOrThrow({ where: { id: f.id } }));
     expect(x).toMatchObject({
       status: 'VERWORFEN',
@@ -879,11 +937,7 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
       const f = await neueFeststellung(w, { auswirkung, verwerfenBeantragtVon: w.p.zbt });
       // Zweite Person mit Bearbeitungsrecht, aber ohne Würdigungsrecht: abgewiesen, unverändert.
       for (const a of [A.hb, A.adminOhneBt]) {
-        const e = await fehlerVon(
-          im(a, (ctx) =>
-            bestaetigeFeststellungVerwerfen(ctx, { mandantId: w.mandant, feststellungId: f.id }),
-          ),
-        );
+        const e = await fehlerVon(bestaetige(a, f.id));
         expect(e.code, `${auswirkung} als ${a.id}`).toBe('NICHT_BERECHTIGT');
         expect(e.grund).toBe('WUERDIGEN');
         expect(e.message).toMatch(/Berufsträger.*§ 153/);
@@ -894,27 +948,16 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
       expect(x).toMatchObject({ status: 'ERFASST', verwerfenBestaetigtVon: null });
       expect(await auditZahl(w, f.id)).toBe(0);
       // Zuständige Berufsträgerin als zweite Person darf.
-      await expect(
-        im(A.admin, (ctx) =>
-          bestaetigeFeststellungVerwerfen(ctx, { mandantId: w.mandant, feststellungId: f.id }),
-        ),
-      ).resolves.toMatchObject({ status: 'VERWORFEN' });
+      await expect(bestaetige(A.admin, f.id)).resolves.toMatchObject({ status: 'VERWORFEN' });
     }
     // Steuerwirkung ausgeschlossen („NEIN"): die zweite Person genügt.
     const nein = await neueFeststellung(w, { auswirkung: 'NEIN', verwerfenBeantragtVon: w.p.zbt });
-    await expect(
-      im(A.hb, (ctx) =>
-        bestaetigeFeststellungVerwerfen(ctx, { mandantId: w.mandant, feststellungId: nein.id }),
-      ),
-    ).resolves.toMatchObject({ status: 'VERWORFEN' });
+    await expect(bestaetige(A.hb, nein.id)).resolves.toMatchObject({ status: 'VERWORFEN' });
   });
 
   it('TS-05 Verwerfen: zwei zweite Personen gleichzeitig → genau eine Bestätigung', async () => {
     const f = await neueFeststellung(w, { verwerfenBeantragtVon: w.p.hb });
-    const best = (a: Akteur) => () =>
-      im(a, (ctx) =>
-        bestaetigeFeststellungVerwerfen(ctx, { mandantId: w.mandant, feststellungId: f.id }),
-      );
+    const best = (a: Akteur) => () => bestaetige(a, f.id);
     expect(genauEinerKonflikt(await gleichzeitig(best(A.zbt), best(A.admin)))).toBe(true);
     expect(await auditZahl(w, f.id, 'tcms.feststellung.verwerfen_bestaetigt')).toBe(1);
   });
@@ -942,15 +985,255 @@ describe.skipIf(!AKTIV)('Feststellungen gegen PostgreSQL', () => {
         lehneFeststellungVerwerfenAb(ctx, { mandantId: w.mandant, feststellungId: f.id }),
       ),
     ).resolves.toEqual({ id: f.id, zurueckgezogen: false });
+    expect((await fehlerVon(bestaetige(A.zbt, f.id))).code).toBe('KONFLIKT');
+  });
+
+  it('Verwerfen: Bestätigung nur für den gesehenen Antrag und die gesehene Auswirkung; Audit mit Begründung', async () => {
+    const f = await neueFeststellung(w, { auswirkung: 'NEIN' });
+    const beantrage = (begruendung: string) =>
+      im(A.hb, (ctx) =>
+        beantrageFeststellungVerwerfen(ctx, {
+          mandantId: w.mandant,
+          feststellungId: f.id,
+          begruendung,
+        }),
+      );
+    await beantrage(BEGRUENDUNG);
+    // Die zweite Person öffnet den Antrag (Detail nennt die Kennung).
+    const d = await im(A.admin, (ctx) =>
+      ladeFeststellung(ctx, { mandantId: w.mandant, feststellungId: f.id }),
+    );
+    if (d.maskiert) throw new Error('unerwartet maskiert');
+    const alt = { antragId: d.verwerfen!.antragId, auswirkung: d.auswirkung };
+    expect(alt).toEqual(await gesehen(f.id));
+    // Antrag zurückgezogen, Auswirkung inzwischen „JA“, neuer Antrag mit anderem Text.
+    await im(A.hb, (ctx) =>
+      lehneFeststellungVerwerfenAb(ctx, { mandantId: w.mandant, feststellungId: f.id }),
+    );
+    await im(A.hb, (ctx) =>
+      aktualisiereWuerdigung(ctx, {
+        mandantId: w.mandant,
+        feststellungId: f.id,
+        schwere: 'HOCH',
+        auswirkung: 'JA',
+      }),
+    );
+    const anders = 'Doppelt erfasst – die Abweichung ist bereits in F-2026-001 dokumentiert.';
+    await beantrage(anders);
+    const neu = await gesehen(f.id);
+    expect(neu.antragId).not.toBe(alt.antragId);
+    for (const eingabe of [alt, { ...neu, auswirkung: 'NEIN' as const }]) {
+      const x = await fehlerVon(
+        im(A.admin, (ctx) =>
+          bestaetigeFeststellungVerwerfen(ctx, {
+            mandantId: w.mandant,
+            feststellungId: f.id,
+            ...eingabe,
+          }),
+        ),
+      );
+      expect(x.code, JSON.stringify(eingabe)).toBe('KONFLIKT');
+    }
+    expect(await auditZahl(w, f.id, 'tcms.feststellung.verwerfen_bestaetigt')).toBe(0);
+    await expect(bestaetige(A.admin, f.id)).resolves.toMatchObject({ status: 'VERWORFEN' });
+    const audit = await inTenant(w, (tx) =>
+      tx.auditEvent.findFirstOrThrow({
+        where: { objektId: f.id, aktion: 'tcms.feststellung.verwerfen_bestaetigt' },
+      }),
+    );
+    expect(audit.detail).toMatchObject({ begruendung: anders, auswirkung: 'JA' });
+  });
+
+  it('Verwerfen: nicht bei offenen Maßnahmen (Antrag und Bestätigung)', async () => {
+    const f = await neueFeststellung(w, { auswirkung: 'NEIN', status: 'MASSNAHMEN_OFFEN' });
+    const m = await neueMassnahme(w, f.id, w.p.hb);
+    const beantrage = () =>
+      im(A.hb, (ctx) =>
+        beantrageFeststellungVerwerfen(ctx, {
+          mandantId: w.mandant,
+          feststellungId: f.id,
+          begruendung: BEGRUENDUNG,
+        }),
+      );
+    const offen = await fehlerVon(beantrage());
+    expect(offen.message).toMatch(/offene Maßnahmen/);
+    await im(A.hb, (ctx) =>
+      erledigeMassnahme(ctx, {
+        mandantId: w.mandant,
+        massnahmeId: m.id,
+        nachweis: 'Feststellung wird verworfen, Abstimmung entfällt.',
+      }),
+    );
+    await beantrage();
+    // Nach dem Antrag kommt eine Maßnahme hinzu: die Bestätigung prüft erneut.
+    await neueMassnahme(w, f.id, w.p.hb);
+    const x = await fehlerVon(bestaetige(A.zbt, f.id));
+    expect(x.code).toBe('KONFLIKT');
+    expect(x.message).toMatch(/offene Maßnahmen/);
     expect(
-      (
-        await fehlerVon(
-          im(A.zbt, (ctx) =>
-            bestaetigeFeststellungVerwerfen(ctx, { mandantId: w.mandant, feststellungId: f.id }),
-          ),
-        )
-      ).code,
-    ).toBe('KONFLIKT');
+      (await inTenant(w, (tx) => tx.feststellung.findUniqueOrThrow({ where: { id: f.id } })))
+        .status,
+    ).toBe('MASSNAHMEN_OFFEN');
+  });
+
+  it('weiter: nicht nach „geschlossen“, solange das Verwerfen beantragt ist', async () => {
+    const f = await neueFeststellung(w, { auswirkung: 'NEIN', status: 'MASSNAHMEN_OFFEN' });
+    await neueMassnahme(w, f.id, w.p.hb, 'ERLEDIGT');
+    const nk = await im(A.hb, (ctx) =>
+      legeNachkontrolleAn(ctx, {
+        mandantId: w.mandant,
+        feststellungId: f.id,
+        kontrolleId: w.kontrolle,
+        faelligAm: '2026-12-01',
+      }),
+    );
+    await inTenant(w, async (tx) => {
+      await tx.durchfuehrung.update({
+        where: { id: nk.durchfuehrungId },
+        data: { status: 'OHNE_BEFUND', gegengezeichnetVon: w.p.zbt },
+      });
+      await tx.feststellung.update({ where: { id: f.id }, data: { status: 'NACHKONTROLLE' } });
+    });
+    await im(A.hb, (ctx) =>
+      beantrageFeststellungVerwerfen(ctx, {
+        mandantId: w.mandant,
+        feststellungId: f.id,
+        begruendung: BEGRUENDUNG,
+      }),
+    );
+    const weiter = () =>
+      im(A.zbt, (ctx) =>
+        schalteFeststellungWeiter(ctx, {
+          mandantId: w.mandant,
+          feststellungId: f.id,
+          von: 'NACHKONTROLLE',
+        }),
+      );
+    expect(await fehlerVon(weiter())).toMatchObject({
+      code: 'UNGUELTIG',
+      felder: { von: [expect.stringMatching(/Verwerfen ist beantragt/)] },
+    });
+    await im(A.zbt, (ctx) =>
+      lehneFeststellungVerwerfenAb(ctx, { mandantId: w.mandant, feststellungId: f.id }),
+    );
+    await expect(weiter()).resolves.toMatchObject({ status: 'GESCHLOSSEN' });
+    // Altbestand (geschlossen mit offenem Antrag): kein offener Antrag in der Liste.
+    const g = await neueFeststellung(w, { status: 'GESCHLOSSEN', verwerfenBeantragtVon: w.p.hb });
+    const liste = await im(A.zbt, (ctx) => ladeFeststellungen(ctx, { mandantId: w.mandant }));
+    const eintrag = liste.feststellungen.find((x) => x.id === g.id);
+    expect(eintrag).toMatchObject({ maskiert: false, verwerfenOffen: false });
+  });
+
+  it('weiter: Schließen folgt dem jüngsten Nachtrag der Nachkontrolle (offen oder mit Befund sperrt)', async () => {
+    const f = await neueFeststellung(w, { auswirkung: 'NEIN', status: 'MASSNAHMEN_OFFEN' });
+    await neueMassnahme(w, f.id, w.p.hb, 'ERLEDIGT');
+    const nk = await im(A.hb, (ctx) =>
+      legeNachkontrolleAn(ctx, {
+        mandantId: w.mandant,
+        feststellungId: f.id,
+        kontrolleId: w.kontrolle,
+        faelligAm: '2026-12-01',
+      }),
+    );
+    const d1 = await inTenant(w, async (tx) => {
+      await tx.feststellung.update({ where: { id: f.id }, data: { status: 'NACHKONTROLLE' } });
+      return tx.durchfuehrung.update({
+        where: { id: nk.durchfuehrungId },
+        data: { status: 'OHNE_BEFUND', gegengezeichnetVon: w.p.zbt },
+      });
+    });
+    /** Nachtrag (Korrektur einer abgeschlossenen Durchführung, Regel 3) zu `zuId`. */
+    const nachtrag = (zuId: string, status: 'IN_DURCHFUEHRUNG' | 'MIT_BEFUND' | 'OHNE_BEFUND') =>
+      inTenant(w, (tx) =>
+        tx.durchfuehrung.create({
+          data: {
+            kontrolleId: d1.kontrolleId,
+            kontrolleStandId: d1.kontrolleStandId,
+            periodeLabel: d1.periodeLabel,
+            periodeVon: d1.periodeVon,
+            periodeBis: d1.periodeBis,
+            faelligAm: d1.faelligAm,
+            ausserplanmaessig: true,
+            nachtragZuId: zuId,
+            status,
+            ...(status === 'IN_DURCHFUEHRUNG' ? {} : { gegengezeichnetVon: w.p.zbt }),
+            createdAt: new Date(Date.now() + (status === 'OHNE_BEFUND' ? 2000 : 1000)),
+          },
+        }),
+      );
+    const weiter = () =>
+      im(A.hb, (ctx) =>
+        schalteFeststellungWeiter(ctx, {
+          mandantId: w.mandant,
+          feststellungId: f.id,
+          von: 'NACHKONTROLLE',
+        }),
+      );
+    const offen = await nachtrag(d1.id, 'IN_DURCHFUEHRUNG');
+    expect((await fehlerVon(weiter())).code).toBe('UNGUELTIG');
+    await inTenant(w, (tx) =>
+      tx.durchfuehrung.update({
+        where: { id: offen.id },
+        data: { status: 'MIT_BEFUND', gegengezeichnetVon: w.p.zbt },
+      }),
+    );
+    expect((await fehlerVon(weiter())).code).toBe('UNGUELTIG');
+    // Ein späterer Nachtrag (zum Nachtrag) ohne Befund ist maßgeblich.
+    await nachtrag(offen.id, 'OHNE_BEFUND');
+    await expect(weiter()).resolves.toMatchObject({ status: 'GESCHLOSSEN' });
+  });
+
+  it('Fristen und Fälligkeiten höchstens fünf Jahre nach heute (Tippfehler)', async () => {
+    const f = await neueFeststellung(w, { status: 'MASSNAHMEN_OFFEN' });
+    const massnahme = await fehlerVon(
+      im(A.hb, (ctx) =>
+        legeMassnahmeAn(ctx, {
+          mandantId: w.mandant,
+          feststellungId: f.id,
+          beschreibung: 'Konto abstimmen',
+          verantwortlich: { id: w.p.hb, art: 'KANZLEI' },
+          frist: '2062-10-16',
+        }),
+      ),
+    );
+    expect(massnahme).toMatchObject({ code: 'UNGUELTIG', felder: { frist: [expect.any(String)] } });
+    const nk = await fehlerVon(
+      im(A.hb, (ctx) =>
+        legeNachkontrolleAn(ctx, {
+          mandantId: w.mandant,
+          feststellungId: f.id,
+          kontrolleId: w.kontrolle,
+          faelligAm: '9999-12-31',
+        }),
+      ),
+    );
+    expect(nk).toMatchObject({ code: 'UNGUELTIG', felder: { faelligAm: [expect.any(String)] } });
+    const g = await neueFeststellung(w);
+    const p = await fehlerVon(
+      im(A.zbt, (ctx) =>
+        entscheideP153(ctx, {
+          mandantId: w.mandant,
+          feststellungId: g.id,
+          entscheidung: 'WEITERE_KLAERUNG',
+          begruendung: BEGRUENDUNG,
+          frist: '2032-01-01',
+          bisher: null,
+        }),
+      ),
+    );
+    expect(p).toMatchObject({ code: 'UNGUELTIG', felder: { frist: [expect.any(String)] } });
+    // Innerhalb des Fensters bleibt alles möglich.
+    await expect(
+      im(A.hb, (ctx) =>
+        legeMassnahmeAn(ctx, {
+          mandantId: w.mandant,
+          feststellungId: f.id,
+          beschreibung: 'Konto abstimmen',
+          verantwortlich: { id: w.p.hb, art: 'KANZLEI' },
+          frist: '2031-10-01',
+        }),
+      ),
+    ).resolves.toMatchObject({ wiedervorlageNr: expect.any(Number) });
   });
 
   // ---------------------------------------------------------------------------

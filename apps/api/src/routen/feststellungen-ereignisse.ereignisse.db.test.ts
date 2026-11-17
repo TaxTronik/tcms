@@ -199,7 +199,14 @@ const faelle: Fall[] = [
         begruendung: BEGRUENDUNG,
       });
       expect(r.status).toBe(200);
-      return { pfad: `${B}/ereignisse/${e.id}/verwerfen/bestaetigen` };
+      // Gebunden an den gesehenen Antrag (`verwerfenAntrag.antragId` im Detail).
+      const d = EreignisDetailSchema.parse(
+        (await rufe(ZBT, 'GET', `${B}/ereignisse/${e.id}`)).json['daten'],
+      );
+      return {
+        pfad: `${B}/ereignisse/${e.id}/verwerfen/bestaetigen`,
+        body: { antragId: d.verwerfenAntrag!.antragId },
+      };
     },
   },
   {
@@ -281,7 +288,12 @@ describe.skipIf(!AKTIV)('API Ereignisse und Portal gegen PostgreSQL', () => {
       erlaubt: false,
       verweigerung: 'VIER_AUGEN',
     });
-    const selbst = await rufe(HB, 'POST', `${B}/ereignisse/${e.id}/verwerfen/bestaetigen`);
+    const antragId = EreignisDetailSchema.parse(
+      (await rufe(HB, 'GET', `${B}/ereignisse/${e.id}`)).json['daten'],
+    ).verwerfenAntrag!.antragId;
+    const selbst = await rufe(HB, 'POST', `${B}/ereignisse/${e.id}/verwerfen/bestaetigen`, {
+      antragId,
+    });
     expect(selbst.status).toBe(403);
     expect(selbst.json['fehler']).toMatchObject({ grund: 'VIER_AUGEN' });
     expect((await lies(ZBT)).verwerfen.bestaetigen).toEqual({ erlaubt: true, verweigerung: null });

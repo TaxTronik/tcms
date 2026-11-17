@@ -32,9 +32,10 @@ import {
   type FolgeDetail,
   type VerlaufEintrag,
 } from '@tcms/contract';
-import { statusAm } from '@tcms/domain';
+import { FOLGE_LABEL, statusAm, type FolgeArt } from '@tcms/domain';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
+import { liestAlleVertraulichen } from '../../rechte';
 import { ereignisRecht, type EreignisSchritt } from './ereignisse';
 import {
   isoTag,
@@ -52,7 +53,9 @@ import {
 const AKTION_GEMELDET = 'tcms.ereignis.gemeldet';
 const AKTION_ERFASST = 'tcms.ereignis.erfasst';
 /** Audit-Aktionen, deren Detail die Anlagen einer Meldung trägt (einzige Quelle der Anlagen). */
-const MELDUNG_AKTIONEN = [AKTION_GEMELDET, AKTION_ERFASST];
+const ANLAGE_AKTIONEN = [AKTION_GEMELDET, AKTION_ERFASST];
+/** Entstehung eines Ereignisses im Audit (Meldung, Erfassung, Profiländerung). */
+const MELDUNG_AKTIONEN = [...ANLAGE_AKTIONEN, 'tcms.ereignis.angelegt'];
 
 function stichtag(ctx: DienstKontext, stand: string | undefined) {
   const heute = heuteDatum(ctx.uhr);
@@ -143,7 +146,38 @@ export async function ladeEreignisse(
 // Detail
 // ---------------------------------------------------------------------------
 
-function verlaufText(aktion: string, d: Record<string, unknown>): string {
+/**
+ * Aktionen, die der Verlauf eines Ereignisses zeigt (auch die anderer
+ * Bereiche: Profiländerung legt Ereignisse an, die Neubewertung erledigt
+ * Folgen und schließt Ereignisse ab). Andere Einträge erscheinen nicht – nie
+ * ein technischer Aktionsname als Text.
+ */
+export const EREIGNIS_VERLAUF_AKTIONEN = [
+  'tcms.ereignis.gemeldet',
+  'tcms.ereignis.erfasst',
+  'tcms.ereignis.angelegt',
+  'tcms.ereignis.in_triage',
+  'tcms.ereignis.folge_angelegt',
+  'tcms.ereignis.folge_hinzugefuegt',
+  'tcms.ereignis.folge_erledigt',
+  'tcms.ereignis.folge_verworfen',
+  'tcms.ereignis.verwerfen_beantragt',
+  'tcms.ereignis.verwerfen_bestaetigt',
+  'tcms.ereignis.verwerfen_abgelehnt',
+  'tcms.ereignis.abgeschlossen',
+  'tcms.ereignis.erledigt',
+] as const;
+const VERLAUF = new Set<string>(EREIGNIS_VERLAUF_AKTIONEN);
+
+/** Bezeichnung einer Folge aus dem Detail (`label`, sonst aus der Art). */
+function folgeLabel(d: Record<string, unknown>): string {
+  if (typeof d['label'] === 'string' && d['label']) return d['label'];
+  const art = (d['folge'] ?? d['art']) as FolgeArt | undefined;
+  return art && FOLGE_LABEL[art] ? FOLGE_LABEL[art] : 'Folge';
+}
+
+/** Lesbarer Verlaufstext zu einem Audit-Eintrag eines Ereignisses oder seiner Folgen. */
+export function verlaufText(aktion: string, d: Record<string, unknown>): string | null {
   switch (aktion) {
     case 'tcms.ereignis.gemeldet':
       return d['quelle'] === 'PORTAL' || !d['quelle']
@@ -151,16 +185,22 @@ function verlaufText(aktion: string, d: Record<string, unknown>): string {
         : `Ereignis erfasst (${text(d['quelle']).toLowerCase()})`;
     case 'tcms.ereignis.erfasst':
       return 'Ereignis manuell erfasst';
+    case 'tcms.ereignis.angelegt':
+      return d['quelle'] === 'Profiländerung'
+        ? 'Ereignis aus der Änderung des Geschäftsprofils angelegt'
+        : 'Ereignis angelegt';
     case 'tcms.ereignis.in_triage':
       return 'in Prüfung genommen';
     case 'tcms.ereignis.folge_angelegt':
-      return `Folge angelegt: ${text(d['label'])}${d['ziel'] ? ` ${text(d['ziel'])}` : ''}`;
+      return `Folge angelegt: ${folgeLabel(d)}${d['ziel'] ? ` ${text(d['ziel'])}` : ''}`;
     case 'tcms.ereignis.folge_hinzugefuegt':
-      return `Folge vorgeschlagen: ${text(d['label'])}`;
+      return `Folge vorgeschlagen: ${folgeLabel(d)}`;
     case 'tcms.ereignis.folge_erledigt':
-      return `Folge erledigt: ${text(d['label'])}`;
+      return `Folge erledigt: ${folgeLabel(d)}${d['ziel'] ? ` ${text(d['ziel'])}` : ''}${
+        d['durch'] === 'Neubewertung' ? ' (durch Neubewertung)' : ''
+      }`;
     case 'tcms.ereignis.folge_verworfen':
-      return `Folge verworfen: ${text(d['label'])}`;
+      return `Folge verworfen: ${folgeLabel(d)}`;
     case 'tcms.ereignis.verwerfen_beantragt':
       return 'Verwerfen des Ereignisses beantragt';
     case 'tcms.ereignis.verwerfen_bestaetigt':
@@ -169,8 +209,10 @@ function verlaufText(aktion: string, d: Record<string, unknown>): string {
       return 'Antrag auf Verwerfen abgelehnt';
     case 'tcms.ereignis.abgeschlossen':
       return 'Ereignis abgeschlossen – alle Folgen erledigt oder verworfen';
+    case 'tcms.ereignis.erledigt':
+      return 'Ereignis erledigt – alle Folgen erledigt oder verworfen (nach Neubewertung)';
     default:
-      return aktion;
+      return null;
   }
 }
 
@@ -342,9 +384,10 @@ export async function ladeEreignis(
   const meldungRoh = audits.find(
     (a) => a.objektTyp === 'Ereignis' && MELDUNG_AKTIONEN.includes(a.aktion),
   );
-  const anlagen: Anlage[] = meldungRoh
-    ? anlagenAus(det(meldungRoh)).map(({ dokumentId: _d, ...a }) => a)
-    : [];
+  const anlagen: Anlage[] =
+    meldungRoh && ANLAGE_AKTIONEN.includes(meldungRoh.aktion)
+      ? anlagenAus(det(meldungRoh)).map(({ dokumentId: _d, ...a }) => a)
+      : [];
   const antrag = audits
     .filter((a) => a.objektTyp === 'Ereignis' && a.aktion === 'tcms.ereignis.verwerfen_beantragt')
     .at(-1);
@@ -352,12 +395,12 @@ export async function ladeEreignis(
     .filter((a) => a.objektTyp === 'Ereignis' && a.aktion === 'tcms.ereignis.verwerfen_bestaetigt')
     .at(-1);
   const verlauf: VerlaufEintrag[] = audits
-    .filter(bisEnde)
+    .filter((a) => bisEnde(a) && VERLAUF.has(a.aktion))
     .map((a) => ({
       pos: a.pos,
       at: isoZeit(a.at),
       actorId: a.actorId,
-      text: verlaufText(a.aktion, det(a)),
+      text: verlaufText(a.aktion, det(a)) ?? '',
     }))
     .reverse();
   const basis = grunddaten(e, ende);
@@ -367,6 +410,7 @@ export async function ladeEreignis(
           vonId: e.verwerfenBeantragtVon,
           am: isoZeit(antrag?.at ?? e.gemeldetAm),
           begruendung: e.verwerfenBegruendung,
+          antragId: e.verwerfenAntragId,
         }
       : null;
   const verwerfen =
@@ -397,8 +441,15 @@ export async function ladeEreignis(
     },
     folgen,
     anlagen,
+    // Ketten-Hash nur für die Kanzleileitung, die das Audit liest (ADR 0001
+    // §5.1/§10.2): Mit zwei eigenen Meldungen als Anker ließe ein ungeschlüsselter
+    // Hash fremde – auch maskierte – Einträge dazwischen offline bestätigen.
     meldung: meldungRoh
-      ? { aktion: meldungRoh.aktion, at: isoZeit(meldungRoh.at), hash: meldungRoh.hash }
+      ? {
+          aktion: meldungRoh.aktion,
+          at: isoZeit(meldungRoh.at),
+          hash: liestAlleVertraulichen(ctx.akteur) ? meldungRoh.hash : null,
+        }
       : null,
     verwerfenAntrag,
     verwerfen,
@@ -441,7 +492,7 @@ export async function ladeEreignisAnlage(
       objektTyp: 'Ereignis',
       objektId: e.id,
       programmId: e.programmId,
-      aktion: { in: MELDUNG_AKTIONEN },
+      aktion: { in: ANLAGE_AKTIONEN },
     },
     orderBy: { pos: 'asc' },
     select: { detail: true },

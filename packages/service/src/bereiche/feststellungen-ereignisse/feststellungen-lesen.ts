@@ -24,6 +24,8 @@ import {
 import {
   FESTSTELLUNG_STATUS_LABEL,
   P153_LABEL,
+  p153Abschliessend,
+  p153Offen,
   statusAm,
   type FeststellungStatus,
   type Paragraph153Entscheidung,
@@ -31,7 +33,6 @@ import {
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { beteiligteVon, kannVertraulichLesen } from '../../rechte';
-import { p153Abschliessend } from './feststellungen';
 import {
   isoTag,
   isoTagOderNull,
@@ -142,10 +143,16 @@ export async function ladeFeststellungen(
         f.p153Entscheidung != null &&
         f.p153EntschiedenAm != null &&
         f.p153EntschiedenAm.getTime() <= ende.getTime();
-      // Kennzahlen wie im Tax-CMS-Kontext (kern/tcms-kontext.ts).
-      const offen = f.massnahmen.filter(
-        (m) => m.status === 'OFFEN' || (m.erledigtAm && m.erledigtAm.getTime() > ende.getTime()),
-      );
+      // Kennzahlen wie im Tax-CMS-Kontext (kern/tcms-kontext.ts). Maßnahmen einer
+      // verworfenen Feststellung sind nicht mehr zu erledigen (Altbestand: Verwerfen
+      // mit offenen Maßnahmen ist ausgeschlossen) und zählen nicht als offen.
+      const offen =
+        f.status === 'VERWORFEN'
+          ? []
+          : f.massnahmen.filter(
+              (m) =>
+                m.status === 'OFFEN' || (m.erledigtAm && m.erledigtAm.getTime() > ende.getTime()),
+            );
       const fristen = offen.map((m) => m.frist.getTime()).sort((a, b) => a - b);
       personen.push(f.erfasstVon, entschieden ? f.p153EntschiedenVon : null);
       for (const m of zeilen) personen.push(m.verantwortlich, m.erledigtVon);
@@ -174,12 +181,14 @@ export async function ladeFeststellungen(
               am: isoZeit(f.p153EntschiedenAm!),
             }
           : null,
-        p153Offen:
-          (f.auswirkung === 'JA' || f.auswirkung === 'UNKLAR') &&
-          !entschieden &&
-          f.status !== 'VERWORFEN',
+        // „Weitere Klärung" lässt die Würdigung offen (eine Regel, @tcms/domain).
+        p153Offen: p153Offen(f, ende),
+        // Nur auf offenen Feststellungen entscheidbar (Altbestand: geschlossen mit Antrag).
         verwerfenOffen:
-          !!f.verwerfenBeantragtVon && !f.verwerfenBestaetigtVon && f.status !== 'VERWORFEN',
+          !!f.verwerfenBeantragtVon &&
+          !f.verwerfenBestaetigtVon &&
+          f.status !== 'VERWORFEN' &&
+          f.status !== 'GESCHLOSSEN',
         massnahmenOffen: offen.length,
         massnahmenGesamt: f.massnahmen.length,
         aeltesteFrist: fristen.length ? isoTag(new Date(fristen[0]!)) : null,
@@ -388,6 +397,18 @@ export async function ladeFeststellung(
     f.p153Entscheidung != null &&
     f.p153EntschiedenAm != null &&
     f.p153EntschiedenAm.getTime() <= ende.getTime();
+  // Liegt die (letzte) Entscheidung nach dem Stichtag, kann davor eine frühere
+  // gegolten haben (Folgeentscheidung nach „weitere Klärung“ überschreibt die
+  // Zeile): aus dem jüngsten §-153-Eintrag des Audits bis zum Stand.
+  const p153Frueher = p153Gilt
+    ? undefined
+    : audits.filter((a) => a.aktion === 'tcms.feststellung.p153_entschieden' && bisStand(a)).at(-1);
+  const p153FrueherDetail = p153Frueher ? detail(p153Frueher) : null;
+  const p153FrueherEntscheidung =
+    p153FrueherDetail && typeof p153FrueherDetail['entscheidung'] === 'string'
+      ? (p153FrueherDetail['entscheidung'] as Paragraph153Entscheidung)
+      : null;
+  const p153EntscheidungStand = p153Gilt ? f.p153Entscheidung : p153FrueherEntscheidung;
 
   const nk = f.nachkontrolle;
   const nkSichtbar = !!nk && !(nk.ausserplanmaessig && nk.createdAt.getTime() > ende.getTime());
@@ -425,7 +446,7 @@ export async function ladeFeststellung(
       ? begrenzeStatus(status, {
           p153Offen:
             (f.auswirkung === 'JA' || f.auswirkung === 'UNKLAR') &&
-            !(p153Gilt && p153Abschliessend(f.p153Entscheidung)),
+            !p153Abschliessend(p153EntscheidungStand),
           massnahmen: massnahmen.length,
           offen: massnahmen.filter((m) => m.status === 'OFFEN').length,
           nachkontrolleOhneBefund: nkAnzeige === 'OHNE_BEFUND',
@@ -448,6 +469,7 @@ export async function ladeFeststellung(
           begruendung: f.verwerfenBegruendung,
           beantragtVon: f.verwerfenBeantragtVon,
           bestaetigtVon: status === 'VERWORFEN' ? f.verwerfenBestaetigtVon : null,
+          antragId: f.verwerfenAntragId,
         }
       : null;
   const p153 = p153Gilt
@@ -458,7 +480,19 @@ export async function ladeFeststellung(
         von: f.p153EntschiedenVon,
         am: isoZeit(f.p153EntschiedenAm!),
       }
-    : null;
+    : p153Frueher && p153FrueherDetail && p153FrueherEntscheidung
+      ? {
+          entscheidung: p153FrueherEntscheidung,
+          // Begründung erst seit sie im Audit steht (frühere Einträge: null).
+          begruendung:
+            typeof p153FrueherDetail['begruendung'] === 'string'
+              ? p153FrueherDetail['begruendung']
+              : null,
+          frist: typeof p153FrueherDetail['frist'] === 'string' ? p153FrueherDetail['frist'] : null,
+          von: p153Frueher.actorId,
+          am: isoZeit(p153Frueher.at),
+        }
+      : null;
 
   return {
     maskiert: false,

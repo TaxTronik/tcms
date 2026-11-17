@@ -976,6 +976,8 @@ export default async function FeststellungDetailSeite({
                     <AktionsForm action={bestaetigeVerwerfen}>
                       <input type="hidden" name="mandantId" value={id} />
                       <input type="hidden" name="id" value={f.id} />
+                      <input type="hidden" name="antragId" value={f.verwerfen.antragId} />
+                      <input type="hidden" name="auswirkung" value={f.auswirkung} />
                       <Gesperrt blass grund={verwerfenSperre}>
                         <SubmitButton
                           className="btn-danger-outline btn-tiny"
