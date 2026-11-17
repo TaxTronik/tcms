@@ -33,6 +33,7 @@ import { mitAudit, type Protokoll } from '../../audit';
 import { heuteDatum } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { gleicheId, zweitePerson } from '../../rechte';
+import { halteRollenFest } from '../../rollen';
 import {
   kanonisch,
   konflikt,
@@ -518,16 +519,21 @@ export async function verantwortlicheAendern(
         );
       }
       const gegenzeichnungMandant = e.gegenzeichnungMandant;
-      // Bei Gegenzeichnung beim Mandanten bestätigt die Vertretung; der
-      // gespeicherte Wert bleibt unverändert (wie bisher).
-      const gegenzeichnerId = gegenzeichnungMandant ? alt.gegenzeichnerId : gegenzeichnerEingabe;
+      // Bei Gegenzeichnung beim Mandanten bestätigt die Vertretung (wie die
+      // Vorbelegung, `kern/kontroll-vorlage.ts`): Die Gegenzeichnung ist dann
+      // die neue Vertretung, nie ein fortgeschriebener früherer Wert – sonst
+      // behielte eine abgelöste Person Lese- und Bestätigungsrecht im Portal.
+      const gegenzeichnerId = gegenzeichnungMandant ? vertretungId : gegenzeichnerEingabe;
 
       const seite = [
         { id: durchfuehrendId, feld: 'durchfuehrendId' },
         { id: vertretungId, feld: 'vertretungId' },
       ];
-      if (alt.partei === 'MANDANT') await pruefeMandantPersonen(tx, mandantId, seite);
-      else await pruefeKanzleiPersonen(tx, mandantId, seite);
+      if (alt.partei === 'MANDANT') {
+        // Rollen unter der Sperre der Rollenpflege prüfen (TS-05, wie Freigaben).
+        await halteRollenFest(tx, mandantId);
+        await pruefeMandantPersonen(tx, mandantId, seite);
+      } else await pruefeKanzleiPersonen(tx, mandantId, seite);
 
       if (!gegenzeichnungMandant) {
         if (alt.schluessel && !gegenzeichnerId) {
