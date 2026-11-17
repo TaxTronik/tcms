@@ -130,17 +130,22 @@ async function gemeinsam(
   const { d, heute } = lage;
   const ks = d.kontrolleStand;
   const ende = tagesende(stand);
-  const audit = await ctx.tx.auditEvent.findMany({
-    where: {
-      OR: [
-        { objektTyp: 'Durchfuehrung', objektId: d.id },
-        { detail: { path: ['durchfuehrungId'], equals: d.id } },
-        { detail: { path: ['nachtragZuId'], equals: d.id } },
-      ],
-    },
-    orderBy: { pos: 'desc' },
-    select: { pos: true, at: true, actorId: true, aktion: true, detail: true },
-  });
+  // Einträge der Durchführung und solche, die sie im Detail nennen (Nachweise,
+  // Feststellungen, Nachtrag). Drei Zweige als UNION, damit je ein Index des
+  // Tenants greift: (objektTyp, objektId), (detailDurchfuehrungId),
+  // (detailNachtragZuId). Generierte Spalten statt `detail->>'…'` bzw. eines
+  // JSON-Pfadfilters: Diese sind nicht LEAKPROOF, unter RLS nutzt PostgreSQL
+  // dafür keinen Index (Migration 20261117070000). `pos` ist je Tenant eindeutig.
+  const audit = await ctx.tx.$queryRaw<Gemeinsam['audit']>`
+    SELECT pos, at, "actorId", aktion, detail FROM "AuditEvent"
+     WHERE "objektTyp" = 'Durchfuehrung' AND "objektId" = ${d.id}
+    UNION
+    SELECT pos, at, "actorId", aktion, detail FROM "AuditEvent"
+     WHERE "detailDurchfuehrungId" = ${d.id}
+    UNION
+    SELECT pos, at, "actorId", aktion, detail FROM "AuditEvent"
+     WHERE "detailNachtragZuId" = ${d.id}
+    ORDER BY pos DESC`;
   // Audit-Zeitstempel sind echte Zeit (auditGrenze, kern/zeit.ts).
   const grenze = auditGrenze(stand, heute).getTime();
   const imStand = audit.filter((e) => e.at.getTime() <= grenze);

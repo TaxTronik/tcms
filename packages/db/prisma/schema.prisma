@@ -906,6 +906,11 @@ model Nachricht {
 /// Lücken darin verrieten die Audit-Aktivität anderer Kanzleien (RT-03).
 /// Nach außen gilt `pos`, die laufende Position je Tenant (1, 2, 3, …),
 /// vergeben unter der Tenant-Sperre in `schreibeAudit`.
+///
+/// Zusätzlich (nur in der Migration 20261117070000, Prisma kennt sie nicht):
+/// generierte Spalten `detailDurchfuehrungId` und `detailNachtragZuId`
+/// (`detail->>'…'`, STORED) mit Teilindex je Tenant für Verlauf und Beteiligte
+/// einer Durchführung; gelesen nur per Raw-SQL (durchfuehrung/lage.ts, lesen.ts).
 model AuditEvent {
   seq           Int      @id @default(autoincrement())
   pos           Int
