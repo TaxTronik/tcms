@@ -1,7 +1,7 @@
 // Reine Tests der gemeinsamen Bausteine (ohne Datenbank).
 
 import { readdirSync, readFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { DienstFehler, FeststellungWeiterSchema } from '@tcms/contract';
@@ -63,7 +63,7 @@ describe('gemeinsame Bausteine', () => {
         /\.feststellung\.(create|createMany|createManyAndReturn|upsert)\(/.test(
           readFileSync(datei, 'utf8'),
         )
-          ? [relative(WURZEL, datei)]
+          ? [relative(WURZEL, datei).split(sep).join('/')] // Pfadtrenner wie unter POSIX
           : [],
       ),
     );

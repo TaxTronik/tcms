@@ -127,41 +127,48 @@ describe('server.ts', () => {
       );
     }
 
-    it('startet als Laufzeitrolle tcms_app, beantwortet /v1/health und endet sauber', async () => {
-      const port = await freierPort();
-      const lauf = starte({
-        ...basis(),
-        DATABASE_URL: APP_URL!,
-        HOST: '127.0.0.1',
-        PORT: String(port),
-      });
-      try {
-        let antwort: Response | undefined;
-        for (let i = 0; i < 100 && !antwort; i++) {
-          antwort = await fetch(`http://127.0.0.1:${port}/v1/health`, {
-            headers: { authorization: `Bearer ${TOKEN}` },
-          }).catch(async () => {
-            await new Promise((r) => setTimeout(r, 100));
-            return undefined;
-          });
-        }
-        expect(antwort?.status).toBe(200);
-        expect(await antwort!.json()).toEqual({
-          ok: true,
-          daten: { version: '0.1.0', datenbank: 'ok' },
+    // Unter Windows beendet `kill('SIGTERM')` den Prozess hart (kein Signal-Handler,
+    // Exit-Code null); das geordnete Beenden lässt sich dort nicht prüfen. Der
+    // Dienst läuft nur im Linux-Image, dort und unter macOS läuft der Test.
+    it.skipIf(process.platform === 'win32')(
+      'startet als Laufzeitrolle tcms_app, beantwortet /v1/health und endet sauber',
+      async () => {
+        const port = await freierPort();
+        const lauf = starte({
+          ...basis(),
+          DATABASE_URL: APP_URL!,
+          HOST: '127.0.0.1',
+          PORT: String(port),
         });
-        const ohne = await fetch(`http://127.0.0.1:${port}/v1/health`);
-        expect(ohne.status).toBe(401);
-      } finally {
-        lauf.beenden();
-      }
-      expect(await lauf.code).toBe(0);
-      const log = zeilen(lauf.ausgabe());
-      expect(log.map((z) => z.ereignis)).toEqual(
-        expect.arrayContaining(['gestartet', 'anfrage', 'beende']),
-      );
-      expect(lauf.ausgabe()).not.toContain(TOKEN);
-      expect(lauf.ausgabe()).not.toContain(CODE_SCHLUESSEL);
-    }, 30_000);
+        try {
+          let antwort: Response | undefined;
+          for (let i = 0; i < 100 && !antwort; i++) {
+            antwort = await fetch(`http://127.0.0.1:${port}/v1/health`, {
+              headers: { authorization: `Bearer ${TOKEN}` },
+            }).catch(async () => {
+              await new Promise((r) => setTimeout(r, 100));
+              return undefined;
+            });
+          }
+          expect(antwort?.status).toBe(200);
+          expect(await antwort!.json()).toEqual({
+            ok: true,
+            daten: { version: '0.1.0', datenbank: 'ok' },
+          });
+          const ohne = await fetch(`http://127.0.0.1:${port}/v1/health`);
+          expect(ohne.status).toBe(401);
+        } finally {
+          lauf.beenden();
+        }
+        expect(await lauf.code).toBe(0);
+        const log = zeilen(lauf.ausgabe());
+        expect(log.map((z) => z.ereignis)).toEqual(
+          expect.arrayContaining(['gestartet', 'anfrage', 'beende']),
+        );
+        expect(lauf.ausgabe()).not.toContain(TOKEN);
+        expect(lauf.ausgabe()).not.toContain(CODE_SCHLUESSEL);
+      },
+      30_000,
+    );
   });
 });
