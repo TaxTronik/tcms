@@ -8,7 +8,7 @@ import {
   akteurFuer,
   demoPerson,
   handelnde,
-  lies,
+  liesDemo,
   type DemoPerson,
   type Handelnde,
   type KanzleiAkteur,
@@ -101,7 +101,7 @@ const rollenVon = cache(async (personId: string): Promise<KontaktRolle[]> => {
   const p = demoPerson(personId);
   if (!p || p.art !== 'MANDANT') return [];
   const akteur = akteurFuer(p, null);
-  return lies((tx) => ladeKontaktRollen(tx, akteur));
+  return liesDemo((tx) => ladeKontaktRollen(tx, akteur));
 });
 
 export interface PortalAkteur {

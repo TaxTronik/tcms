@@ -2,7 +2,7 @@ import 'server-only';
 import { isoDatum } from '@tcms/domain';
 import { ladeRisiken, ladeRisiko } from '@tcms/service';
 import type { TcmsKontext } from './kontext';
-import { lies } from './risiken-kontrollen-aufruf';
+import { liesImDienst } from './risiken-kontrollen-aufruf';
 
 // =============================================================================
 // Zusatzdaten für Risikoinventar (S4) und Risikodetail (S5) aus @tcms/service
@@ -70,7 +70,9 @@ export async function ladeRisikenZusatz(ctx: TcmsKontext): Promise<{
   const akzeptanzen = new Map<string, AkzeptanzView[]>();
   if (!ctx.programm) return { hinweise, akzeptanzen };
   const mandantId = ctx.mandant.id;
-  const l = await lies(mandantId, (c) => ladeRisiken(c, { mandantId, stand: isoDatum(ctx.stand) }));
+  const l = await liesImDienst(mandantId, (c) =>
+    ladeRisiken(c, { mandantId, stand: isoDatum(ctx.stand) }),
+  );
   for (const r of l?.risiken ?? []) {
     if (r.hinweise.length)
       hinweise.set(
@@ -101,7 +103,7 @@ export async function ladeRisikoDetail(
   risikoId: string,
 ): Promise<RisikoDetail | null> {
   const mandantId = ctx.mandant.id;
-  const d = await lies(mandantId, (c) =>
+  const d = await liesImDienst(mandantId, (c) =>
     ladeRisiko(c, { mandantId, risikoId, stand: isoDatum(ctx.stand) }),
   );
   if (!d) return null;

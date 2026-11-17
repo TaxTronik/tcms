@@ -7,6 +7,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { DEMO_IDS } from '@tcms/db/demo';
+import { dbAbgewiesen, regel } from '@tcms/db/testhilfe';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 
@@ -41,6 +42,7 @@ const { ladePortalStart } = await import('./portal-daten');
 const { ladeStaffSeite } = await import('./seite');
 const { ladeKontext } = await import('./kontext');
 const { pruefeHashkette } = await import('./actions/admin');
+const { liesDemo } = await import('./demo');
 
 const als = (personId: string) => {
   sitzung = erzeugeCookie(personId);
@@ -75,8 +77,28 @@ describe.skipIf(!AKTIV)('Demo-Lader lesepfade gegen PostgreSQL', () => {
     const s = await ladeStaffSeite(DEMO_IDS.talwind, { stand: '2026-03-31' });
     expect(s.ctx.historisch).toBe(true);
     expect(s.darfBearbeiten).toBe(false);
+    // Formulare senden den Stichtag nur im historischen Stand (Regel 6, Tageswechsel).
+    expect(s.standFeld).toBe('2026-03-31');
     const aktuell = await ladeStaffSeite(DEMO_IDS.seestern, {});
     expect(aktuell.darfWuerdigen).toBe(true); // zuständiger BT für Seestern
+    expect(aktuell.ctx.historisch).toBe(false);
+    expect(aktuell.standFeld).toBe('');
+  });
+
+  it('liesDemo ist nur lesend: die Datenbank weist jede Änderung ab', async () => {
+    const vorher = await liesDemo((tx) =>
+      tx.mandant.findFirstOrThrow({ where: { id: DEMO_IDS.talwind } }),
+    );
+    await dbAbgewiesen(
+      liesDemo((tx) =>
+        tx.mandant.updateMany({ where: { id: vorher.id }, data: { name: 'geändert' } }),
+      ),
+      regel.nurLesend('UPDATE'),
+    );
+    const nachher = await liesDemo((tx) =>
+      tx.mandant.findFirstOrThrow({ where: { id: DEMO_IDS.talwind } }),
+    );
+    expect(nachher.name).toBe(vorher.name);
   });
 
   it('Kontext-Hülle: Mandantenkontakt sieht keinen fremden Mandanten', async () => {

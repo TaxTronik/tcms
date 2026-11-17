@@ -3,7 +3,7 @@ import type { Geschaeftsprofil } from '@tcms/domain';
 import { isoDatum } from '@tcms/domain';
 import { ladeProfil } from '@tcms/service';
 import type { TcmsKontext } from './kontext';
-import { lies } from './risiken-kontrollen-aufruf';
+import { liesImDienst } from './risiken-kontrollen-aufruf';
 
 // =============================================================================
 // Profil-Tab: Profilstände und Risikoentscheidungen aus @tcms/service (Bereich
@@ -38,7 +38,9 @@ export async function ladeProfilDaten(
   ctx: TcmsKontext,
 ): Promise<{ staende: ProfilStandView[]; risiken: RisikoEntscheidungView[] }> {
   const mandantId = ctx.mandant.id;
-  const p = await lies(mandantId, (c) => ladeProfil(c, { mandantId, stand: isoDatum(ctx.stand) }));
+  const p = await liesImDienst(mandantId, (c) =>
+    ladeProfil(c, { mandantId, stand: isoDatum(ctx.stand) }),
+  );
   if (!p) return { staende: [], risiken: [] };
   return {
     staende: p.staende.map((s) => ({

@@ -11,8 +11,6 @@ import { fuerMandant } from './demo';
 // Mandant steht fest); ihre Rollen kommen aus MandantKontaktRolle.
 // =============================================================================
 
-export { istBerufstraeger, kannVerwalten, zweitePerson } from '@tcms/service';
-
 interface MandantRef {
   id: string;
 }
@@ -38,24 +36,6 @@ export function kannVerwerfenBestaetigen(
   auswirkung: R.Auswirkung,
 ): R.Entscheidung {
   return R.kannVerwerfenBestaetigen(mitBezug(a, m.id), m.id, beantragtVon, auswirkung);
-}
-
-/** TS-04: „NEIN" beim Anlegen nur mit Würdigungsrecht, sonst „UNKLAR". */
-export function auswirkungBeimAnlegen(
-  a: PersonAkteur,
-  m: MandantRef,
-  angegeben: R.Auswirkung,
-): R.Auswirkung {
-  return R.auswirkungBeimAnlegen(mitBezug(a, m.id), m.id, angegeben);
-}
-
-export function kannDurchfuehren(
-  a: PersonAkteur,
-  k: R.KontrollZustaendigkeit,
-  mandantId: string,
-  rollen: readonly R.KontaktRolle[] = [],
-): boolean {
-  return R.kannDurchfuehren(mitBezug(a, mandantId), k, mandantId, rollen);
 }
 
 export function kannGegenzeichnen(

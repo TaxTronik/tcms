@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { AppShell } from '@/components/shell/app-shell';
-import { demoPersonen, lies, zugaenglicheMandanten } from '@/server/demo';
+import { demoPersonen, liesDemo, zugaenglicheMandanten } from '@/server/demo';
 import { brauchtKanzlei } from '@/server/sitzung';
 import { heute } from '@/server/zeit';
 
@@ -9,7 +9,7 @@ export default async function StaffLayout({ children }: { children: ReactNode })
   const person = demoPersonen.person(akteur.id)!;
   // Roter Punkt am Portfolio, wenn bei einem zugänglichen Mandanten eine Durchführung überfällig ist.
   const zugaenglich = zugaenglicheMandanten(akteur);
-  const ueberfaellig = await lies((tx) =>
+  const ueberfaellig = await liesDemo((tx) =>
     tx.durchfuehrung.count({
       where: {
         kontrolle: { programm: { mandantId: { in: zugaenglich } } },

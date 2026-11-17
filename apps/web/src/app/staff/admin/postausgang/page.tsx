@@ -4,7 +4,7 @@ import { AdminKopf, NurAdmin } from '@/components/admin/teile';
 import { Icon } from '@/components/icon';
 import { Leerzustand } from '@/components/ui/leer';
 import { kannVerwalten } from '@tcms/service';
-import { demoPersonen, lies } from '@/server/demo';
+import { demoPersonen, liesDemo } from '@/server/demo';
 import { brauchtKanzlei } from '@/server/sitzung';
 
 export const metadata = { title: 'Postausgang (Entwicklung)' };
@@ -33,7 +33,7 @@ function empfaenger(empfaengerId: string): string {
 export default async function Postausgang() {
   const nutzer = await brauchtKanzlei();
   if (!kannVerwalten(nutzer)) return <NurAdmin titel="Postausgang (Entwicklung)" />;
-  const nachrichten = await lies((tx) =>
+  const nachrichten = await liesDemo((tx) =>
     tx.nachricht.findMany({
       orderBy: { createdAt: 'desc' },
       take: 200,
