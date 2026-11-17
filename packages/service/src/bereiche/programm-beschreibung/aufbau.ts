@@ -18,12 +18,10 @@ import {
   addTage,
   BEWERTUNGSMODELL_VERSION,
   brutto as berechneBrutto,
-  fmtEurGanz,
   hoeher,
   katalogRisiko,
   KATALOG_KONTROLLEN,
   KATALOG_RISIKEN,
-  KLASSE_LABEL,
   leiteFrequenzAb,
   monatSchluessel,
   PAKET,
@@ -51,10 +49,16 @@ import {
   type VorbelegteZustaendigkeit,
   type VorbelegungsRollen,
 } from '../../kern/kontroll-vorlage';
+import {
+  istKanzleiPerson,
+  pruefeZustaendigkeit,
+  type ZustaendigkeitsPools,
+} from '../../kern/zustaendigkeit-pruefung';
+import { gleicheId } from '../../rechte';
 import { risikoEntscheidung } from './entwurf';
-import { legeNachrichtAn } from './nachrichten';
+import { legeZieleFreigabeAn } from './ziele';
 
-/** Person im Umfeld: Kanzleiperson oder Mandantenkontakt mit (erster) aktiver Rolle. */
+/** Person im Umfeld: Kanzleiperson oder Mandantenkontakt (mit erster aktiver Rolle, nur Anzeige). */
 export interface AufbauPerson {
   id: string;
   mandantRolle?: MandantRolle | null;
@@ -69,7 +73,18 @@ export interface AufbauUmfeld {
     bearbeitungId: string | null;
   };
   kanzlei: readonly AufbauPerson[];
+  /** Kontakte mit aktiver Rolle (je Kontakt einmal). */
   mandantPersonen: readonly AufbauPerson[];
+  /**
+   * Alle aktiven (Kontakt, Rolle)-Zeilen nach Anlage – Grundlage der Vorbelegung
+   * wie in der Risikoaufnahme (ein Kontakt kann z. B. GV und TCB sein).
+   */
+  mandantRollen: readonly { id: string; rolle: MandantRolle }[];
+  /**
+   * Alle Kontakte des Mandanten, auch mit nur früheren Rollen (nie Kanzleiperson,
+   * fail closed). Fehlt die Liste (Anzeige der Demo), gelten die aktiven Kontakte.
+   */
+  kontakte?: readonly string[];
   heute: Date;
 }
 
@@ -79,18 +94,37 @@ export type AufbauRollen = VorbelegungsRollen;
 export function aufbauRollen(u: AufbauUmfeld): AufbauRollen {
   const bt = u.mandant.berufstraegerId;
   const hb = u.mandant.bearbeitungId;
-  const kanzleiVertretung = u.kanzlei.find((p) => p.id !== bt && p.id !== hb)?.id ?? null;
+  const pools = poolsAus(u);
+  const kanzleiVertretung =
+    u.kanzlei.find((p) => p.id !== bt && p.id !== hb && istKanzleiPerson(p.id, pools))?.id ?? null;
   return {
     bt,
     hb,
     kanzleiVertretung,
-    ...mandantSeiteVorbelegen(u.mandantPersonen.map((p) => ({ id: p.id, rolle: p.mandantRolle }))),
+    ...mandantSeiteVorbelegen(u.mandantRollen),
+  };
+}
+
+/** Personenkreise des Umfelds für die gemeinsame Zuständigkeitsregel (`kern/zustaendigkeit.ts`). */
+export function poolsAus(u: AufbauUmfeld): ZustaendigkeitsPools {
+  const k = (id: string) => id.toLowerCase();
+  const aktiv = u.mandantPersonen.map((p) => k(p.id));
+  return {
+    kanzlei: new Set(u.kanzlei.map((p) => k(p.id))),
+    mandantAktiv: new Set(aktiv),
+    kontakte: new Set([...(u.kontakte ?? []).map(k), ...aktiv]),
   };
 }
 
 export type AufbauZustaendigkeit = VorbelegteZustaendigkeit;
 export { standardKontrollZustaendigkeit };
 
+/**
+ * Zuständigkeit aus der Wahl in Schritt 5. Die IDs bleiben, wie gewählt
+ * (unbekannte oder nicht mehr aktive Personen meldet die Prüfung, statt sie
+ * still zu leeren). Eine Gegenzeichnung durch einen Kontakt des Mandanten ist
+ * die Gegenzeichnung beim Mandanten (`gegenzeichnungMandant`).
+ */
 function zustaendigkeitAus(
   kat: KatalogKontrolle,
   wahl: EntwurfKontrolle | undefined,
@@ -98,18 +132,15 @@ function zustaendigkeitAus(
   r: AufbauRollen,
 ): AufbauZustaendigkeit {
   if (!wahl) return standardKontrollZustaendigkeit(kat, r);
-  const bekannt = (id: string | null) =>
-    id && (u.kanzlei.some((p) => p.id === id) || u.mandantPersonen.some((p) => p.id === id))
-      ? id
-      : null;
-  const gegenzeichnerId = bekannt(wahl.gegenzeichnerId);
+  const pools = poolsAus(u);
+  const gegenzeichnerId = wahl.gegenzeichnerId;
   return {
     partei: wahl.partei,
-    durchfuehrendId: bekannt(wahl.durchfuehrendId),
-    vertretungId: bekannt(wahl.vertretungId),
+    durchfuehrendId: wahl.durchfuehrendId,
+    vertretungId: wahl.vertretungId,
     gegenzeichnerId,
     gegenzeichnungMandant:
-      gegenzeichnerId != null && u.mandantPersonen.some((p) => p.id === gegenzeichnerId),
+      gegenzeichnerId != null && pools.kontakte.has(gegenzeichnerId.toLowerCase()),
   };
 }
 
@@ -249,29 +280,29 @@ export function berechnePlan(e: SetupEntwurf, u: AufbauUmfeld): AufbauPlan {
   };
 }
 
-/** Prüfung von Schritt 5: Zuständigkeiten je Kontrolle (Pflichtattribute laut Fachkonzept § 6). */
+/**
+ * Prüfung von Schritt 5: Zuständigkeiten je Kontrolle (Pflichtattribute laut Fachkonzept § 6)
+ * mit der gemeinsamen Regel des Kerns (`pruefeZustaendigkeit`, wie Verantwortliche ändern).
+ * Im Assistenten wählt man die Gegenzeichnung beim Mandanten über die Person; bestätigen wird
+ * die Vertretung beim Mandanten, daher muss die gewählte Person die Vertretung sein (sonst
+ * nennten Kontext und Beschreibung eine andere Person als gewählt).
+ */
 export function pruefeKontrollZustaendigkeiten(plan: AufbauPlan, u: AufbauUmfeld): string[] {
   const f: string[] = [];
-  const kanzlei = new Set(u.kanzlei.map((p) => p.id));
-  const mandant = new Set(u.mandantPersonen.map((p) => p.id));
+  const pools = poolsAus(u);
   for (const k of plan.kontrollen) {
     const z = k.zust;
-    const pool = z.partei === 'KANZLEI' ? kanzlei : mandant;
-    if (!z.durchfuehrendId) f.push(`${k.code}: durchführende Person zuordnen.`);
-    else if (!pool.has(z.durchfuehrendId))
+    for (const x of pruefeZustaendigkeit(z, k.kat.schluessel, pools))
+      f.push(`${k.code}: ${x.meldung}`);
+    if (
+      z.partei === 'MANDANT' &&
+      z.gegenzeichnungMandant &&
+      z.vertretungId &&
+      !gleicheId(z.gegenzeichnerId, z.vertretungId)
+    )
       f.push(
-        `${k.code}: Die durchführende Person gehört nicht zur Partei ${z.partei === 'KANZLEI' ? 'Kanzlei' : 'Mandant'}.`,
+        `${k.code}: Bei Gegenzeichnung beim Mandanten bestätigt die Vertretung – als Gegenzeichnung die Vertretung wählen.`,
       );
-    if (z.vertretungId && z.vertretungId === z.durchfuehrendId)
-      f.push(`${k.code}: Vertretung und durchführende Person müssen verschieden sein.`);
-    if (z.vertretungId && !pool.has(z.vertretungId))
-      f.push(
-        `${k.code}: Die Vertretung gehört nicht zur Partei ${z.partei === 'KANZLEI' ? 'Kanzlei' : 'Mandant'}.`,
-      );
-    if (k.kat.schluessel && !z.gegenzeichnerId)
-      f.push(`${k.code}: Schlüsselkontrolle – Gegenzeichnung ist Pflicht.`);
-    if (z.gegenzeichnerId && z.gegenzeichnerId === z.durchfuehrendId)
-      f.push(`${k.code}: Die durchführende Person zeichnet nicht selbst gegen.`);
   }
   return f;
 }
@@ -337,15 +368,34 @@ export async function schreibeVersion1(
 
   const ziele = e.ziele.filter((z) => z.aktiv);
   const anfordern = e.freigabe.anfordern && e.freigabe.empfaengerId != null;
+  // Objektbezogene Audit-Spur (Befund 118): je Ziel, übernommenem Risiko und Kontrolle ein
+  // Eintrag mit Inhalt bzw. Zuständigkeit, in derselben Folge wie das Sammelereignis.
+  const QUELLE = 'Einrichtungsassistent (Version 1)';
   for (const z of ziele) {
-    await tx.complianceZiel.create({
+    const freigabe = anfordern ? 'AUSSTEHEND' : 'ENTWURF';
+    const ziel = await tx.complianceZiel.create({
       data: {
         teilbereichId: tb.id,
         text: z.text.trim(),
         wesentlichkeitEur: z.wesentlichkeitEur,
         risikoappetit: z.risikoappetit,
-        freigabe: anfordern ? 'AUSSTEHEND' : 'ENTWURF',
+        freigabe,
         createdAt: zeitpunkt,
+      },
+      select: { id: true },
+    });
+    protokolle.push({
+      aktion: 'tcms.ziel.angelegt',
+      objektTyp: 'ComplianceZiel',
+      objektId: ziel.id,
+      programmId,
+      detail: {
+        teilbereichId: tb.id,
+        text: z.text.trim(),
+        wesentlichkeitEur: z.wesentlichkeitEur,
+        risikoappetit: z.risikoappetit,
+        freigabe,
+        quelle: QUELLE,
       },
     });
   }
@@ -400,8 +450,23 @@ export async function schreibeVersion1(
           : {}),
       },
     });
-    if (pr.uebernehmen) risikoIds.set(k.code, risiko.id);
-    else {
+    if (pr.uebernehmen) {
+      risikoIds.set(k.code, risiko.id);
+      protokolle.push({
+        aktion: 'tcms.risiko.aufgenommen',
+        objektTyp: 'Risiko',
+        objektId: risiko.id,
+        programmId,
+        detail: {
+          code: k.code,
+          vorschlagsgrund: pr.grund,
+          vorher: null,
+          brutto: pr.brutto.klasse,
+          ownerId: r.tcb,
+          quelle: QUELLE,
+        },
+      });
+    } else {
       abgelehnt++;
       protokolle.push({
         aktion: 'tcms.risiko.abgelehnt',
@@ -431,6 +496,27 @@ export async function schreibeVersion1(
       durchf.push(
         geplanteDurchfuehrung(k.id, k.staende[0]!.id, kat.faelligNachTagen, p, zeitpunkt),
       );
+    // Nur IDs (ADR 0001 §5); Namen löst die kanzleikonsole auf.
+    protokolle.push({
+      aktion: 'tcms.kontrolle.angelegt',
+      objektTyp: 'Kontrolle',
+      objektId: k.id,
+      programmId,
+      detail: {
+        code: kat.code,
+        risiken: pk.risikoCodes,
+        frequenz: pk.ableitung.effektiv,
+        zustaendigkeit: {
+          partei: pk.zust.partei,
+          durchfuehrend: pk.zust.durchfuehrendId,
+          vertretung: pk.zust.vertretungId,
+          gegenzeichnung: pk.zust.gegenzeichnerId,
+          gegenzeichnungMandant: pk.zust.gegenzeichnungMandant,
+        },
+        perioden: pk.perioden.length,
+        anlass: QUELLE,
+      },
+    });
   }
   if (durchf.length) await tx.durchfuehrung.createMany({ data: durchf });
 
@@ -438,44 +524,17 @@ export async function schreibeVersion1(
   if (anfordern) {
     // TS-06: Empfänger über die ID; die Prüfung von Schritt 3 hat sie gegen die
     // aktiven gesetzlichen Vertretungen des Mandanten geprüft.
-    const empfaengerId = e.freigabe.empfaengerId!.toLowerCase();
-    const inhalt = [
-      `Compliance-Ziele für den Teilbereich „${tb.name}"`,
-      '',
-      ...ziele.map(
-        (z, i) =>
-          `${i + 1}. ${z.text.trim()} (Wesentlichkeitsgrenze ${fmtEurGanz(z.wesentlichkeitEur)}, Risikoappetit ${KLASSE_LABEL[z.risikoappetit]})`,
-      ),
-    ].join('\n');
-    const titel = `Compliance-Ziele · ${tb.name}`;
-    const fr = await tx.freigabe.create({
-      data: {
-        programmId,
-        art: 'ZIELE',
-        refId: tb.id,
-        titel,
-        inhalt,
-        angefordertVon: nutzer.id,
-        angefordertAm: zeitpunkt,
-        empfaengerId,
-      },
-    });
-    freigabeId = fr.id;
-    await legeNachrichtAn(tx, {
-      mandantId: u.mandant.id,
-      empfaengerId,
-      zweck: 'FREIGABE_ANGEFORDERT',
-      daten: { freigabeId: fr.id, art: 'ZIELE', titel, version: null },
-      betreff: 'Freigabe angefordert: Compliance-Ziele',
-      text: `Im Portal warten die Compliance-Ziele der ${u.mandant.name} auf Ihre Freigabe. Den Bestätigungscode erhalten Sie beim Freigeben.`,
-    });
-    protokolle.push({
-      aktion: 'tcms.ziele.freigabe_angefordert',
-      objektTyp: 'Teilbereich',
-      objektId: tb.id,
+    const fr = await legeZieleFreigabeAn(tx, {
       programmId,
-      detail: { freigabeId: fr.id, empfaengerId, anzahl: ziele.length },
+      mandant: { id: u.mandant.id, name: u.mandant.name },
+      teilbereich: { id: tb.id, name: tb.name },
+      ziele,
+      empfaengerId: e.freigabe.empfaengerId!,
+      von: nutzer.id,
+      zeitpunkt,
     });
+    freigabeId = fr.freigabeId;
+    protokolle.push(fr.protokoll);
   }
 
   protokolle.unshift({

@@ -456,10 +456,12 @@ offene Nachricht ist nach `zweck` diskriminiert und trägt `mandantId`,
 `art`, `titel`, `version`; beim Code zusätzlich `code`, `gueltigBis`,
 `sha256`; beim Ereignis `ereignisId`, `nummer`, `titel`, `typ`,
 `gemeldetVonId`) und `betreff`/`text` als Rückfall. Ein Code steht im Klartext
-nur in der offenen Nachricht (Spalte `code`, nie in `daten`, nie in Antworten,
-Logs oder Audit). Zustellung leert `code` und `text`; gilt ein Code nicht mehr
+nur in der offenen Nachricht (Spalte `code` und Rückfalltext `text`, nie in den
+gespeicherten `daten`, nie in Antworten außer dem Abruf durch den Systemakteur,
+nie in Logs oder Audit). Zustellung leert `code` und `text`; gilt ein Code nicht mehr
 (Freigabe erledigt, Code abgelaufen, ersetzt, gesperrt, neu adressiert,
-Freigabe eines anderen Mandanten), liefert der Abruf die Nachricht nicht mehr
+Freigabe eines anderen Mandanten, Empfänger keine aktive gesetzliche Vertretung
+mehr), liefert der Abruf die Nachricht nicht mehr
 aus und leert sie (`verworfenAm`, Audit `tcms.nachricht.verworfen` mit Grund).
 Ausgeliefert wird nur, was geprüft ist (Kandidaten und je Abruf die ältesten
 1 000 offenen Code-Nachrichten); eine Nachricht, deren gespeicherte

@@ -567,9 +567,10 @@ Rechte prüft `packages/service`, Eingaben und Antworten in
 | POST    | `/v1/nachrichten/:nachrichtId/zugestellt`              | nur Systemakteur; idempotent, leert Text und Code; fremde ID `404`; nie ausgeliefert und verworfen `409` |
 | POST    | `/v1/nachrichten/:nachrichtId/unzustellbar`            | nur Systemakteur; `{ grund }`, idempotent je Grund, leert Text und Code                                  |
 | GET     | `…/einrichtung?berufstraegerId=&bearbeitungId=&…`      | `kannLesen`                                                                                              |
-| POST    | `…/einrichtung/entwurf`, `…/einrichtung/anlegen`       | `kannBearbeiten`; ein Programm je Mandant                                                                |
+| POST    | `…/einrichtung/entwurf`, `…/einrichtung/anlegen`       | `kannBearbeiten`; ein Programm je Mandant; `gesehen` (Stand des Entwurfs) sonst `409`                    |
 | GET     | `…/beschreibung?stand=`                                | `kannLesen`                                                                                              |
-| POST    | `…/beschreibung/versionen`, `…/versionen/:id/…`        | `kannBearbeiten`; Review-Abschluss: 2. Person                                                            |
+| POST    | `…/beschreibung/versionen`, `…/versionen/:id/…`        | `kannBearbeiten`; nur eingerichtet; Review-Abschluss: nicht durch Bearbeitende, gesehener Text (SHA-256) |
+| POST    | `…/ziele/freigabe`                                     | `kannBearbeiten`; nur eingerichtet; an aktive GV; höchstens eine offene Ziele-Freigabe (`409`)           |
 | POST    | `…/freigaben/:freigabeId/neuadressierung`              | `kannBearbeiten` (TS-06, auditiert)                                                                      |
 | GET     | `…/kommunikation/freigaben?stand=`                     | `kannLesen`                                                                                              |
 | GET     | `…/portal/freigaben`                                   | Mandantenkontakt mit aktiver Rolle                                                                       |

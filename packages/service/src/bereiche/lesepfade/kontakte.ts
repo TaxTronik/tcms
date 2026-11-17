@@ -13,8 +13,13 @@
 //     dauerhaft belegen). Rollen bei einem anderen Mandanten verleihen nichts:
 //     Rechte zählen nur Rollen beim bestätigten Mandanten (`aktiveRollen`).
 //   - Die letzte aktive GV kann nicht entfernt werden, solange offene
-//     Freigaben an sie adressiert sind (erst neu adressieren oder Ersatz-GV
-//     ernennen) → `KONFLIKT`.
+//     Freigaben an sie adressiert sind oder offene Freigaben mit Code bestehen
+//     (auch an eine frühere GV adressiert: sonst bliebe der Mandant ohne GV mit
+//     unerfüllbarer Freigabe) – erst neu adressieren oder Ersatz-GV ernennen
+//     → `KONFLIKT`. Bleibt eine weitere GV, bleibt eine an die entfernte GV
+//     adressierte Freigabe stehen (fail closed: niemand erteilt sie, ihre
+//     Nachrichten liefert der Postausgang nicht mehr aus); die Kanzlei
+//     adressiert neu.
 // TS-05: Die Mandantenzeile wird mit FOR UPDATE gesperrt
 // (`sperreRollenZumAendern`: parallele Rollenänderungen eines Mandanten
 // nacheinander, Prüfung und Änderung in derselben Transaktion).
@@ -38,6 +43,7 @@ import { mitAudit } from '../../audit';
 import type { DienstKontext } from '../../kontext';
 import { kannLesen, type MandantRolle } from '../../rechte';
 import { sperreRollenZumAendern } from '../../rollen';
+import { FREIGABE_CODE_ARTEN } from '../programm-beschreibung/freigaben';
 import { antwortNach, pruefeEingabe } from './hilfen';
 import { brauchtBearbeitung, darfStammdatenPflegen } from './mandant';
 
@@ -120,11 +126,18 @@ export async function setzeKontaktRollen(
       },
     });
     if (weitereGv === 0) {
+      // Ohne gesetzliche Vertretung kann keine offene Freigabe mit Code mehr erteilt werden –
+      // auch keine, die an eine frühere GV adressiert ist (zwei Schritte: erst X entfernen,
+      // solange Y GV ist, dann Y; Befund 105). Ebenso bleibt die Regel für an diesen
+      // Kontakt adressierte Kenntnisnahmen.
       const offen = await tx.freigabe.count({
         where: {
           programm: { mandantId },
           status: 'OFFEN',
-          empfaengerId: { equals: kontaktId, mode: 'insensitive' },
+          OR: [
+            { art: { in: [...FREIGABE_CODE_ARTEN] } },
+            { empfaengerId: { equals: kontaktId, mode: 'insensitive' } },
+          ],
         },
       });
       if (offen > 0) {

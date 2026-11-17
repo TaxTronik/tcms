@@ -11,8 +11,14 @@
 //     ändert dann bedingt; gleichzeitige Übergänge → genau einer, der andere
 //     `KONFLIKT`. Neue Versionen sperren die Programmzeile; die Nummer ist je
 //     Programm eindeutig.
-//   - Review-Abschluss durch eine zweite Person: Die letzte Bearbeitung wird
-//     unter der Sperre in derselben Transaktion ermittelt.
+//   - Review-Abschluss durch eine zweite Person: Keine Person, die Abschnitte
+//     der Version geändert hat (ohne Änderung: wer sie angelegt hat), schließt
+//     ab; ermittelt unter der Sperre in derselben Transaktion. Der Abschluss
+//     nennt den gesehenen Text (SHA-256 der Abschnitte) und gilt nur für ihn.
+//   - Nur für ein eingerichtetes Programm (Version 1 angelegt).
+//   - Sperrreihenfolge beim Anfordern der Freigabe: neue Version, dann offene
+//     Freigaben älterer Versionen und diese Versionen (Freigabe → Version wie
+//     beim Freigeben im Portal), dann die Mandantenzeile (`halteRollenFest`).
 //   - Freigegebene und abgelöste Versionen sind unveränderlich: Abschnitte
 //     ändern sich nur im ENTWURF, der Snapshot entsteht genau einmal beim
 //     Anfordern der Freigabe (Status KANZLEI_REVIEW → BEIM_MANDANTEN).
@@ -26,6 +32,7 @@ import {
   BeschreibungVersionAnlegenEingabeSchema,
   DienstFehler,
   nichtBerechtigt,
+  ReviewAbschliessenEingabeSchema,
   ReviewZurueckweisenEingabeSchema,
   type AbschnittSpeichernEingabe,
   type BeschreibungFreigabeAnfordernEingabe,
@@ -35,6 +42,7 @@ import {
   type BeschreibungVersionAktionErgebnis,
   type BeschreibungVersionView,
   type BeschreibungView,
+  type ReviewAbschliessenEingabe,
   type ReviewZurueckweisenEingabe,
 } from '@tcms/contract';
 import type { Prisma, Tx } from '@tcms/db';
@@ -53,17 +61,19 @@ import {
   geruestAbschnitte,
   normalisiereAbschnitte,
   pruefeSnapshot,
+  snapshotHash,
   type BeschreibungStatusWert,
 } from './bausteine';
 import { brauchtCodeSchluessel, codeAblaufAb, codeHash, codeStatus, erzeugeCode } from './code';
 import {
   aktiveKontakte,
+  eingerichtetesProgramm,
+  empfaengerZumStichtag,
   fachlichUngueltig,
   iso,
   isoTagVon,
   kanzleiZugriff,
   konfliktBeiEindeutigkeit,
-  programmIdDesMandanten,
   pruefeEingabe,
   sperreVersion,
 } from './gemeinsam';
@@ -79,20 +89,41 @@ function versionsZahl(n: string): [number, number] {
 }
 
 /**
- * Letzte bearbeitende Person einer Version: letzte Textänderung laut Audit,
- * sonst die Person, die die Version angelegt hat. Nur unter der Sperre der
+ * Bearbeitende einer Version aus den Textänderungen laut Audit (in der Reihenfolge
+ * der ersten Änderung); ohne Änderung die Person, die die Version angelegt hat.
+ * `letzte`: jüngste Änderung (Anzeige). Rein; die Einträge liefert der Aufrufer.
+ */
+function bearbeitendeAus(
+  v: { erstelltVon: string | null },
+  aenderungen: readonly { actorId: string | null }[],
+): { alle: string[]; letzte: string | null } {
+  const alle: string[] = [];
+  for (const a of aenderungen)
+    if (a.actorId && !alle.some((x) => gleicheId(x, a.actorId))) alle.push(a.actorId);
+  if (alle.length === 0)
+    return { alle: v.erstelltVon ? [v.erstelltVon] : [], letzte: v.erstelltVon };
+  return { alle, letzte: aenderungen.at(-1)?.actorId ?? null };
+}
+
+/**
+ * Bearbeitende einer Version (Vier-Augen der Kanzlei-Review). Nur unter der Sperre der
  * Version aufrufen, wenn das Ergebnis eine Entscheidung trägt.
  */
-async function letzteBearbeitungVon(
+async function bearbeitendeVon(
   tx: Tx,
   v: { id: string; erstelltVon: string | null },
-): Promise<string | null> {
-  const letzte = await tx.auditEvent.findFirst({
+): Promise<{ alle: string[]; letzte: string | null }> {
+  const aenderungen = await tx.auditEvent.findMany({
     where: { objektTyp: 'BeschreibungVersion', objektId: v.id, aktion: AKTION_ABSCHNITT },
-    orderBy: { pos: 'desc' },
+    orderBy: { pos: 'asc' },
     select: { actorId: true },
   });
-  return letzte?.actorId ?? v.erstelltVon;
+  return bearbeitendeAus(v, aenderungen);
+}
+
+/** SHA-256 der Abschnitte (kanonisches JSON, wie der Snapshot): gesehener Text der Review. */
+export function abschnitteSha256(abschnitte: readonly Abschnitt[]): string {
+  return snapshotHash(abschnitte);
 }
 
 const ergebnis = (
@@ -165,18 +196,31 @@ export async function ladeBeschreibung(
   const grenze = auditGrenze(k.stand, k.heute);
   const bis = (d: Date | null) => (d && d.getTime() <= ende.getTime() ? d : null);
   const sichtbar = versionen.filter((v) => v.createdAt.getTime() <= ende.getTime());
-  const letzteJe = new Map<string, string | null>();
-  for (const a of audit) if (a.aktion === AKTION_ABSCHNITT) letzteJe.set(a.objektId, a.actorId);
+  // Textänderungen je Version bis zum Stichtag (Bearbeitende) und danach (Kennzeichen).
+  const bisGrenze = new Map<string, { actorId: string | null }[]>();
+  const spaeterGeaendert = new Set<string>();
+  for (const a of audit) {
+    if (a.aktion !== AKTION_ABSCHNITT) continue;
+    if (a.at.getTime() > grenze.getTime()) spaeterGeaendert.add(a.objektId);
+    else bisGrenze.set(a.objektId, [...(bisGrenze.get(a.objektId) ?? []), a]);
+  }
 
   const versionView = (v: (typeof versionen)[number]): BeschreibungVersionView => {
     const h = k.historisch;
-    const snapshot = (v.snapshot as unknown as BeschreibungVersionView['snapshot']) ?? null;
+    // Eingefrorener Inhalt erst ab der Anforderung der Freigabe (zum Stichtag).
+    const eingefroren = !h || bis(v.freigabeAngefordertAm) != null;
+    const snapshot = eingefroren
+      ? ((v.snapshot as unknown as BeschreibungVersionView['snapshot']) ?? null)
+      : null;
+    const abschnitte = normalisiereAbschnitte(v.abschnitte);
+    const b = bearbeitendeAus(v, bisGrenze.get(v.id) ?? []);
     return {
       id: v.id,
       nummer: v.nummer,
       status: v.status,
       anzeige: beschreibungStatusZum(v, sichtbar, freigaben, ende, h),
-      abschnitte: normalisiereAbschnitte(v.abschnitte),
+      abschnitte,
+      abschnitteSpaeterGeaendert: h && spaeterGeaendert.has(v.id),
       createdAt: v.createdAt.toISOString(),
       erstelltVon: v.erstelltVon,
       reviewAngefordertVon: !h || bis(v.reviewAngefordertAm) ? v.reviewAngefordertVon : null,
@@ -187,15 +231,19 @@ export async function ladeBeschreibung(
       freigegebenVon: !h || bis(v.freigegebenAm) ? v.freigegebenVon : null,
       freigegebenAm: iso(h ? bis(v.freigegebenAm) : v.freigegebenAm),
       snapshot,
-      snapshotSha256: v.snapshotSha256,
-      snapshotGeprueft: pruefeSnapshot(v.snapshot, v.snapshotSha256),
-      letzteBearbeitung: letzteJe.has(v.id) ? (letzteJe.get(v.id) ?? null) : v.erstelltVon,
+      snapshotSha256: eingefroren ? v.snapshotSha256 : null,
+      snapshotGeprueft: eingefroren ? pruefeSnapshot(v.snapshot, v.snapshotSha256) : null,
+      letzteBearbeitung: b.letzte,
+      bearbeitende: b.alle,
+      abschnitteSha256: h ? null : abschnitteSha256(abschnitte),
     };
   };
 
   const jetzt = new Date();
   // Zustellstatus je Freigabe: betrieblicher Zustand, nur im aktuellen Stand.
   const zustellungen = await zustellungenDerFreigaben(tx, mandantId, freigaben, k);
+  // Empfänger zum Stichtag (eine spätere Neuadressierung zählt dort noch nicht).
+  const empfaenger = await empfaengerZumStichtag(tx, freigaben, grenze, k.historisch);
   const freigabenView = freigaben
     .filter((f) => f.angefordertAm.getTime() <= ende.getTime())
     .map((f) => {
@@ -206,7 +254,7 @@ export async function ladeBeschreibung(
         status: spaeter ? ('OFFEN' as const) : f.status,
         angefordertVon: f.angefordertVon,
         angefordertAm: f.angefordertAm.toISOString(),
-        empfaengerId: f.empfaengerId,
+        empfaengerId: empfaenger.get(f.id) ?? f.empfaengerId,
         codeStatus: k.historisch ? ('KEIN' as const) : codeStatus(f, jetzt, ctx.codes),
         codeAblauf: k.historisch ? null : iso(f.codeAblauf),
         anmerkung: spaeter ? null : f.anmerkung,
@@ -267,9 +315,8 @@ export async function legeBeschreibungsversionAn(
   const mandantId = e.mandantId.toLowerCase();
   await kanzleiZugriff(ctx, mandantId, true);
   // TS-05: Programmzeile sperren – zwei gleichzeitige Anlagen sehen nacheinander den Stand.
-  const programmId = await programmIdDesMandanten(ctx.tx, mandantId, true);
-  if (!programmId)
-    throw new DienstFehler('KONFLIKT', 'Für diesen Mandanten ist noch kein Tax-CMS eingerichtet.');
+  // Nur für ein eingerichtetes Programm (nicht für den Entwurf des Assistenten).
+  const programmId = await eingerichtetesProgramm(ctx.tx, mandantId, true);
   const versionen = await ctx.tx.beschreibungVersion.findMany({
     where: { programmId },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -423,21 +470,29 @@ export async function gibBeschreibungZurReview(
 
 export async function schliesseBeschreibungsreviewAb(
   ctx: DienstKontext,
-  eingabe: BeschreibungVersionAktionEingabe,
+  eingabe: ReviewAbschliessenEingabe,
 ): Promise<BeschreibungVersionAktionErgebnis> {
-  const e = pruefeEingabe(BeschreibungVersionAktionEingabeSchema, eingabe);
+  const e = pruefeEingabe(ReviewAbschliessenEingabeSchema, eingabe);
   const mandantId = e.mandantId.toLowerCase();
   await kanzleiZugriff(ctx, mandantId, true);
   const v = await sperreVersion(ctx.tx, mandantId, e.versionId);
   if (v.status !== 'KANZLEI_REVIEW' || v.reviewVon)
     throw new DienstFehler('KONFLIKT', 'Für diese Version ist keine Kanzlei-Review offen.');
-  // Vier-Augen: letzte Bearbeitung unter der Sperre der Version ermitteln. Ohne
+  // Vier-Augen: alle Bearbeitenden unter der Sperre der Version ermitteln. Ohne
   // ermittelbare Bearbeitung kein Abschluss (fail closed).
-  const letzte = await letzteBearbeitungVon(ctx.tx, v);
-  if (!letzte || gleicheId(letzte, ctx.akteur.id)) {
+  const b = await bearbeitendeVon(ctx.tx, v);
+  if (b.alle.length === 0 || b.alle.some((id) => gleicheId(id, ctx.akteur.id))) {
     throw nichtBerechtigt(
       'VIER_AUGEN',
-      'Die Review schließt eine zweite Person ab – nicht die letzte Bearbeitung des Textes.',
+      'Die Review schließt eine zweite Person ab – nicht, wer den Text dieser Version bearbeitet hat.',
+    );
+  }
+  // TS-05: Der Abschluss gilt dem gesehenen Text (unter der Sperre verglichen).
+  const sha256 = abschnitteSha256(normalisiereAbschnitte(v.abschnitte));
+  if (sha256 !== e.abschnitteSha256) {
+    throw new DienstFehler(
+      'KONFLIKT',
+      'Der Text dieser Version hat sich seit dem Laden geändert. Bitte neu laden und erneut prüfen.',
     );
   }
   return mitAudit(ctx, async (tx, zeitpunkt) => {
@@ -454,7 +509,12 @@ export async function schliesseBeschreibungsreviewAb(
         objektTyp: 'BeschreibungVersion',
         objektId: v.id,
         programmId: v.programmId,
-        detail: { nummer: v.nummer, letzteBearbeitung: letzte },
+        detail: {
+          nummer: v.nummer,
+          abschnitteSha256: sha256,
+          bearbeitende: b.alle,
+          letzteBearbeitung: b.letzte,
+        },
       },
     };
   });
@@ -509,6 +569,9 @@ export async function fordereBeschreibungsfreigabeAn(
   const mandantId = e.mandantId.toLowerCase();
   const empfaengerId = e.empfaengerId.toLowerCase();
   const mandant = await kanzleiZugriff(ctx, mandantId, true);
+  // Nur ein eingerichtetes Programm wird eingefroren und vorgelegt (der Status kehrt
+  // nie nach ENTWURF zurück, eine Sperre der Programmzeile ist dafür nicht nötig).
+  await eingerichtetesProgramm(ctx.tx, mandantId, false);
   const v = await sperreVersion(ctx.tx, mandantId, e.versionId);
   if (v.status !== 'KANZLEI_REVIEW' || !v.reviewVon) {
     throw new DienstFehler(
@@ -516,6 +579,23 @@ export async function fordereBeschreibungsfreigabeAn(
       'Die Freigabe kann erst nach abgeschlossener Kanzlei-Review angefordert werden.',
     );
   }
+  // Ältere Version beim Mandanten: zuerst ihre offene Freigabe, dann die Version sperren
+  // (Freigabe → Version wie `erteileFreigabe`) und unter der Sperre neu lesen. Gibt die GV
+  // gleichzeitig frei, wartet diese Anfrage und sieht danach den neuen Stand (Befunde 19/58).
+  await ctx.tx.$queryRaw`
+    SELECT f.id FROM "Freigabe" f
+    WHERE f."programmId" = ${v.programmId} AND f.art = 'BESCHREIBUNG'
+      AND f.status = 'OFFEN' AND f."refId" <> ${v.id}
+    ORDER BY f.id FOR UPDATE`;
+  await ctx.tx.$queryRaw`
+    SELECT b.id FROM "BeschreibungVersion" b
+    WHERE b."programmId" = ${v.programmId} AND b.status = 'BEIM_MANDANTEN' AND b.id <> ${v.id}
+    ORDER BY b.id FOR UPDATE`;
+  const aeltere = await ctx.tx.beschreibungVersion.findMany({
+    where: { programmId: v.programmId, status: 'BEIM_MANDANTEN', id: { not: v.id } },
+    select: { id: true, nummer: true },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  });
   // TS-06: Empfänger über die ID, nur eine aktive gesetzliche Vertretung dieses Mandanten;
   // geprüft unter derselben Sperre wie die Rollenpflege (TS-05, RT4-T-06).
   await halteRollenFest(ctx.tx, mandantId);
@@ -563,18 +643,17 @@ export async function fordereBeschreibungsfreigabeAn(
     });
     if (r.count !== 1) throw new DienstFehler('KONFLIKT', 'Die Version hat ihren Status geändert.');
 
-    // Eine noch offene Anforderung einer älteren Version wird zurückgezogen.
-    const aeltere = await tx.beschreibungVersion.findMany({
-      where: { programmId: v.programmId, status: 'BEIM_MANDANTEN', id: { not: v.id } },
-      select: { id: true, nummer: true },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    });
+    // Eine noch offene Anforderung einer älteren Version (oben gesperrt) wird zurückgezogen;
+    // protokolliert und gemeldet wird nur, was sich tatsächlich geändert hat.
     const protokoll: Protokoll[] = [];
+    const zurueckgezogen: string[] = [];
     for (const a of aeltere) {
-      await tx.beschreibungVersion.updateMany({
+      const u = await tx.beschreibungVersion.updateMany({
         where: { id: a.id, status: 'BEIM_MANDANTEN' },
         data: { status: 'ABGELOEST' },
       });
+      if (u.count !== 1) continue;
+      zurueckgezogen.push(a.nummer);
       await tx.freigabe.updateMany({
         where: { programmId: v.programmId, art: 'BESCHREIBUNG', refId: a.id, status: 'OFFEN' },
         data: {
@@ -650,7 +729,7 @@ export async function fordereBeschreibungsfreigabeAn(
         freigabeId: freigabe.id,
         snapshotSha256: sha256,
         codeAblauf: codeAblauf.toISOString(),
-        zurueckgezogen: aeltere.map((a) => a.nummer),
+        zurueckgezogen,
       },
       protokoll,
     };

@@ -12,7 +12,7 @@ import {
   BeschreibungSnapshotSchema,
   BeschreibungViewSchema,
 } from '@tcms/contract';
-import type { PrismaClient } from '@tcms/db';
+import { AUDIT_SPERRE, mitTenant, tenantSperre, type PrismaClient } from '@tcms/db';
 import { pruefeAuditKette } from '@tcms/db/testhilfe';
 import { pruefeSnapshot } from './bausteine';
 import {
@@ -24,8 +24,13 @@ import {
   speichereBeschreibungsabschnitt,
   weiseBeschreibungsreviewZurueck,
 } from './beschreibung';
+import { speichereEinrichtungsschritt } from './einrichtung';
+import { adressiereFreigabeNeu, erteileFreigabe } from './freigaben';
+import { ladeFreigabenHistorie } from './kommunikation';
+import { imDienst } from '../../kontext';
 import { CODE_GUELTIG_TAGE } from './code';
 import {
+  gesehen,
   auditZu,
   baueWelt,
   btA,
@@ -40,10 +45,12 @@ import {
   neuerMandant,
   nurEinErfolg,
   ohneRechtA,
+  TEST_PORTS,
+  warteAufSperrwartende,
   zweiteVerbindung,
   type Welt,
 } from './testwelt';
-import { richteEin } from './testprogramm';
+import { personen, richteEin, SCHRITT1 } from './testprogramm';
 
 const AKTIV = process.env['DB_TESTS'] === '1';
 const BEGRUENDUNG = 'Abschnitt 2 braucht noch die Wesentlichkeitsgrenzen je Ziel.';
@@ -88,7 +95,9 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
     const n = await neueVersion();
     await abschnitt(n.versionId, `Kultur ${randomUUID()}`);
     await im(hbA(w), (ctx) => gibBeschreibungZurReview(ctx, v(n.versionId)));
-    await im(btA(w), (ctx) => schliesseBeschreibungsreviewAb(ctx, v(n.versionId)));
+    await im(btA(w), async (ctx) =>
+      schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, v(n.versionId))),
+    );
     return n.versionId;
   }
 
@@ -177,14 +186,20 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
     expect(k.code).toBe('KONFLIKT');
     const gross = kanzlei(w, w.hb.toUpperCase(), w.mandantA, { hb: true });
     for (const a of [hbA(w), gross]) {
-      const f = await fehlerVon(im(a, (ctx) => schliesseBeschreibungsreviewAb(ctx, v(erste))));
+      const f = await fehlerVon(
+        im(a, async (ctx) => schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, v(erste)))),
+      );
       expect([f.code, f.grund]).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
       expect(f.message).toContain('zweite Person');
     }
-    const ok = await im(btA(w), (ctx) => schliesseBeschreibungsreviewAb(ctx, v(erste)));
+    const ok = await im(btA(w), async (ctx) =>
+      schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, v(erste))),
+    );
     expect(ok.status).toBe('KANZLEI_REVIEW');
     const nochmal = await fehlerVon(
-      im(btA(w), (ctx) => schliesseBeschreibungsreviewAb(ctx, v(erste))),
+      im(btA(w), async (ctx) =>
+        schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, v(erste))),
+      ),
     );
     expect(nochmal.code).toBe('KONFLIKT');
     const audit = await auditZu(w, erste);
@@ -347,7 +362,10 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
       () => neueVersion(ohneRechtA(w)),
       () => abschnitt(n.id, 'x', ohneRechtA(w)),
       () => im(ohneRechtA(w), (ctx) => gibBeschreibungZurReview(ctx, v(n.id))),
-      () => im(ohneRechtA(w), (ctx) => schliesseBeschreibungsreviewAb(ctx, v(n.id))),
+      () =>
+        im(ohneRechtA(w), async (ctx) =>
+          schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, v(n.id))),
+        ),
       () =>
         im(ohneRechtA(w), (ctx) =>
           weiseBeschreibungsreviewZurueck(ctx, { ...v(n.id), begruendung: BEGRUENDUNG }),
@@ -388,7 +406,8 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
         () => neueVersion(a),
         () => abschnitt(n.id, 'x', a),
         () => im(a, (ctx) => gibBeschreibungZurReview(ctx, v(n.id))),
-        () => im(a, (ctx) => schliesseBeschreibungsreviewAb(ctx, v(n.id))),
+        () =>
+          im(a, async (ctx) => schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, v(n.id)))),
         () => im(a, (ctx) => fordereBeschreibungsfreigabeAn(ctx, anfordern(n.id))),
       ]) {
         const f = await fehlerVon(lauf());
@@ -400,7 +419,10 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
     for (const lauf of [
       () => abschnitt(fremd.versionId, 'x', btA(w)),
       () => im(btA(w), (ctx) => gibBeschreibungZurReview(ctx, v(fremd.versionId))),
-      () => im(btA(w), (ctx) => schliesseBeschreibungsreviewAb(ctx, v(fremd.versionId))),
+      () =>
+        im(btA(w), async (ctx) =>
+          schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, v(fremd.versionId))),
+        ),
       () =>
         im(btA(w), (ctx) =>
           weiseBeschreibungsreviewZurueck(ctx, { ...v(fremd.versionId), begruendung: BEGRUENDUNG }),
@@ -447,8 +469,13 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
     const p2 = kanzlei(w, randomUUID(), m.mandantId, { admin: true });
     const abschluss = nurEinErfolg(
       await gleichzeitig(w, [
-        () => im(p1, (ctx) => schliesseBeschreibungsreviewAb(ctx, vm)),
-        () => im(p2, (ctx) => schliesseBeschreibungsreviewAb(ctx, vm), zweite),
+        () => im(p1, async (ctx) => schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, vm))),
+        () =>
+          im(
+            p2,
+            async (ctx) => schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, vm)),
+            zweite,
+          ),
       ]),
     );
     expect(abschluss.fehlerCode).toBe('KONFLIKT');
@@ -496,5 +523,262 @@ describe.skipIf(!AKTIV)('CMS-Beschreibung (Service, PostgreSQL)', () => {
       ),
     );
     expect(f.code).toBe('UNGUELTIG');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Prüfung vom 17.11.2026 (Befunde 15, 19/58, 59, 60, 100)
+  // ---------------------------------------------------------------------------
+
+  /** Eigener Mandant mit eingerichtetem Programm (unabhängig von den Versionen oben). */
+  async function eigenerMandant() {
+    const m = await neuerMandant(w);
+    await richteEin(w, m.mandantId, m.gv);
+    return { ...m, a: btFuer(w, m.mandantId), hb: kanzlei(w, w.hb, m.mandantId, { hb: true }) };
+  }
+  const vom = (mandantId: string, versionId: string) => ({ mandantId, versionId });
+  const imUhr = <T>(a: Parameters<typeof im>[0], tag: string, fn: Parameters<typeof im<T>>[1]) =>
+    imDienst(
+      a,
+      { ...TEST_PORTS, uhr: { jetzt: () => new Date(`${tag}T09:00:00.000Z`), heute: () => tag } },
+      fn,
+    );
+
+  it('Vier-Augen: keine bearbeitende Person schließt ab, auch nach einem Fremd-Edit (Befund 100)', async () => {
+    const m = await eigenerMandant();
+    const n = await im(m.hb, (ctx) => legeBeschreibungsversionAn(ctx, { mandantId: m.mandantId }));
+    const ab = (t: string, a: Parameters<typeof im>[0]) =>
+      im(a, (ctx) =>
+        speichereBeschreibungsabschnitt(ctx, {
+          ...vom(m.mandantId, n.versionId),
+          key: 'kultur',
+          bloecke: text(t),
+        }),
+      );
+    await ab('Text der Hauptbearbeitung, fast vollständig.', m.hb);
+    await ab('Text der Hauptbearbeitung, fast vollständig, mit Komma.', m.a); // Fremd-Edit (BT)
+    await im(m.hb, (ctx) => gibBeschreibungZurReview(ctx, vom(m.mandantId, n.versionId)));
+    for (const a of [m.hb, m.a]) {
+      const f = await fehlerVon(
+        im(a, async (ctx) =>
+          schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, vom(m.mandantId, n.versionId))),
+        ),
+      );
+      expect([f.code, f.grund], a.id).toEqual(['NICHT_BERECHTIGT', 'VIER_AUGEN']);
+    }
+    const lesen = await im(m.a, (ctx) => ladeBeschreibung(ctx, { mandantId: m.mandantId }));
+    expect(lesen.versionen.at(-1)!.bearbeitende).toEqual([w.hb, w.bt]);
+    // Eine dritte Person (Kanzleileitung) schließt ab; das Audit nennt alle Bearbeitenden.
+    const dritte = kanzlei(w, randomUUID(), m.mandantId, { admin: true });
+    await im(dritte, async (ctx) =>
+      schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, vom(m.mandantId, n.versionId))),
+    );
+    const audit = await auditZu(w, n.versionId);
+    expect(audit.at(-1)!.detail).toMatchObject({
+      bearbeitende: [w.hb, w.bt],
+      abschnitteSha256: lesen.versionen.at(-1)!.abschnitteSha256,
+    });
+  });
+
+  it('Review-Abschluss gilt nur dem gesehenen Text (Befund 15)', async () => {
+    const m = await eigenerMandant();
+    const n = await im(m.hb, (ctx) => legeBeschreibungsversionAn(ctx, { mandantId: m.mandantId }));
+    const id = vom(m.mandantId, n.versionId);
+    const ab = (t: string) =>
+      im(m.hb, (ctx) =>
+        speichereBeschreibungsabschnitt(ctx, { ...id, key: 'kultur', bloecke: text(t) }),
+      );
+    await ab('Erster Text zur Review.');
+    await im(m.hb, (ctx) => gibBeschreibungZurReview(ctx, id));
+    // B lädt die Version (gesehener Text) …
+    const alt = (
+      await im(m.a, (ctx) => ladeBeschreibung(ctx, { mandantId: m.mandantId }))
+    ).versionen.at(-1)!.abschnitteSha256!;
+    // … A weist zurück, ändert den Text und gibt erneut zur Review.
+    await im(m.hb, (ctx) =>
+      weiseBeschreibungsreviewZurueck(ctx, { ...id, begruendung: BEGRUENDUNG }),
+    );
+    await ab('Geänderter Text, den B nie gesehen hat.');
+    await im(m.hb, (ctx) => gibBeschreibungZurReview(ctx, id));
+    const f = await fehlerVon(
+      im(m.a, (ctx) => schliesseBeschreibungsreviewAb(ctx, { ...id, abschnitteSha256: alt })),
+    );
+    expect(f.code).toBe('KONFLIKT');
+    const v0 = await inWelt(w, (tx) =>
+      tx.beschreibungVersion.findUniqueOrThrow({ where: { id: n.versionId } }),
+    );
+    expect(v0.reviewVon).toBeNull();
+    const neu = (
+      await im(m.a, (ctx) => ladeBeschreibung(ctx, { mandantId: m.mandantId }))
+    ).versionen.at(-1)!.abschnitteSha256!;
+    expect(neu).not.toBe(alt);
+    const r = await im(m.a, (ctx) =>
+      schliesseBeschreibungsreviewAb(ctx, { ...id, abschnitteSha256: neu }),
+    );
+    expect(r.status).toBe('KANZLEI_REVIEW');
+  });
+
+  it('neue Version und Freigabe nur für ein eingerichtetes Programm (Befund 59)', async () => {
+    const m = await neuerMandant(w);
+    const a = btFuer(w, m.mandantId);
+    await im(a, (ctx) =>
+      speichereEinrichtungsschritt(ctx, {
+        mandantId: m.mandantId,
+        ziel: 'speichern',
+        personen: personen(w),
+        schritt: 1,
+        daten: SCHRITT1,
+      }),
+    );
+    const f = await fehlerVon(
+      im(a, (ctx) => legeBeschreibungsversionAn(ctx, { mandantId: m.mandantId })),
+    );
+    expect(f.code).toBe('KONFLIKT');
+    expect(f.message).toContain('noch kein Tax-CMS eingerichtet');
+    expect(
+      await inWelt(w, (tx) =>
+        tx.beschreibungVersion.count({ where: { programm: { mandantId: m.mandantId } } }),
+      ),
+    ).toBe(0);
+  });
+
+  it('Freigeben (GV) und neue Anforderung gleichzeitig: kein falsches Zurückziehen, keine Verklemmung (Befunde 19/58)', async () => {
+    const m = await eigenerMandant();
+    // V1 beim Mandanten (Code angefordert), V2 mit abgeschlossener Review.
+    const bis = async () => {
+      const n = await im(m.hb, (ctx) =>
+        legeBeschreibungsversionAn(ctx, { mandantId: m.mandantId }),
+      );
+      const id = vom(m.mandantId, n.versionId);
+      await im(m.hb, (ctx) =>
+        speichereBeschreibungsabschnitt(ctx, { ...id, key: 'kultur', bloecke: text(randomUUID()) }),
+      );
+      await im(m.hb, (ctx) => gibBeschreibungZurReview(ctx, id));
+      await im(m.a, async (ctx) => schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, id)));
+      return n.versionId;
+    };
+    const anf = (versionId: string) => ({
+      ...vom(m.mandantId, versionId),
+      empfaengerId: m.gv,
+      verantwortung: { berufstraeger: null, bearbeitung: null },
+      namen: [],
+    });
+    const v1 = await bis();
+    const f1 = await im(m.a, (ctx) => fordereBeschreibungsfreigabeAn(ctx, anf(v1)));
+    const v2 = await bis();
+    const n = await inWelt(w, (tx) =>
+      tx.nachricht.findFirstOrThrow({
+        where: { empfaengerId: m.gv, zweck: 'FREIGABE_CODE' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      }),
+    );
+    const gv = kontakt(w, m.gv, m.mandantId);
+    // Reihenfolge erzwingen: Eine Testtransaktion hält die Audit-Sperre. Das Freigeben (T_B)
+    // ändert F1 und V1 und wartet vor dem Commit; erst dann startet die Anforderung (T_A).
+    let loesen!: () => void;
+    const ende = new Promise<void>((r) => (loesen = r));
+    let gesperrt!: () => void;
+    const bereit = new Promise<void>((r) => (gesperrt = r));
+    const halter = mitTenant(
+      w.tenantId,
+      async (tx) => {
+        await tenantSperre(tx, AUDIT_SPERRE);
+        gesperrt();
+        await ende;
+      },
+      { timeoutMs: 20_000 },
+    );
+    await bereit;
+    const tB = im(gv, (ctx) =>
+      erteileFreigabe(ctx, { mandantId: m.mandantId, freigabeId: f1.freigabeId, code: n.code! }),
+    );
+    expect(await warteAufSperrwartende(w, 1)).toBe(true);
+    const tA = im(m.a, (ctx) => fordereBeschreibungsfreigabeAn(ctx, anf(v2)), zweite);
+    expect(await warteAufSperrwartende(w, 2)).toBe(true);
+    loesen();
+    await halter;
+    // Beide gelingen (keine Verklemmung, kein 500); nichts wird fälschlich zurückgezogen.
+    const [freigeben, anfordern2] = await Promise.all([tB, tA]);
+    expect(freigeben.freigegeben).toBe(true);
+    expect(anfordern2.zurueckgezogen).toEqual([]);
+    const [alt, audit] = await inWelt(w, async (tx) => [
+      await tx.beschreibungVersion.findUniqueOrThrow({ where: { id: v1 } }),
+      await tx.auditEvent.findMany({ where: { objektId: v1 }, orderBy: { pos: 'asc' } }),
+    ]);
+    expect(alt.status).toBe('FREIGEGEBEN');
+    expect(audit.map((x) => x.aktion)).not.toContain('tcms.beschreibung.freigabe_zurueckgezogen');
+  });
+
+  it('Stichtag: Snapshot erst ab Anforderung, Bearbeitende bis zum Stichtag, Empfänger zum Stichtag (Befund 60)', async () => {
+    const m = await neuerMandant(w);
+    const gv2 = randomUUID();
+    await inWelt(w, (tx) =>
+      tx.mandantKontaktRolle.create({
+        data: { mandantId: m.mandantId, kontaktId: gv2, rolle: 'GESETZLICHER_VERTRETER' },
+      }),
+    );
+    await richteEin(w, m.mandantId, m.gv);
+    const a = btFuer(w, m.mandantId);
+    const hb = kanzlei(w, w.hb, m.mandantId, { hb: true });
+    // Version am 21.10. angelegt, am 25.10. geprüft und eingefroren (fachliche Zeit); die
+    // Textänderung und die Neuadressierung stehen mit echter Zeit (danach) im Audit.
+    const n = await imUhr(hb, '2026-10-21', (ctx) =>
+      legeBeschreibungsversionAn(ctx, { mandantId: m.mandantId }),
+    );
+    const id = vom(m.mandantId, n.versionId);
+    await im(hb, (ctx) =>
+      speichereBeschreibungsabschnitt(ctx, { ...id, key: 'kultur', bloecke: text('Kultur') }),
+    );
+    await imUhr(hb, '2026-10-25', (ctx) => gibBeschreibungZurReview(ctx, id));
+    await imUhr(a, '2026-10-25', async (ctx) =>
+      schliesseBeschreibungsreviewAb(ctx, await gesehen(ctx.tx, id)),
+    );
+    const fr = await imUhr(a, '2026-10-25', (ctx) =>
+      fordereBeschreibungsfreigabeAn(ctx, {
+        ...id,
+        empfaengerId: m.gv,
+        verantwortung: { berufstraeger: null, bearbeitung: null },
+        namen: [],
+      }),
+    );
+    // Danach (echte Zeit) neu adressiert.
+    await im(a, (ctx) =>
+      adressiereFreigabeNeu(ctx, {
+        mandantId: m.mandantId,
+        freigabeId: fr.freigabeId,
+        empfaengerId: gv2,
+      }),
+    );
+    const zum = (stand: string) =>
+      imUhr(a, '2026-11-30', (ctx) => ladeBeschreibung(ctx, { mandantId: m.mandantId, stand }));
+    // 22.10.: Entwurf ohne Snapshot; Textänderungen danach gekennzeichnet; Bearbeitende bis dahin.
+    const frueh = await zum('2026-10-22');
+    expect(BeschreibungViewSchema.parse(frueh)).toEqual(frueh);
+    const vf = frueh.versionen.find((x) => x.id === n.versionId)!;
+    expect(vf).toMatchObject({
+      anzeige: 'ENTWURF',
+      snapshot: null,
+      snapshotSha256: null,
+      snapshotGeprueft: null,
+      abschnitteSpaeterGeaendert: true,
+      abschnitteSha256: null,
+      letzteBearbeitung: w.hb, // angelegt von hb, Änderung erst danach (echte Zeit)
+    });
+    // 25.10.: angefordert; der Empfänger ist der am Stichtag, nicht der neu adressierte.
+    const spaet = await zum('2026-10-25');
+    expect(spaet.versionen.find((x) => x.id === n.versionId)!.snapshotSha256).toBe(
+      fr.snapshotSha256,
+    );
+    expect(spaet.freigaben.find((x) => x.id === fr.freigabeId)!.empfaengerId).toBe(m.gv);
+    const heute = await imUhr(a, '2026-11-30', (ctx) =>
+      ladeBeschreibung(ctx, { mandantId: m.mandantId }),
+    );
+    expect(heute.freigaben.find((x) => x.id === fr.freigabeId)!.empfaengerId).toBe(gv2);
+    expect(heute.versionen.find((x) => x.id === n.versionId)!.abschnitteSpaeterGeaendert).toBe(
+      false,
+    );
+    const historie = await imUhr(a, '2026-11-30', (ctx) =>
+      ladeFreigabenHistorie(ctx, { mandantId: m.mandantId, stand: '2026-10-25' }),
+    );
+    expect(historie.freigaben.find((x) => x.id === fr.freigabeId)!.empfaengerId).toBe(m.gv);
   });
 });

@@ -31,6 +31,7 @@ import type { Tx } from '@tcms/db';
 import { frequenzLabel, gleicheFrequenz, mindestensSoStreng, type Frequenz } from '@tcms/domain';
 import { mitAudit, type Protokoll } from '../../audit';
 import { heuteDatum } from '../../kern/zeit';
+import { pruefeKanzleiPersonen } from '../../kern/zustaendigkeit-pruefung';
 import type { DienstKontext } from '../../kontext';
 import { gleicheId, zweitePerson } from '../../rechte';
 import { halteRollenFest } from '../../rollen';
@@ -439,30 +440,11 @@ function ungueltig(meldung: string, feld: string): DienstFehler {
 }
 
 /**
- * Kanzleipersonen sind IDs der kanzleikonsole; der Dienst kennt sie nicht und
- * prüft nur die UUID-Form (Schema). Zusätzlich fail closed: ein Kontakt
- * dieses Mandanten (aktive oder frühere Rolle) ist keine Kanzleiperson. Die
- * Prüfung bleibt bewusst auf den Mandanten der Anfrage beschränkt; eine
- * tenantweite Suche verriete, ob eine ID bei einem anderen Mandanten als
- * Kontakt existiert (Existenz-Orakel).
+ * Kanzleipersonen (fail closed: kein Kontakt dieses Mandanten) prüft die eine
+ * Regel des Kerns (`kern/zustaendigkeit.ts`), gemeinsam mit Einrichtung und
+ * Risikoaufnahme.
  */
-export async function pruefeKanzleiPersonen(
-  tx: Tx,
-  mandantId: string,
-  ids: readonly { id: string; feld: string }[],
-): Promise<void> {
-  if (ids.length === 0) return;
-  const kontakte = await tx.mandantKontaktRolle.findMany({
-    where: { mandantId, kontaktId: { in: ids.map((x) => x.id) } },
-    select: { kontaktId: true },
-    orderBy: { id: 'asc' },
-  });
-  for (const x of ids) {
-    if (kontakte.some((k) => gleicheId(k.kontaktId, x.id))) {
-      throw ungueltig('Diese Person ist keine Person der Kanzlei.', x.feld);
-    }
-  }
-}
+export { pruefeKanzleiPersonen };
 
 /** Mandantenseite: Kontakte mit aktiver Rolle bei genau diesem Mandanten. */
 async function pruefeMandantPersonen(

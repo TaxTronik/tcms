@@ -90,6 +90,7 @@ export function umfeldAusKontext(ctx: TcmsKontext): Umfeld {
     },
     kanzlei,
     mandantPersonen: [...ctx.mandantPersonen].sort((a, b) => a.name.localeCompare(b.name, 'de')),
+    mandantRollen: ctx.kontaktRollen.map((r) => ({ id: r.kontaktId, rolle: r.rolle })),
     heute: ctx.heute,
   };
 }

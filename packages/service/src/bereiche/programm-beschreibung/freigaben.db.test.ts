@@ -31,6 +31,7 @@ import {
   ladePortalFreigaben,
 } from './freigaben';
 import {
+  gesehen,
   alsEigentuemerOhneTrigger,
   auditZu,
   baueWelt,
@@ -119,8 +120,11 @@ describe.skipIf(!AKTIV)('Freigaben (Service, PostgreSQL)', () => {
       }),
     );
     await im(hbA(w), (ctx) => gibBeschreibungZurReview(ctx, { mandantId: w.mandantA, versionId }));
-    await im(btA(w), (ctx) =>
-      schliesseBeschreibungsreviewAb(ctx, { mandantId: w.mandantA, versionId }),
+    await im(btA(w), async (ctx) =>
+      schliesseBeschreibungsreviewAb(
+        ctx,
+        await gesehen(ctx.tx, { mandantId: w.mandantA, versionId }),
+      ),
     );
     beschreibungsFreigabe = (
       await im(btA(w), (ctx) =>

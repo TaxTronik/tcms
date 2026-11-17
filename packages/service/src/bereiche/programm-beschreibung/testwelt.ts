@@ -17,6 +17,8 @@ import {
   type Tx,
 } from '@tcms/db';
 import { verweisAblage } from '../../ablage';
+import { normalisiereAbschnitte } from './bausteine';
+import { abschnitteSha256 } from './beschreibung';
 import { erzeugeCodeSchluessel } from './code';
 import {
   imDienst,
@@ -230,6 +232,22 @@ export async function alsEigentuemerOhneTrigger(
   } finally {
     await eigentuemer.$disconnect();
   }
+}
+
+/**
+ * Eingabe des Review-Abschlusses mit dem gesehenen Text (SHA-256 der Abschnitte), wie
+ * ihn die kanzleikonsole aus dem Lesen übernimmt. Unbekannte bzw. unsichtbare Version:
+ * ein Platzhalter (der Dienst antwortet dann „nicht gefunden").
+ */
+export async function gesehen<T extends { versionId: string }>(
+  tx: Tx,
+  e: T,
+): Promise<T & { abschnitteSha256: string }> {
+  const v = await tx.beschreibungVersion.findUnique({ where: { id: e.versionId } });
+  return {
+    ...e,
+    abschnitteSha256: v ? abschnitteSha256(normalisiereAbschnitte(v.abschnitte)) : '0'.repeat(64),
+  };
 }
 
 /** Audit-Einträge zu einem Objekt (neueste zuletzt). */

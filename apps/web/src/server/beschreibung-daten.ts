@@ -43,8 +43,14 @@ export interface VersionRoh {
   snapshotSha256: string | null;
   /** SHA-256 des Snapshots geprüft (null: nichts zu prüfen). */
   snapshotGeprueft: boolean | null;
-  /** Letzte bearbeitende Person (Vier-Augen der Review). */
+  /** Letzte bearbeitende Person (Anzeige). */
   letzteBearbeitung: string | null;
+  /** Alle Bearbeitenden der Version: keine von ihnen schließt die Review ab (Vier-Augen). */
+  bearbeitende: string[];
+  /** SHA-256 der gezeigten Abschnitte (gesehener Text beim Review-Abschluss). */
+  abschnitteSha256: string | null;
+  /** Historischer Stand: Abschnitte nach dem Stichtag geändert (heutiger Text). */
+  abschnitteSpaeterGeaendert: boolean;
 }
 
 export interface FreigabeRoh {

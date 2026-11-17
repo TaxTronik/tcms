@@ -22,6 +22,7 @@ import {
   meldeNachrichtUnzustellbar,
 } from './nachrichten';
 import { richteEin } from './testprogramm';
+import { setzeKontaktRollen } from '../lesepfade/kontakte';
 import {
   baueWelt,
   btA,
@@ -525,5 +526,28 @@ describe.skipIf(!AKTIV)('Lebensdauer der Code-Nachrichten (Service, PostgreSQL)'
     );
     expect(codes.length).toBeGreaterThan(0);
     for (const c of codes) expect(audit).not.toContain(c);
+  });
+
+  it('GV-Rolle entzogen (weitere GV besteht): ihre Code-Nachricht wird nicht mehr ausgeliefert (Befund 105)', async () => {
+    const f = await freigabe(w.gv);
+    const n = await codeAnfordern(f, w.gv);
+    const rollen = (r: ('GESETZLICHER_VERTRETER' | 'MITARBEITER')[]) =>
+      im(btA(w), (ctx) =>
+        setzeKontaktRollen(ctx, {
+          mandantId: w.mandantA,
+          kontaktId: w.gv,
+          rollen: r,
+          funktion: null,
+        }),
+      );
+    // gv2 bleibt gesetzliche Vertretung: Entziehen ist erlaubt, die Freigabe bleibt an gv.
+    await rollen(['MITARBEITER']);
+    try {
+      await erwarteVerworfen(n.id, n.code, 'EMPFAENGER_OHNE_ROLLE');
+    } finally {
+      await rollen(['GESETZLICHER_VERTRETER']);
+    }
+    // Auch nach erneuter Vergabe der Rolle bleibt der Code verworfen (neuer Code nötig).
+    expect(await zeile(n.id)).toMatchObject({ code: null, text: '' });
   });
 });

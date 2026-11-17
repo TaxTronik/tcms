@@ -141,7 +141,13 @@ export default async function Einrichtungsassistent({
     .filter((p) => p.mandantRolle === 'GESETZLICHER_VERTRETER')
     .map((p) => ({ id: p.id, name: p.name }));
   const gvName = (pid: string | null) => personName(ctx, pid);
-  const formBasis = { aktion: speichereSchritt, mandantId: id, darf, gesperrtGrund };
+  const formBasis = {
+    aktion: speichereSchritt,
+    mandantId: id,
+    gesehen: entwurf.stand ?? 0,
+    darf,
+    gesperrtGrund,
+  };
 
   const personen: PersonInfo[] = umfeld.mandantPersonen
     .filter(

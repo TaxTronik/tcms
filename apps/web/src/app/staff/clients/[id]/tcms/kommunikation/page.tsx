@@ -4,9 +4,12 @@ import { Icon } from '@/components/icon';
 import { StatusBadge } from '@/components/ui/badges';
 import { Leerzustand } from '@/components/ui/leer';
 import { TcmsKopf } from '@/components/tcms/kopf';
+import { AktionsForm, SubmitButton } from '@/components/ui/client';
+import { zieleFreigabeAnfordern } from '@/server/actions/ziele';
+import { KEIN_RECHT } from '@/server/aktion';
 import { ladeFreigaben, type FreigabeZeile } from '@/server/kommunikation-daten';
 import { personName, type PersonKurz } from '@/server/kontext';
-import { ladeStaffSeite } from '@/server/seite';
+import { ladeStaffSeite, NUR_AKTUELL } from '@/server/seite';
 
 export const metadata = { title: 'Kommunikation und Richtlinien' };
 
@@ -77,6 +80,24 @@ export default async function Kommunikation({
   );
   const p = (pid: string | null) => ctx.personen.get(pid ?? '');
 
+  // Freigabe der Ziele nach Version 1 anfordern (z. B. GV erst später erfasst).
+  const zieleOffen = ctx.ziele.some((z) => z.freigabe !== 'FREIGEGEBEN');
+  const zieleAngefordert = freigaben.some((f) => f.art === 'ZIELE' && f.status === 'OFFEN');
+  const gvListe = [
+    ...new Set(
+      ctx.kontaktRollen.filter((r) => r.rolle === 'GESETZLICHER_VERTRETER').map((r) => r.kontaktId),
+    ),
+  ];
+  const zieleSperre = ctx.historisch
+    ? NUR_AKTUELL
+    : !seite.darfBearbeiten
+      ? KEIN_RECHT
+      : zieleAngefordert
+        ? 'Die Freigabe der Ziele ist bereits angefordert; die Kanzlei kann sie neu adressieren.'
+        : gvListe.length === 0
+          ? 'Für diesen Mandanten ist keine gesetzliche Vertretung erfasst.'
+          : null;
+
   return (
     <>
       <TcmsKopf seite={seite} />
@@ -89,8 +110,9 @@ export default async function Kommunikation({
         <Icon name="Info" />
         <span>
           <strong>Richtlinienverwaltung folgt in Ausbaustufe B.</strong> Bis dahin zeigt diese Seite
-          Freigaben und Kenntnisnahmen aus dem Portal (nur Lesen). Freigaben erteilen ausschließlich
-          die gesetzlichen Vertreter mit E-Mail-Code.
+          Freigaben und Kenntnisnahmen aus dem Portal; die Freigabe der Compliance-Ziele lässt sich
+          hier anfordern. Freigaben erteilen ausschließlich die gesetzlichen Vertreter mit
+          E-Mail-Code.
         </span>
       </div>
 
@@ -271,6 +293,35 @@ export default async function Kommunikation({
                   </div>
                 ))
               )}
+              {zieleOffen ? (
+                <AktionsForm action={zieleFreigabeAnfordern} className="list-row col">
+                  <input type="hidden" name="mandantId" value={id} />
+                  <div className="row-s" style={{ width: '100%' }}>
+                    <select
+                      className="input grow"
+                      name="empfaengerId"
+                      aria-label="Gesetzliche Vertretung"
+                      disabled={!!zieleSperre}
+                      title={zieleSperre ?? undefined}
+                      defaultValue={gvListe[0] ?? ''}
+                    >
+                      {gvListe.length === 0 ? <option value="">—</option> : null}
+                      {gvListe.map((gid) => (
+                        <option key={gid} value={gid}>
+                          {personName(ctx, gid)} (gesetzliche Vertretung)
+                        </option>
+                      ))}
+                    </select>
+                    <SubmitButton
+                      className="btn-secondary btn-tiny"
+                      disabled={!!zieleSperre}
+                      title={zieleSperre ?? 'Freigabe der Ziele im Mandantenportal anfordern'}
+                    >
+                      <Icon name="Send" className="tx-icon-xs" /> Freigabe anfordern
+                    </SubmitButton>
+                  </div>
+                </AktionsForm>
+              ) : null}
               <div
                 className="px-4 py-2 text-xs font-s text-secondary"
                 style={{ background: 'rgb(var(--surface-raised))' }}

@@ -12,11 +12,18 @@ import {
   type FreigabenHistorie,
   type FreigabenHistorieEingabe,
 } from '@tcms/contract';
-import { heuteDatum, leseStand, tagesende } from '../../kern/zeit';
+import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import { zustellungenDerFreigaben } from '../../kern/zustellung';
 import type { DienstKontext } from '../../kontext';
 import { codeStatus } from './code';
-import { iso, isoTagVon, kanzleiZugriff, programmIdDesMandanten, pruefeEingabe } from './gemeinsam';
+import {
+  empfaengerZumStichtag,
+  iso,
+  isoTagVon,
+  kanzleiZugriff,
+  programmIdDesMandanten,
+  pruefeEingabe,
+} from './gemeinsam';
 
 /** Freigaben und Kenntnisnahmen des Programms zum Stichtag (Kommunikation, S13). */
 export async function ladeFreigabenHistorie(
@@ -26,7 +33,8 @@ export async function ladeFreigabenHistorie(
   const e = pruefeEingabe(FreigabenHistorieEingabeSchema, eingabe);
   const mandantId = e.mandantId.toLowerCase();
   await kanzleiZugriff(ctx, mandantId, false);
-  const { stand, historisch } = leseStand(e.stand, heuteDatum(ctx.uhr));
+  const heute = heuteDatum(ctx.uhr);
+  const { stand, historisch } = leseStand(e.stand, heute);
   const ende = tagesende(stand);
   const programmId = await programmIdDesMandanten(ctx.tx, mandantId, false);
   if (!programmId) return { stand: isoTagVon(stand), historisch, freigaben: [] };
@@ -37,6 +45,13 @@ export async function ladeFreigabenHistorie(
   const jetzt = new Date();
   // Betrieblicher Zustand wie der Code-Status: nur im aktuellen Stand.
   const zustellungen = await zustellungenDerFreigaben(ctx.tx, mandantId, roh, { historisch });
+  // Empfänger zum Stichtag (eine spätere Neuadressierung zählt dort noch nicht).
+  const empfaenger = await empfaengerZumStichtag(
+    ctx.tx,
+    roh,
+    auditGrenze(stand, heute),
+    historisch,
+  );
   const freigaben: FreigabeHistorieZeile[] = roh.map((f) => {
     // Eine später erledigte Anforderung gilt am Stichtag als offen.
     const spaeter = f.erledigtAm != null && f.erledigtAm.getTime() > ende.getTime();
@@ -44,7 +59,7 @@ export async function ladeFreigabenHistorie(
       id: f.id,
       art: f.art,
       titel: f.titel,
-      empfaengerId: f.empfaengerId,
+      empfaengerId: empfaenger.get(f.id) ?? f.empfaengerId,
       angefordertVon: f.angefordertVon,
       angefordertAm: f.angefordertAm.toISOString(),
       status: spaeter ? 'OFFEN' : f.status,

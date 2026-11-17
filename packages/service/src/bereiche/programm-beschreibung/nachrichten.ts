@@ -13,7 +13,11 @@
 // und schließen sich aus (409, CHECK). Der Vorgang steht im Audit (ohne Text
 // und Code). Gilt der Code nicht mehr (Freigabe erledigt, Code abgelaufen,
 // ersetzt, gesperrt oder neu adressiert), liefert der nächste Abruf die
-// Nachricht nicht mehr aus und leert sie (`verworfenAm`).
+// Nachricht nicht mehr aus und leert sie (`verworfenAm`) – ebenso, wenn der
+// Empfänger beim Mandanten keine aktive gesetzliche Vertretung mehr ist (nur
+// sie erteilt die Freigabe; Befund 105). Nachrichten ohne Code prüft der
+// Abruf nicht gegen ihre Freigabe (wie im ADR 0001 beschrieben; sie tragen
+// nur Titel und IDs).
 //
 // Abholen und Melden ausschließlich durch den Systemakteur der kanzleikonsole
 // (`SystemKontext`, Stufe 4): Der Zustell-Worker ist keine Person, und keine
@@ -104,7 +108,9 @@ export type NeueNachricht = NachrichtInhalt & {
  * Änderung). Empfänger und Mandant nur als ID, die Empfängerart folgt aus dem
  * Zweck (`NACHRICHT_EMPFAENGER`), die Vorlagendaten werden gegen den Vertrag
  * geprüft. Ein Verstoß ist ein Programmierfehler (fail closed, Meldung ohne
- * Werte). Der Code landet nur in der Spalte `code`, nie in `daten`.
+ * Werte). Der Code landet im Klartext nur in der Spalte `code` und im
+ * Rückfalltext `text` (beide leeren Zustellung, Unzustellbarkeit und Verwerfen),
+ * nie in `daten`.
  */
 export async function legeNachrichtAn(tx: Tx, n: NeueNachricht): Promise<string> {
   if (!UUID.test(n.empfaengerId)) throw new Error('[service] Empfänger ohne gültige ID');
@@ -185,6 +191,7 @@ function brauchtSystem(ctx: SystemKontext): void {
  */
 export type VerwerfGrund =
   | 'FREIGABE_NICHT_OFFEN'
+  | 'EMPFAENGER_OHNE_ROLLE'
   | 'CODE_ABGELAUFEN'
   | 'CODE_UNGUELTIG'
   | 'DATEN_UNGUELTIG';
@@ -239,6 +246,7 @@ export const MAX_CODE_PRUEFUNG_JE_ABRUF = 1000;
 
 type CodeZeile = {
   id: string;
+  zweck: NachrichtZweck;
   mandantId: string;
   empfaengerId: string;
   daten: Prisma.JsonValue;
@@ -247,15 +255,17 @@ type CodeZeile = {
 
 /**
  * Code-Nachrichten unter `zeilen`, deren Code nicht mehr gilt
- * (`grundZumVerwerfen`); unlesbare Vorlagendaten gelten als veraltet (fail
- * closed, nie ausgeliefert).
+ * (`grundZumVerwerfen`) oder deren Empfänger beim Mandanten keine aktive
+ * gesetzliche Vertretung mehr ist (`EMPFAENGER_OHNE_ROLLE`: die Rolle wurde
+ * entzogen, während eine weitere GV besteht); unlesbare Vorlagendaten gelten
+ * als veraltet (fail closed, nie ausgeliefert).
  */
 async function veralteteCodes(
   tx: Tx,
   zeilen: readonly CodeZeile[],
   jetzt: Date,
   schluessel: CodeSchluessel,
-): Promise<{ id: string; empfaengerId: string; grund: VerwerfGrund }[]> {
+): Promise<{ id: string; zweck: NachrichtZweck; empfaengerId: string; grund: VerwerfGrund }[]> {
   if (zeilen.length === 0) return [];
   const freigabeIdVon = (daten: Prisma.JsonValue): string | null => {
     const r = NachrichtDatenFreigabeAngefordertSchema.shape.freigabeId.safeParse(
@@ -282,16 +292,31 @@ async function veralteteCodes(
       })
     ).map((f) => [f.id, f]),
   );
-  const veraltet: { id: string; empfaengerId: string; grund: VerwerfGrund }[] = [];
+  // Aktive gesetzliche Vertretungen unter den Empfängern (eine Abfrage je Abruf).
+  const gv = await tx.mandantKontaktRolle.findMany({
+    where: {
+      aktiv: true,
+      rolle: 'GESETZLICHER_VERTRETER',
+      kontaktId: { in: [...new Set(zeilen.map((n) => n.empfaengerId.toLowerCase()))] },
+    },
+    select: { mandantId: true, kontaktId: true },
+    orderBy: { id: 'asc' },
+  });
+  const istGv = (mandantId: string, kontaktId: string) =>
+    gv.some((r) => r.mandantId === mandantId && gleicheId(r.kontaktId, kontaktId));
+  const veraltet: {
+    id: string;
+    zweck: NachrichtZweck;
+    empfaengerId: string;
+    grund: VerwerfGrund;
+  }[] = [];
   for (const n of zeilen) {
     const freigabeId = freigabeIdVon(n.daten);
-    const grund = grundZumVerwerfen(
-      n,
-      freigabeId ? freigaben.get(freigabeId) : undefined,
-      jetzt,
-      schluessel,
-    );
-    if (grund) veraltet.push({ id: n.id, empfaengerId: n.empfaengerId, grund });
+    const f = freigabeId ? freigaben.get(freigabeId) : undefined;
+    const grund =
+      grundZumVerwerfen(n, f, jetzt, schluessel) ??
+      (istGv(n.mandantId, n.empfaengerId) ? null : 'EMPFAENGER_OHNE_ROLLE');
+    if (grund) veraltet.push({ id: n.id, zweck: n.zweck, empfaengerId: n.empfaengerId, grund });
   }
   return veraltet;
 }
@@ -370,15 +395,10 @@ export async function ladeOffeneNachrichten(
       });
     }
   }
-  /** Prüft Code-Nachrichten und verwirft die veralteten. */
+  /** Prüft Code-Nachrichten (Freigabe, Code, Rolle des Empfängers) und verwirft die veralteten. */
   async function pruefeUndVerwirf(zeilen: readonly CodeZeile[]): Promise<void> {
     for (const z of zeilen) geprueft.add(z.id);
-    await verwirfAlle(
-      (await veralteteCodes(ctx.tx, zeilen, jetzt, schluessel)).map((v) => ({
-        ...v,
-        zweck: 'FREIGABE_CODE' as const,
-      })),
-    );
+    await verwirfAlle(await veralteteCodes(ctx.tx, zeilen, jetzt, schluessel));
   }
   // 1. Die ältesten offenen Code-Nachrichten prüfen und verfallene leeren (Sparsamkeit).
   await pruefeUndVerwirf(
@@ -386,7 +406,14 @@ export async function ladeOffeneNachrichten(
       where: { ...offen, zweck: 'FREIGABE_CODE' },
       orderBy: reihenfolge,
       take: MAX_CODE_PRUEFUNG_JE_ABRUF,
-      select: { id: true, mandantId: true, empfaengerId: true, daten: true, code: true },
+      select: {
+        id: true,
+        zweck: true,
+        mandantId: true,
+        empfaengerId: true,
+        daten: true,
+        code: true,
+      },
     }),
   );
   // 2. Kandidaten erst danach lesen: Verworfene belegen keinen Platz im Limit.

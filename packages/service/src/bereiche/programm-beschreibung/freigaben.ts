@@ -559,7 +559,9 @@ export async function erteileFreigabe(
         where: { id: version.id, status: 'BEIM_MANDANTEN', snapshotSha256: version.snapshotSha256 },
         data: { status: 'FREIGEGEBEN', freigegebenVon: ctx.akteur.id, freigegebenAm: zeitpunkt },
       });
-      // Die Version ist nicht gesperrt: Eine gleichzeitige Änderung zeigt sich hier.
+      // Die Version ist nicht eigens gesperrt: Eine gleichzeitige Änderung zeigt sich hier.
+      // Sperrreihenfolge Freigabe → Version (wie `fordereBeschreibungsfreigabeAn`, das die
+      // offene Freigabe einer älteren Version vor dieser Version sperrt): keine Verklemmung.
       if (u.count !== 1) throw konfliktMitGrund('VERSION_NICHT_VORGELEGT', NICHT_VORGELEGT);
       // Vorgänger (freigegeben oder noch beim Mandanten) werden abgelöst.
       const vorgaenger = await tx.beschreibungVersion.findMany({
@@ -573,10 +575,12 @@ export async function erteileFreigabe(
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       });
       for (const a of vorgaenger) {
-        await tx.beschreibungVersion.updateMany({
+        const u = await tx.beschreibungVersion.updateMany({
           where: { id: a.id, status: a.status },
           data: { status: 'ABGELOEST' },
         });
+        // Nur was sich tatsächlich geändert hat, steht im Audit (Befund 19).
+        if (u.count !== 1) continue;
         if (a.status === 'BEIM_MANDANTEN') {
           await tx.freigabe.updateMany({
             where: {

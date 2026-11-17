@@ -43,7 +43,10 @@ für KI-Werkzeuge.
   die Kontrollvorlagen für neue Kontrollen aus dem Katalog
   (`kern/kontroll-vorlage.ts`: Vorbelegung der Zuständigkeit, erster Stand,
   geplante Durchführungen), der Zustellstatus der Nachrichten zu Freigaben
-  (`kern/zustellung.ts`) und die Zuständigkeit einer Durchführung
+  (`kern/zustellung.ts`), die Zuständigkeitsregel für neue Kontrollstände
+  (`kern/zustaendigkeit-pruefung.ts`: Personen je Partei, Kanzleipersonen fail
+  closed, Gegenzeichnung beim Mandanten nur bei Kontrollen des Mandanten) und
+  die Zuständigkeit einer Durchführung
   (`kern/zustaendigkeit.ts`: offene aus dem aktuell gültigen Kontrollstand,
   abgeschlossene aus ihrem eigenen; Inhalt immer aus dem geplanten Stand –
   Operationen, Kennzeichen, Portal, Kontext und Arbeitskorb rechnen gleich).
@@ -256,7 +259,7 @@ für KI-Werkzeuge.
   UPDATE); Freigabe-Operationen lesen und prüfen Rollen erst nach der Zeilensperre ihres Objekts
   und `halteRollenFest` (dieselbe Zeile FOR KEY SHARE, `src/rollen.ts`) – TS-05, RT4-T-05. Das
   gilt für Erteilen, Code anfordern, Kenntnisnahme, Neuadressieren und jedes Anlegen einer Freigabe
-  (Ziele mit Version 1, Beschreibung, Risikoakzeptanz): Entfernen der letzten GV und Adressieren an
+  (Ziele mit Version 1 oder später über „Ziele-Freigabe anfordern“, Beschreibung, Risikoakzeptanz): Entfernen der letzten GV und Adressieren an
   sie laufen so nacheinander (kein Write Skew, RT4-T-06).
 - Bestätigungscodes: 6 Ziffern aus `randomInt`, nur ein an die Freigabe gebundener HMAC-SHA-256 mit
   dem Schlüssel aus `TCMS_CODE_SCHLUESSEL` wird gespeichert (`codeHash`, CHECK hex, dazu die
@@ -270,9 +273,11 @@ für KI-Werkzeuge.
 - Nachrichten adressieren Empfänger nur über die Personen-ID (`empfaengerId`, UUID) mit einem
   Zweck aus `NACHRICHT_ZWECKE`, nie über Namen; jede trägt `mandantId`, die aus dem Zweck folgende
   `empfaengerArt` und Vorlagendaten `daten` (geprüft gegen den Vertrag, ohne Namen und ohne Code).
-  Neue Nachrichten nur über `legeNachrichtAn`. Der Code steht nur in der Spalte `code` der offenen
-  Nachricht. Der Abruf hält die erste Auslieferung fest (`abgerufenAm`); eine verworfene, nie
-  ausgelieferte Nachricht lässt sich weder als zugestellt noch als unzustellbar melden (`409`, CHECK,
+  Neue Nachrichten nur über `legeNachrichtAn`. Der Code steht im Klartext nur in der offenen
+  Nachricht: in der Spalte `code` und im Rückfalltext `text` (für den Abruf zusätzlich als
+  `daten.code` der Antwort), nie in den gespeicherten `daten`; wer offene Nachrichten liest,
+  sichert oder auswertet, behandelt `code` und `text` gleich. Der Abruf hält die erste
+  Auslieferung fest (`abgerufenAm`); eine verworfene, nie ausgelieferte Nachricht lässt sich weder als zugestellt noch als unzustellbar melden (`409`, CHECK,
   H2). „Zugestellt" setzt `zugestelltAm` und leert `code` und Text; „unzustellbar" (Meldung der
   kanzleikonsole mit Grund aus `NACHRICHT_UNZUSTELLBAR_GRUENDE`) setzt `unzustellbarAm` und
   `unzustellbarGrund` und leert ebenso; beide schließen sich aus (`409` unter Zeilensperre, CHECK) und

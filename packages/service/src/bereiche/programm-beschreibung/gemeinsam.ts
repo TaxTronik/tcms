@@ -111,6 +111,39 @@ export async function programmIdDesMandanten(
 }
 
 /**
+ * Eine Regel „Programm eingerichtet": Version 1 ist angelegt (Status nicht mehr
+ * ENTWURF oder `version1Am` gesetzt). Die Programmzeile entsteht schon beim
+ * ersten Speichern des Einrichtungsassistenten (Status ENTWURF).
+ */
+export const istEingerichtet = (p: { status: string; version1Am: Date | null } | null) =>
+  !!p && (p.status !== 'ENTWURF' || p.version1Am !== null);
+
+export const NOCH_NICHT_EINGERICHTET =
+  'Für diesen Mandanten ist noch kein Tax-CMS eingerichtet (Version 1 fehlt).';
+
+/**
+ * ID des eingerichteten Programms eines Mandanten, optional unter Zeilensperre
+ * (TS-05: Programm vor allen anderen Zeilen); ohne Programm oder nur mit dem
+ * Entwurf des Einrichtungsassistenten → `KONFLIKT`.
+ */
+export async function eingerichtetesProgramm(
+  tx: Tx,
+  mandantId: string,
+  sperren: boolean,
+): Promise<string> {
+  const zeilen = sperren
+    ? await tx.$queryRaw<{ id: string; status: string; version1Am: Date | null }[]>`
+        SELECT id, status::text AS status, "version1Am" FROM "TcmsProgramm"
+        WHERE "mandantId" = ${mandantId}::uuid FOR UPDATE`
+    : await tx.$queryRaw<{ id: string; status: string; version1Am: Date | null }[]>`
+        SELECT id, status::text AS status, "version1Am" FROM "TcmsProgramm"
+        WHERE "mandantId" = ${mandantId}::uuid`;
+  const p = zeilen[0] ?? null;
+  if (!p || !istEingerichtet(p)) throw new DienstFehler('KONFLIKT', NOCH_NICHT_EINGERICHTET);
+  return p.id;
+}
+
+/**
  * Sperrt eine Beschreibungsversion (FOR UPDATE), sofern sie zum Programm des
  * Mandanten gehört; sonst `NICHT_GEFUNDEN`. Alle Statusübergänge einer Version
  * laufen nach dieser Sperre, damit Prüfung und Änderung in derselben
@@ -151,6 +184,39 @@ export function konfliktBeiEindeutigkeit<T>(meldung: string, fn: () => Promise<T
 
 export const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
 export const isoTagVon = (d: Date): string => d.toISOString().slice(0, 10);
+
+/**
+ * Empfänger je Freigabe zum Stichtag: Eine Neuadressierung nach der Grenze überschreibt die
+ * Zeile, der frühere Empfänger steht im Audit (`tcms.freigabe.neu_adressiert`, `vorherId`).
+ * Je Freigabe zählt die erste Neuadressierung nach der Grenze; ohne sie der heutige Empfänger.
+ */
+export async function empfaengerZumStichtag(
+  tx: Tx,
+  freigaben: readonly { id: string; empfaengerId: string }[],
+  grenze: Date,
+  historisch: boolean,
+): Promise<Map<string, string>> {
+  const je = new Map(freigaben.map((f) => [f.id, f.empfaengerId]));
+  if (!historisch || freigaben.length === 0) return je;
+  const spaeter = await tx.auditEvent.findMany({
+    where: {
+      objektTyp: 'Freigabe',
+      objektId: { in: freigaben.map((f) => f.id) },
+      aktion: 'tcms.freigabe.neu_adressiert',
+      at: { gt: grenze },
+    },
+    orderBy: { pos: 'asc' },
+    select: { objektId: true, detail: true },
+  });
+  const gesehen = new Set<string>();
+  for (const a of spaeter) {
+    if (gesehen.has(a.objektId)) continue;
+    gesehen.add(a.objektId);
+    const vorher = (a.detail as Record<string, unknown> | null)?.['vorherId'];
+    if (typeof vorher === 'string') je.set(a.objektId, vorher);
+  }
+  return je;
+}
 
 /** Aktive Kontakte eines Mandanten mit Rolle (nach Anlage sortiert). */
 export async function aktiveKontakte(tx: Tx, mandantId: string) {

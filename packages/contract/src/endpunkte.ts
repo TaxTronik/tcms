@@ -160,7 +160,10 @@ import {
   PortalKenntnisnahmeErgebnisSchema,
   ProgrammAnlegenBodySchema,
   ProgrammAnlegenErgebnisSchema,
+  ReviewAbschliessenBodySchema,
   ReviewZurueckweisenBodySchema,
+  ZieleFreigabeAnfordernBodySchema,
+  ZieleFreigabeAnfordernErgebnisSchema,
 } from './bereiche/programm-beschreibung';
 import {
   AbweichungAufhebenBodySchema,
@@ -1227,6 +1230,7 @@ export const ENDPUNKTE = register({
     methode: 'POST',
     pfad: `${VERSION}/review/abschliessen`,
     params: BeschreibungVersionAktionEingabeSchema,
+    body: ReviewAbschliessenBodySchema,
     antwort: BeschreibungVersionAktionErgebnisSchema,
   },
   beschreibungsreviewZurueckweisen: {
@@ -1246,6 +1250,14 @@ export const ENDPUNKTE = register({
   },
 
   // ---- Freigaben ----------------------------------------------------------------
+  zieleFreigabeAnfordern: {
+    methode: 'POST',
+    pfad: `${M}/ziele/freigabe`,
+    params: MandantPfadSchema,
+    body: ZieleFreigabeAnfordernBodySchema,
+    antwort: ZieleFreigabeAnfordernErgebnisSchema,
+    status: 201,
+  },
   freigabeNeuadressieren: {
     methode: 'POST',
     pfad: `${M}/freigaben/:freigabeId/neuadressierung`,

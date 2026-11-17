@@ -51,6 +51,7 @@ import {
   type AufbauUmfeld,
 } from './aufbau';
 import { leseProfil } from '../../kern/profil';
+import { ladeZustaendigkeitsPools } from '../../kern/zustaendigkeit-pruefung';
 import {
   leseEntwurf,
   pruefeSchritt1,
@@ -62,6 +63,7 @@ import {
   aktiveKontakte,
   fachlichUngueltig,
   iso,
+  istEingerichtet,
   kanzleiZugriff,
   konfliktBeiEindeutigkeit,
   programmIdDesMandanten,
@@ -87,6 +89,9 @@ async function baueUmfeld(
     if (!mandantPersonen.some((p) => p.id === k.kontaktId))
       mandantPersonen.push({ id: k.kontaktId, mandantRolle: k.rolle });
   }
+  // Fail closed (wie `pruefeKanzleiPersonen`): auch Kontakte mit nur früheren Rollen
+  // sind nie Kanzleipersonen.
+  const pools = await ladeZustaendigkeitsPools(tx, mandant.id, null);
   const bt = klein(personen.berufstraegerId);
   const hb = klein(personen.bearbeitungId);
   const kanzlei: AufbauPerson[] = [];
@@ -104,6 +109,9 @@ async function baueUmfeld(
       },
       kanzlei,
       mandantPersonen,
+      // Vorbelegung aus allen aktiven Rollenzeilen wie in der Risikoaufnahme (`rollenFuer`).
+      mandantRollen: kontakte.map((k) => ({ id: k.kontaktId, rolle: k.rolle })),
+      kontakte: [...pools.kontakte],
       heute,
     },
     gvIds: kontakte.filter((k) => k.rolle === 'GESETZLICHER_VERTRETER').map((k) => k.kontaktId),
@@ -167,8 +175,22 @@ async function ladeProgramm(
   });
 }
 
-const eingerichtet = (p: ProgrammZeile | null) =>
-  !!p && (p.status !== 'ENTWURF' || p.version1Am !== null);
+const eingerichtet = (p: ProgrammZeile | null) => istEingerichtet(p);
+
+/**
+ * TS-05 für den (unversionierten) Entwurf: Der Aufrufer nennt den Stand, den er
+ * gesehen hat; unter der Programmsperre verglichen. Ohne Angabe kein Abgleich
+ * (bestehende Aufrufer).
+ */
+function pruefeGesehen(gesehen: number | undefined, alt: SetupEntwurf): void {
+  if (gesehen === undefined) return;
+  if (gesehen !== (alt.stand ?? 0)) {
+    throw new DienstFehler(
+      'KONFLIKT',
+      'Der Entwurf wurde inzwischen von einer anderen Person gespeichert. Bitte neu laden.',
+    );
+  }
+}
 
 function planView(p: AufbauPlan): PlanView {
   return {
@@ -235,11 +257,16 @@ export async function ladeEinrichtung(
   const heute = heuteDatum(ctx.uhr);
   const programm = await ladeProgramm(ctx.tx, mandantId, false);
   // Lesen ohne vollständige Personenliste: Kanzleipersonen sind Zuständigkeit,
-  // Vertretung und die im Entwurf bereits gewählten Personen (Prüfung beim Speichern).
+  // Vertretung und die im Entwurf bereits gewählten Personen (Prüfung beim Speichern):
+  // Durchführung und Vertretung der Kanzleikontrollen und die Gegenzeichnung jeder
+  // Kontrolle. Kontakte des Mandanten darunter bleiben Kontakte (fail closed im Kern).
   const gespeichert = leseEntwurf(programm?.setupEntwurf, heute, null);
   const gewaehlt = Object.values(gespeichert.kontrollen)
-    .filter((k) => k.partei === 'KANZLEI')
-    .flatMap((k) => [k.durchfuehrendId, k.vertretungId, k.gegenzeichnerId])
+    .flatMap((k) =>
+      k.partei === 'KANZLEI'
+        ? [k.durchfuehrendId, k.vertretungId, k.gegenzeichnerId]
+        : [k.gegenzeichnerId],
+    )
     .filter((id): id is string => !!id);
   const personen: EinrichtungPersonen = {
     berufstraegerId: e.berufstraegerId ?? null,
@@ -304,7 +331,8 @@ export async function speichereEinrichtungsschritt(
   if (eingerichtet(programm)) throw new DienstFehler('KONFLIKT', BEREITS_EINGERICHTET);
   const { umfeld, gvIds } = await baueUmfeld(ctx.tx, mandant, e.personen, heute);
   const alt = leseEntwurf(programm?.setupEntwurf, heute, aufbauRollen(umfeld).gv);
-  const neu: SetupEntwurf = { ...alt };
+  pruefeGesehen(e.gesehen, alt);
+  const neu: SetupEntwurf = { ...alt, stand: (alt.stand ?? 0) + 1 };
   let geaendert = false;
   switch (e.schritt) {
     case 1:
@@ -410,10 +438,22 @@ export async function speichereEinrichtungsschritt(
       objektTyp: 'TcmsProgramm',
       objektId: programmId,
       programmId,
-      detail: { schritt: e.schritt, aktion: e.ziel, abgeschlossen: neu.abgeschlossen, geaendert },
+      detail: {
+        schritt: e.schritt,
+        aktion: e.ziel,
+        abgeschlossen: neu.abgeschlossen,
+        geaendert,
+        stand: neu.stand ?? 0,
+      },
     });
     return {
-      wert: { programmId, angelegt: !programm, abgeschlossen: neu.abgeschlossen, geaendert },
+      wert: {
+        programmId,
+        angelegt: !programm,
+        abgeschlossen: neu.abgeschlossen,
+        geaendert,
+        stand: neu.stand ?? 0,
+      },
       protokoll: protokolle,
     };
   });
@@ -444,7 +484,13 @@ export async function legeProgrammAn(
   await halteRollenFest(ctx.tx, mandantId);
   const { umfeld, gvIds } = await baueUmfeld(ctx.tx, mandant, e.personen, heute);
   const alt = leseEntwurf(programm.setupEntwurf, heute, aufbauRollen(umfeld).gv);
-  const neu: SetupEntwurf = { ...alt, kontrollen: kontrollenKanonisch(e.daten.kontrollen) };
+  // TS-05: Version 1 entsteht nur aus dem Entwurf, den die anlegende Person gesehen hat.
+  pruefeGesehen(e.gesehen, alt);
+  const neu: SetupEntwurf = {
+    ...alt,
+    kontrollen: kontrollenKanonisch(e.daten.kontrollen),
+    stand: (alt.stand ?? 0) + 1,
+  };
   if (alt.abgeschlossen < 4) {
     fachlichUngueltig('Version 1 kann noch nicht angelegt werden.', 'version1', [
       'Bitte zuerst die Schritte 1 bis 4 mit „Weiter" abschließen.',

@@ -246,6 +246,32 @@ describe.skipIf(!AKTIV)('Mandantenanker und Kontaktrollen gegen PostgreSQL', () 
       expect((await rollen(mA, gv, ['MITARBEITER'])).geaendert).toBe(true);
     });
 
+    it('zwei Schritte: ohne Ersatz-GV bleibt keine offene Code-Freigabe an einer früheren GV zurück (Befund 105)', async () => {
+      const [x, y] = [randomUUID(), randomUUID()];
+      await mitTenant(tenant, (tx) =>
+        tx.mandantKontaktRolle.updateMany({
+          where: { mandantId: mA, rolle: 'GESETZLICHER_VERTRETER' },
+          data: { aktiv: false },
+        }),
+      );
+      await rollen(mA, x, ['GESETZLICHER_VERTRETER']);
+      await rollen(mA, y, ['GESETZLICHER_VERTRETER']);
+      await offeneFreigabe(x);
+      // X entfernen ist erlaubt, solange Y gesetzliche Vertretung bleibt (Kanzlei adressiert neu).
+      expect((await rollen(mA, x, [])).geaendert).toBe(true);
+      // Y wäre die letzte GV: An Y ist nichts adressiert, aber die Freigabe an X bliebe
+      // unerfüllbar – KONFLIKT statt eines Mandanten ohne GV mit offener Code-Freigabe.
+      const f = await fehlerVon(rollen(mA, y, []));
+      expect(f.code).toBe('KONFLIKT');
+      expect(
+        await mitTenant(tenant, (tx) =>
+          tx.mandantKontaktRolle.count({
+            where: { mandantId: mA, rolle: 'GESETZLICHER_VERTRETER', aktiv: true },
+          }),
+        ),
+      ).toBe(1);
+    });
+
     it('TS-05: zwei GV mit offenen Freigaben gleichzeitig entfernen → genau eine Änderung', async () => {
       const [g1, g2] = [randomUUID(), randomUUID()];
       await mitTenant(tenant, (tx) =>
