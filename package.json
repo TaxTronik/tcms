@@ -24,10 +24,13 @@
     "db:seed": "pnpm --filter @tcms/db seed",
     "db:reset": "pnpm --filter @tcms/db reset",
     "format": "prettier --write \"**/*.{ts,tsx,js,mjs,json,md,css}\"",
-    "format:check": "prettier --check \"**/*.{ts,tsx,js,mjs,json,md,css}\""
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,mjs,json,md,css}\"",
+    "lint": "eslint"
   },
   "devDependencies": {
+    "eslint": "10.14.0",
     "prettier": "3.6.2",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.2"
   }
 }

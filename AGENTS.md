@@ -404,6 +404,7 @@ vorhandenen Tokens aufsetzen.
 ```
 sh scripts/pruefe-lieferkette.sh
 pnpm typecheck
+pnpm lint
 pnpm test
 DB_TESTS=1 DATABASE_URL=… DATABASE_OWNER_URL=… pnpm --filter @tcms/db test
 DB_TESTS=1 DATABASE_URL=… DATABASE_OWNER_URL=… pnpm --filter @tcms/api test
