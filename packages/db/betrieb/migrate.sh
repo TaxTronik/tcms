@@ -345,7 +345,10 @@ fi
 for name in $(compgen -e); do
   case $name in
     PATH | LANG | LC_ALL) ;;
-    *) export -n "$name" ;;
+    *)
+      # shellcheck disable=SC2163 # gemeint ist die Variable, deren Name in `name` steht
+      export -n "$name"
+      ;;
   esac
 done
 unset name
