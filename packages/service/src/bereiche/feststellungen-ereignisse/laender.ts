@@ -31,12 +31,11 @@ import {
   istEuAusland,
   LAND_NAME,
   summeEur,
-  p153Offen,
-  type FeststellungStatus,
 } from '@tcms/domain';
 import type { Protokoll } from '../../audit';
 import { ladeKontext, type EreignisView, type TcmsKontext } from '../../kern/tcms-kontext';
-import { heuteDatum, leseStand, tagesende } from '../../kern/zeit';
+import { spaeterErklaerteIds } from '../../kern/rueckrechnung';
+import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
 import { kannBearbeiten, liestAlleVertraulichen } from '../../rechte';
 import { legeEreignisAn } from './ereignisse';
@@ -199,7 +198,10 @@ export async function ladeLaender(ctx: DienstKontext, eingabe: LaenderLesen): Pr
       programmId: programm.id,
       ...(liestAlleVertraulichen(ctx.akteur) ? {} : { vertraulich: false }),
     },
-    include: { erklaerungen: { select: { land: true }, orderBy: { id: 'asc' } } },
+    select: {
+      id: true,
+      erklaerungen: { select: { id: true, land: true }, orderBy: { id: 'asc' } },
+    },
     orderBy: [{ nummer: 'desc' }, { id: 'desc' }],
   });
   const historie = new Map<string, LandStand[]>();
@@ -226,30 +228,45 @@ export async function ladeLaender(ctx: DienstKontext, eingabe: LaenderLesen): Pr
     ]);
   }
   const fJe = new Map<string, Laender['feststellungen'][number]['eintraege']>();
+  // Status und offene Würdigung kommen aus demselben historischen Kontext wie das Portfolio.
+  const k = await ladeKontext(ctx, { mandantId, ...(x.stand ? { stand: x.stand } : {}) });
+  const feststellungJe = new Map(k.feststellungen.map((f) => [f.id, f]));
+  const spaetereErklaerungen = historisch
+    ? spaeterErklaerteIds(
+        await ctx.tx.auditEvent.findMany({
+          where: {
+            programmId: programm.id,
+            objektTyp: 'Feststellung',
+            aktion: 'tcms.feststellung.erklaerung',
+            at: { gt: auditGrenze(stand, heute) },
+          },
+          select: { aktion: true, detail: true },
+          orderBy: { pos: 'asc' },
+        }),
+      )
+    : new Set<string>();
   for (const f of feststellungen) {
-    if (f.erfasstAm.getTime() > ende.getTime() || f.status === 'VERWORFEN') continue;
-    const status: FeststellungStatus =
-      f.status === 'GESCHLOSSEN' && f.geschlossenAm && f.geschlossenAm.getTime() > ende.getTime()
-        ? 'NACHKONTROLLE'
-        : f.status;
-    const laender = new Set(f.erklaerungen.map((e) => e.land).filter((l) => l && l !== 'DE'));
+    const zumStand = feststellungJe.get(f.id);
+    if (!zumStand || zumStand.maskiert || zumStand.status === 'VERWORFEN') continue;
+    const laender = new Set(
+      f.erklaerungen
+        .filter((e) => !spaetereErklaerungen.has(e.id))
+        .map((e) => e.land)
+        .filter((l) => l && l !== 'DE'),
+    );
     for (const code of laender) {
       fJe.set(code, [
         ...(fJe.get(code) ?? []),
         {
           id: f.id,
-          nummer: f.nummer,
-          titel: f.titel,
-          status,
-          // „Weitere Klärung" lässt die Würdigung offen (eine Regel, @tcms/domain).
-          p153Offen: p153Offen(f, ende),
+          nummer: zumStand.nummer,
+          titel: zumStand.titel,
+          status: zumStand.status,
+          p153Offen: zumStand.p153Offen,
         },
       ]);
     }
   }
-  // Kontext zum selben Stichtag (gleiche Regeln für aktive Risiken, Kontrollen
-  // und Ereignisse wie überall; prüft `kannLesen` erneut).
-  const k = await ladeKontext(ctx, { mandantId, ...(x.stand ? { stand: x.stand } : {}) });
   return {
     ...kopf,
     programmId: programm.id,

@@ -9,7 +9,8 @@
 --            besitzt nichts; tcms_owner: kein Superuser, NOBYPASSRLS.
 --   Tabellen alle Tabellen in `public`, Eigentümer tcms_owner; jede außer
 --            `_prisma_migrations` (Ledger) und `akteur_jti` (ADR §4, ohne
---            Tenant) hat ENABLE + FORCE ROW LEVEL SECURITY und eine Policy.
+--            Tenant) hat ENABLE + FORCE ROW LEVEL SECURITY und genau die
+--            Lesebedingung und Schreibbedingung der Policy tcms_tenant.
 --   Rechte   tcms_app nirgends TRUNCATE/REFERENCES/TRIGGER (TRUNCATE umgeht
 --            RLS), auf AuditEvent kein UPDATE/DELETE, auf akteur_jti genau
 --            SELECT/INSERT/DELETE, auf dem Ledger nichts; kein CREATE im Schema
@@ -26,6 +27,7 @@
 \set VERBOSITY terse
 \set SHOW_CONTEXT never
 SET client_min_messages = warning;
+SET search_path = pg_catalog, public;
 
 DO $pruefung$
 DECLARE
@@ -33,6 +35,7 @@ DECLARE
   app oid;
   owner oid;
   r record;
+  tenant_ausdruck CONSTANT text := '(tenant_id = tcms_aktueller_tenant())';
 BEGIN
   SELECT oid INTO app FROM pg_catalog.pg_roles WHERE rolname = 'tcms_app';
   SELECT oid INTO owner FROM pg_catalog.pg_roles WHERE rolname = 'tcms_owner';
@@ -74,7 +77,12 @@ BEGIN
   -- Tabellen -------------------------------------------------------------------
   FOR r IN
     SELECT n.nspname, c.relname, c.oid, c.relowner, c.relrowsecurity, c.relforcerowsecurity,
-           (SELECT count(*) FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid) AS policies
+           (SELECT count(*) = 1 AND bool_and(
+              p.polname = 'tcms_tenant' AND p.polpermissive AND p.polcmd = '*'
+              AND p.polroles = ARRAY[0::oid]
+              AND pg_get_expr(p.polqual, c.oid) IS NOT DISTINCT FROM tenant_ausdruck
+              AND pg_get_expr(p.polwithcheck, c.oid) IS NOT DISTINCT FROM tenant_ausdruck)
+            FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid) AS tenant_policy
     FROM pg_catalog.pg_class c
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relkind IN ('r', 'p')
@@ -113,8 +121,8 @@ BEGIN
       IF NOT (r.relrowsecurity AND r.relforcerowsecurity) THEN
         befunde := befunde || pg_catalog.format('Tabelle %I ohne ENABLE+FORCE ROW LEVEL SECURITY', r.relname);
       END IF;
-      IF r.policies = 0 THEN
-        befunde := befunde || pg_catalog.format('Tabelle %I ohne Policy', r.relname);
+      IF NOT r.tenant_policy THEN
+        befunde := befunde || pg_catalog.format('Tabelle %I ohne genau die erwartete Policy tcms_tenant', r.relname);
       END IF;
     END IF;
   END LOOP;

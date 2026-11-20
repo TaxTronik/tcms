@@ -32,7 +32,6 @@ const objektId = z
   .max(64)
   .regex(/^[A-Za-z0-9_-]+$/);
 const isoZeit = z.string().max(40);
-const isoTag = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const klasse = z.enum(['GERING', 'MITTEL', 'HOCH', 'KRITISCH']);
 const governanceTyp = z.enum(['FP', 'FF', 'IN']);
 const turnus = z.enum(['KEIN', 'JAEHRLICH', 'QUARTALSWEISE', 'MONATLICH']);
@@ -264,7 +263,12 @@ const katalogCode = z
   .regex(/^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$/);
 /** Einträge der Ein- und Ausschlüsse: einzeilig (Kanäle bzw. Grenzen im Snapshot, RT4-T-03). */
 const kurz = einzeilig(0, 200);
-const tagOderLeer = isoTag.or(z.literal(''));
+// Zwischengespeicherte Eingabefelder bleiben bis zum Abschluss editierbar;
+// der Service prüft die tatsächlichen Tage vor „Weiter“ und beim Anlegen.
+const tagOderLeer = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .or(z.literal(''));
 
 export const TeilbereichSchrittSchema = z
   .object({
@@ -487,7 +491,10 @@ const FrequenzSchema = z.object({ turnus, anlass: z.boolean() }).strict();
 export const PlanViewSchema = z
   .object({
     appetit: klasse,
-    zeitraum: z.object({ stichtag: isoTag, ab: isoTag, bis: isoTag }).strict().nullable(),
+    zeitraum: z
+      .object({ stichtag: StandSchema, ab: StandSchema, bis: StandSchema })
+      .strict()
+      .nullable(),
     risiken: z.array(
       z
         .object({
@@ -909,7 +916,7 @@ export type BeschreibungLesenEingabe = z.infer<typeof BeschreibungLesenEingabeSc
 export const BeschreibungViewSchema = z
   .object({
     programmId: z.string().nullable(),
-    stand: isoTag,
+    stand: StandSchema,
     historisch: z.boolean(),
     versionen: z.array(BeschreibungVersionViewSchema),
     freigaben: z.array(BeschreibungFreigabeViewSchema),
@@ -1126,7 +1133,7 @@ export const PortalFreigabenViewSchema = z
         .strict(),
     ),
     /** Lebende Bausteine, falls eine offene Beschreibung noch ohne Snapshot vorliegt. */
-    live: z.object({ stand: isoTag, bausteine: BausteinSatzSchema }).strict().nullable(),
+    live: z.object({ stand: StandSchema, bausteine: BausteinSatzSchema }).strict().nullable(),
     gesetzlicheVertreter: z.array(z.string()),
     istGesetzlicherVertreter: z.boolean(),
     kannPortalLesen: z.boolean(),
@@ -1210,7 +1217,7 @@ export const FreigabeHistorieZeileSchema = z
 export type FreigabeHistorieZeile = z.infer<typeof FreigabeHistorieZeileSchema>;
 export const FreigabenHistorieSchema = z
   .object({
-    stand: isoTag,
+    stand: StandSchema,
     historisch: z.boolean(),
     freigaben: z.array(FreigabeHistorieZeileSchema),
   })

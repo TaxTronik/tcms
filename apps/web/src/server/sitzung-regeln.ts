@@ -74,7 +74,7 @@ function register(): Register {
 
 function raeumeAuf(jetztMs: number): void {
   const r = register();
-  for (const [sid, ablauf] of r) if (ablauf < jetztMs) r.delete(sid);
+  for (const [sid, ablauf] of r) if (ablauf <= jetztMs) r.delete(sid);
 }
 
 /** Signierte Teile eines Cookies (`<id>.<ablauf>.<sid>.<hmac>`), sonst null. */
@@ -93,7 +93,7 @@ function leseCookie(wert: string | undefined): { id: string; ablauf: number; sid
 /** Prüft ein Sitzungs-Cookie (Signatur, Ablauf, Register); liefert die Personen-ID oder null. */
 export function pruefeCookie(wert: string | undefined, jetztMs = Date.now()): string | null {
   const c = leseCookie(wert);
-  if (!c || c.ablauf < jetztMs) return null;
+  if (!c || c.ablauf <= jetztMs) return null;
   const eingetragen = register().get(c.sid);
   if (eingetragen === undefined || eingetragen !== c.ablauf) return null;
   return c.id;

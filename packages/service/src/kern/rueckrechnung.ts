@@ -12,7 +12,16 @@
 // =============================================================================
 
 import type { Tx } from '@tcms/db';
-import { FESTSTELLUNG_STATUS_LABEL, type FeststellungStatus } from '@tcms/domain';
+import {
+  AUSWIRKUNG_LABEL,
+  FESTSTELLUNG_STATUS_LABEL,
+  KLASSE_RANG,
+  P153_LABEL,
+  type Auswirkung,
+  type FeststellungStatus,
+  type Klasse,
+  type Paragraph153Entscheidung,
+} from '@tcms/domain';
 
 /** Audit-Eintrag nach dem Stichtag (nur, was die Rückrechnung liest). */
 export interface SpaeterEintrag {
@@ -29,6 +38,8 @@ export const KEINE_SPAETEREN: SpaetereEintraege = new Map();
 /** Aktionen, die einen Zustand ändern, den die Zeile nicht mit Zeitpunkt trägt. */
 const AKTIONEN = [
   'tcms.feststellung.status',
+  'tcms.feststellung.wuerdigung',
+  'tcms.feststellung.p153_entschieden',
   'tcms.feststellung.verwerfen_bestaetigt',
   'tcms.ereignis.abgeschlossen',
   'tcms.ereignis.verwerfen_beantragt',
@@ -47,11 +58,14 @@ export async function ladeSpaetereEintraege(
   tx: Tx,
   programmIds: readonly string[],
   zeit: { historisch: boolean; auditEnde: Date },
+  objekte?: { typ: string; ids: readonly string[] },
 ): Promise<SpaetereEintraege> {
-  if (!zeit.historisch || programmIds.length === 0) return KEINE_SPAETEREN;
+  if (!zeit.historisch || programmIds.length === 0 || objekte?.ids.length === 0)
+    return KEINE_SPAETEREN;
   const zeilen = await tx.auditEvent.findMany({
     where: {
       programmId: { in: [...programmIds] },
+      ...(objekte ? { objektTyp: objekte.typ, objektId: { in: [...objekte.ids] } } : {}),
       aktion: { in: AKTIONEN },
       at: { gt: zeit.auditEnde },
     },
@@ -64,10 +78,10 @@ export async function ladeSpaetereEintraege(
       typeof z.detail === 'object' && z.detail !== null && !Array.isArray(z.detail)
         ? (z.detail as Record<string, unknown>)
         : {};
-    je.set(z.objektId, [
-      ...(je.get(z.objektId) ?? []),
-      { aktion: z.aktion, objektId: z.objektId, detail },
-    ]);
+    const eintrag = { aktion: z.aktion, objektId: z.objektId, detail };
+    const bisher = je.get(z.objektId);
+    if (bisher) bisher.push(eintrag);
+    else je.set(z.objektId, [eintrag]);
   }
   return je;
 }
@@ -111,6 +125,57 @@ export function massnahmenZumStand<M extends MassnahmeZeit>(
 // ---------------------------------------------------------------------------
 // Feststellungen
 // ---------------------------------------------------------------------------
+
+interface Wuerdigung {
+  schwere: Klasse;
+  auswirkung: Auswirkung;
+  ursache: string | null;
+}
+
+/** Betroffene Erklärungen tragen kein Erfassungsdatum, ihr Anlage-Audit nennt die ID. */
+export function spaeterErklaerteIds(
+  eintraege: readonly { aktion: string; detail: unknown }[],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const e of eintraege) {
+    if (e.aktion !== 'tcms.feststellung.erklaerung' || !e.detail || typeof e.detail !== 'object')
+      continue;
+    const id = (e.detail as Record<string, unknown>)['erklaerungId'];
+    if (typeof id === 'string') ids.add(id);
+  }
+  return ids;
+}
+
+/** Die erste spätere Änderung nennt den vollständigen Stand vor der Änderung. */
+export function wuerdigungZumStand(f: Wuerdigung, spaeter: readonly SpaeterEintrag[]): Wuerdigung {
+  const vorher = spaeter.find((a) => a.aktion === 'tcms.feststellung.wuerdigung')?.detail['vorher'];
+  if (!vorher || typeof vorher !== 'object') return f;
+  const { schwere, auswirkung, ursache } = vorher as Record<string, unknown>;
+  if (
+    typeof schwere !== 'string' ||
+    !Object.hasOwn(KLASSE_RANG, schwere) ||
+    typeof auswirkung !== 'string' ||
+    !Object.hasOwn(AUSWIRKUNG_LABEL, auswirkung) ||
+    (typeof ursache !== 'string' && ursache !== null)
+  )
+    return f;
+  return { schwere: schwere as Klasse, auswirkung: auswirkung as Auswirkung, ursache };
+}
+
+/** Eine später überschriebene Klärungsentscheidung bleibt für frühere Stichtage sichtbar. */
+export function p153EntscheidungZumStand(
+  f: { p153Entscheidung: Paragraph153Entscheidung | null; p153EntschiedenAm: Date | null },
+  spaeter: readonly SpaeterEintrag[],
+  ende: Date,
+): Paragraph153Entscheidung | null {
+  if (p153EntschiedenAm(f, ende)) return f.p153Entscheidung;
+  const vorher = spaeter.find((a) => a.aktion === 'tcms.feststellung.p153_entschieden')?.detail[
+    'vorher'
+  ];
+  return typeof vorher === 'string' && Object.hasOwn(P153_LABEL, vorher)
+    ? (vorher as Paragraph153Entscheidung)
+    : null;
+}
 
 /**
  * Status einer Feststellung zum Stichtag: der Ausgangsstatus (`von`) des

@@ -1,9 +1,9 @@
 import 'server-only';
-import { tagesbeginn } from '@tcms/domain';
+import { StandSchema } from '@tcms/contract';
+import { kalendertagVon, tagesbeginn, ZEITZONE } from '@tcms/domain';
 import {
   auditGrenze as auditGrenzeAm,
   echteUhr,
-  kalendertag,
   leseStand as leseStandAm,
   tagesende,
   type Uhr,
@@ -21,28 +21,36 @@ export { tagesende };
  * Stichtagsauswertungen konsistent bleiben; Audit-Zeitstempel sind immer echt.
  */
 function demoTag(): Date | null {
-  const v = process.env['TCMS_DEMO_TODAY'];
-  if (!v || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
-  const d = new Date(`${v}T00:00:00Z`);
-  return Number.isNaN(d.getTime()) ? null : d;
+  const tag = StandSchema.safeParse(process.env['TCMS_DEMO_TODAY']);
+  return tag.success ? new Date(`${tag.data}T00:00:00Z`) : null;
 }
 
 export function heute(): Date {
-  const demo = demoTag();
-  if (demo) return demo;
-  return new Date(`${kalendertag(new Date())}T00:00:00Z`);
+  return demoTag() ?? kalendertagVon(new Date());
 }
+
+const uhrzeitFormat = new Intl.DateTimeFormat('en-GB', {
+  timeZone: ZEITZONE,
+  hourCycle: 'h23',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  fractionalSecondDigits: 3,
+});
 
 export function jetzt(): Date {
   const demo = demoTag();
   const n = new Date();
-  if (!demo) return n;
-  // Berliner Uhrzeit auf den Demo-Tag legen: Der Zeitstempel liegt am Demo-Tag
-  // nach deutschem Kalendertag (wie „heute"), auch zwischen 00:00 und 02:00 Uhr.
-  const beginn = tagesbeginn(demo).getTime();
-  const laenge = tagesende(demo).getTime() + 1 - beginn;
-  const msImTag = Math.min(n.getTime() - tagesbeginn(n).getTime(), laenge - 1);
-  return new Date(beginn + msImTag);
+  if (!demo || demo.getTime() === kalendertagVon(n).getTime()) return n;
+  const uhrzeit = uhrzeitFormat.format(n);
+  const msImTag = Date.parse(`1970-01-01T${uhrzeit}Z`);
+  const abBeginn = new Date(tagesbeginn(demo).getTime() + msImTag);
+  if (uhrzeitFormat.format(abBeginn) === uhrzeit) return abBeginn;
+  // Nach einer Zeitumstellung gilt der Versatz am Tagesende. Eine fehlende
+  // Uhrzeit im Frühjahr liegt um die Lücke später, eine doppelte im Herbst
+  // beim ersten Vorkommen (bereits oben getroffen).
+  const abEnde = new Date(tagesende(demo).getTime() + 1 - 86_400_000 + msImTag);
+  return uhrzeitFormat.format(abEnde) === uhrzeit ? abEnde : abBeginn;
 }
 
 export function istDemo(): boolean {

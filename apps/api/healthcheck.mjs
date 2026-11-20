@@ -65,7 +65,19 @@ const anfrage = request(
       } catch {
         ende(1, 'Antwort ist kein JSON');
       }
-      if (body?.ok !== true || body?.daten?.datenbank !== 'ok') ende(1, 'Datenbank nicht ok');
+      const daten = body?.daten;
+      if (
+        body?.ok !== true ||
+        Object.keys(body).length !== 2 ||
+        !daten ||
+        typeof daten.version !== 'string' ||
+        daten.version.length < 1 ||
+        daten.version.length > 100 ||
+        Object.keys(daten).length !== 2
+      ) {
+        ende(1, 'Health-Antwort ungültig');
+      }
+      if (daten.datenbank !== 'ok') ende(1, 'Datenbank nicht ok');
       ende(0);
     });
     antwort.on('error', () => ende(1, 'Antwort abgebrochen'));

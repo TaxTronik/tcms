@@ -905,6 +905,33 @@ describe.skipIf(!AKTIV)('Durchführung: Operationen gegen PostgreSQL', () => {
       expect((await zeile(did)).mandantBestaetigtVon).toBeNull();
     });
 
+    it('Zurückweisung und erneute Einreichung zeigen keine Bestätigung der vorigen Prüfrunde', async () => {
+      const did = await eingereicht('k2');
+      const detail = () => f.dienst(a.bt, (ctx) => ladeDurchfuehrung(ctx, ziel(did)));
+      await f.dienst(a.gv, (ctx) => bestaetigeDurchfuehrung(ctx, ziel(did)));
+      expect(await detail()).toMatchObject({
+        mandantBestaetigtVon: f.p.gv,
+        mandantBestaetigtAm: expect.any(String),
+      });
+      await f.dienst(a.bt, (ctx) =>
+        weiseDurchfuehrungZurueck(ctx, { ...ziel(did), begruendung: BEGRUENDUNG }),
+      );
+      expect(await detail()).toMatchObject({
+        mandantBestaetigtVon: null,
+        mandantBestaetigtAm: null,
+      });
+      await f.dienst(a.ma, (ctx) => reicheEin(ctx, ziel(did)));
+      expect(await detail()).toMatchObject({
+        mandantBestaetigtVon: null,
+        mandantBestaetigtAm: null,
+      });
+      await f.dienst(a.tcb, (ctx) => bestaetigeDurchfuehrung(ctx, ziel(did)));
+      expect(await detail()).toMatchObject({
+        mandantBestaetigtVon: f.p.tcb,
+        mandantBestaetigtAm: expect.any(String),
+      });
+    });
+
     it('Zurückgeben durch die zweite Person; nicht durch die durchführende Person', async () => {
       const did = await eingereicht('k2');
       const e = await fehlerVon(

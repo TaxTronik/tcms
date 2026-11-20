@@ -41,12 +41,30 @@ describe('Stichtag-Helfer (kern/zeit)', () => {
   });
 
   it('leseStand: heute, Zukunft, fehlend oder ungültig → aktueller Stand', () => {
-    for (const v of ['2026-10-16', '2027-01-01', undefined, null, '', '16.10.2026', 'x', []]) {
+    for (const v of [
+      '2026-10-16',
+      '2027-01-01',
+      '2026-02-31',
+      '2025-02-29',
+      undefined,
+      null,
+      '',
+      '16.10.2026',
+      'x',
+      [],
+    ]) {
       expect(leseStand(v as string | undefined, HEUTE)).toEqual({
         stand: HEUTE,
         historisch: false,
       });
     }
+  });
+
+  it('akzeptiert den 29. Februar eines Schaltjahres', () => {
+    expect(leseStand('2024-02-29', HEUTE)).toEqual({
+      stand: tagAlsDatum('2024-02-29'),
+      historisch: true,
+    });
   });
 
   it('auditGrenze: historisch bis Tagesende, aktuell ohne Grenze', () => {

@@ -8,11 +8,15 @@
 // =============================================================================
 
 import { randomUUID } from 'node:crypto';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { FeststellungListenEintrag } from '@tcms/contract';
 import { mitTenant, schreibeAudit, type Tx } from '@tcms/db';
 import { ladeEreignisse } from '../bereiche/feststellungen-ereignisse/ereignisse-lesen';
-import { ladeFeststellungen } from '../bereiche/feststellungen-ereignisse/feststellungen-lesen';
+import {
+  ladeFeststellung,
+  ladeFeststellungen,
+} from '../bereiche/feststellungen-ereignisse/feststellungen-lesen';
+import { ladeLaender } from '../bereiche/feststellungen-ereignisse/laender';
 import { im, kanzlei } from '../bereiche/lesepfade/testhilfen';
 import { ladeKontext, type FeststellungView } from './tcms-kontext';
 
@@ -30,7 +34,16 @@ describe.skipIf(!AKTIV)('Rückrechnung zum Stichtag gegen PostgreSQL', () => {
     bt: true,
     zustaendig: true,
   });
-  const ids = { mitMassnahme: '', verworfen: '', neu: '', abgeschlossen: '', folge: '', spaet: '' };
+  const ids = {
+    mitMassnahme: '',
+    verworfen: '',
+    bewertet: '',
+    geklaert: '',
+    neu: '',
+    abgeschlossen: '',
+    folge: '',
+    spaet: '',
+  };
 
   beforeAll(async () => {
     await mitTenant(tenant, async (tx) => {
@@ -69,6 +82,30 @@ describe.skipIf(!AKTIV)('Rückrechnung zum Stichtag gegen PostgreSQL', () => {
             ...daten,
           },
         });
+      // Zwei Audit-Tage für denselben Vorgang. Nur die Systemuhr für das
+      // erste Test-Audit ersetzen, die Datenbankverbindung nutzt echte Timer.
+      const geklaert = await feststellung('F-2026-004', {
+        p153Entscheidung: 'KEINE_PFLICHT',
+        p153EntschiedenAm: tag('2026-10-16'),
+        p153EntschiedenVon: person,
+        p153Begruendung: 'Belege vollständig',
+        status: 'IN_WUERDIGUNG',
+      });
+      vi.useFakeTimers({ toFake: ['Date'], now: tag('2026-10-10') });
+      try {
+        await audit('tcms.feststellung.p153_entschieden', 'Feststellung', geklaert.id, {
+          entscheidung: 'WEITERE_KLAERUNG',
+          begruendung: 'Belege fehlen',
+          frist: '2026-10-16',
+          vorher: null,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+      await audit('tcms.feststellung.p153_entschieden', 'Feststellung', geklaert.id, {
+        entscheidung: 'KEINE_PFLICHT',
+        vorher: 'WEITERE_KLAERUNG',
+      });
       // Maßnahme erst nach dem Stichtag angelegt (offen, mit Frist).
       const f1 = await feststellung('F-2026-001', { status: 'MASSNAHMEN_OFFEN' });
       await tx.massnahme.create({
@@ -92,6 +129,28 @@ describe.skipIf(!AKTIV)('Rückrechnung zum Stichtag gegen PostgreSQL', () => {
         von: 'IN_WUERDIGUNG',
         nach: 'VERWORFEN',
       });
+      const bewertet = await feststellung('F-2026-003', {
+        schwere: 'GERING',
+        auswirkung: 'NEIN',
+        ursache: 'Entkräftet',
+      });
+      await audit('tcms.feststellung.wuerdigung', 'Feststellung', bewertet.id, {
+        vorher: { schwere: 'HOCH', auswirkung: 'UNKLAR', ursache: 'Prüfung offen' },
+        nachher: { schwere: 'GERING', auswirkung: 'NEIN', ursache: 'Entkräftet' },
+      });
+      for (const [feststellungId, land] of [
+        [bewertet.id, 'FR'],
+        [f2.id, 'FR'],
+        [bewertet.id, 'AT'],
+      ] as const) {
+        const x = await tx.betroffeneErklaerung.create({
+          data: { feststellungId, land, steuerart: 'USt', zeitraum: '2026' },
+        });
+        if (land === 'AT')
+          await audit('tcms.feststellung.erklaerung', 'Feststellung', feststellungId, {
+            erklaerungId: x.id,
+          });
+      }
       const ereignis = (nummer: string, daten: Record<string, unknown>) =>
         tx.ereignis.create({
           data: {
@@ -145,6 +204,8 @@ describe.skipIf(!AKTIV)('Rückrechnung zum Stichtag gegen PostgreSQL', () => {
       Object.assign(ids, {
         mitMassnahme: f1.id,
         verworfen: f2.id,
+        bewertet: bewertet.id,
+        geklaert: geklaert.id,
         neu: e1.id,
         abgeschlossen: e2.id,
         folge: folge.id,
@@ -157,6 +218,66 @@ describe.skipIf(!AKTIV)('Rückrechnung zum Stichtag gegen PostgreSQL', () => {
     im(a, (ctx) => ladeKontext(ctx, { mandantId, ...(stand ? { stand } : {}) }));
   const lesbar = (liste: { id: string }[], id: string) =>
     liste.find((f) => f.id === id) as FeststellungView;
+
+  it('behält eine frühere §-153-Klärung in Liste, Detail und Kontext nach einer Folgeentscheidung', async () => {
+    const erwartung = {
+      entscheidung: 'WEITERE_KLAERUNG',
+      begruendung: 'Belege fehlen',
+      frist: '2026-10-16',
+      von: person,
+      am: tag('2026-10-10').toISOString(),
+    };
+    const liste = await im(a, (ctx) => ladeFeststellungen(ctx, { mandantId, stand: STAND }));
+    expect(liste.feststellungen.find((f) => f.id === ids.geklaert)).toMatchObject({
+      p153: erwartung,
+      p153Offen: true,
+    });
+    const detail = await im(a, (ctx) =>
+      ladeFeststellung(ctx, { mandantId, feststellungId: ids.geklaert, stand: STAND }),
+    );
+    expect(detail).toMatchObject({ p153: erwartung });
+    expect(lesbar((await kontext(STAND)).feststellungen, ids.geklaert)).toMatchObject({
+      p153Entscheidung: 'WEITERE_KLAERUNG',
+      p153Offen: true,
+    });
+    expect(lesbar((await kontext()).feststellungen, ids.geklaert)).toMatchObject({
+      p153Entscheidung: 'KEINE_PFLICHT',
+      p153Offen: false,
+    });
+  });
+
+  it('hält die frühere Würdigung und den damaligen Länderbezug in Kontext, Liste, Detail und Länder-Monitor fest', async () => {
+    const f = { schwere: 'HOCH', auswirkung: 'UNKLAR', p153Offen: true };
+    expect(lesbar((await kontext(STAND)).feststellungen, ids.bewertet)).toMatchObject(f);
+    const liste = await im(a, (ctx) => ladeFeststellungen(ctx, { mandantId, stand: STAND }));
+    expect(liste.feststellungen.find((x) => x.id === ids.bewertet)).toMatchObject(f);
+    const detail = await im(a, (ctx) =>
+      ladeFeststellung(ctx, { mandantId, feststellungId: ids.bewertet, stand: STAND }),
+    );
+    expect(detail).toMatchObject({
+      schwere: 'HOCH',
+      auswirkung: 'UNKLAR',
+      ursache: 'Prüfung offen',
+      erklaerungen: [{ land: 'FR' }],
+    });
+    const laender = await im(a, (ctx) => ladeLaender(ctx, { mandantId, stand: STAND }));
+    expect(laender.feststellungen).toEqual([
+      {
+        land: 'FR',
+        eintraege: [
+          expect.objectContaining({ id: ids.bewertet, p153Offen: true }),
+          expect.objectContaining({ id: ids.verworfen, status: 'IN_WUERDIGUNG', p153Offen: true }),
+        ],
+      },
+    ]);
+    const heute = await im(a, (ctx) => ladeLaender(ctx, { mandantId }));
+    expect(heute.feststellungen.map((l) => l.land).sort()).toEqual(['AT', 'FR']);
+    expect(lesbar((await kontext()).feststellungen, ids.bewertet)).toMatchObject({
+      schwere: 'GERING',
+      auswirkung: 'NEIN',
+      p153Offen: false,
+    });
+  });
 
   it('Maßnahmen: später angelegte fehlen in Kontext und Liste, auch in den Kennzahlen', async () => {
     const k = await kontext(STAND);

@@ -99,6 +99,24 @@ describe('simuliere-image.sh: Wahl der Datenbank', () => {
     // Neun bash-Starts; unter Windows (Git Bash) je rund 0,5 s, unter Last mehr.
   }, 60_000);
 
+  it('räumt nach fehlgeschlagener Anlage keine fremde Datenbank auf', () => {
+    const r = harness(
+      `sim_su_psql() { echo "psql: $*"; return 1; }
+       sim_migrate() { echo 'unerwartete Migration'; }
+       if sim_db_anlegen; then exit 1; fi
+       sim_db_entfernen`,
+      {
+        TCMS_SIM_PGHOST: 'localhost',
+        TCMS_SIM_PGPORT: '5432',
+        TCMS_SIM_PASSWOERTER_DANACH: 'entwicklung',
+      },
+    );
+    expect(r.ausgabe).toContain('CREATE DATABASE');
+    expect(r.ausgabe).not.toContain('DROP DATABASE');
+    expect(r.ausgabe).not.toContain('unerwartete Migration');
+    expect(r.code).toBe(0);
+  });
+
   it('kodiert das Superuser-Passwort für tcms-migrate vollständig (nur Builtins)', () => {
     const r = harness('sim_kodiere "$X"', { X: 'a:b@c/d%e f?g#h' });
     expect(r.ausgabe).toBe('a%3Ab%40c%2Fd%25e%20f%3Fg%23h');
@@ -164,13 +182,15 @@ describe.skipIf(!DB_AKTIV)('simuliere-image.sh: eigene Datenbank (Test-Cluster)'
     mkdirSync(bin, { recursive: true });
     writeFileSync(join(bin, 'pnpm'), '#!/bin/sh\nexit 3\n');
     chmodSync(join(bin, 'pnpm'), 0o755);
-    const arbeit = join(tmp, 'fehlschlag');
+    const arbeit = 'fehlschlag';
     const r = spawnSync('bash', [SKRIPT, arbeit], {
+      cwd: tmp,
       encoding: 'utf8',
       env: { PATH: `${bin}:${PFAD}`, HOME: tmp, ...env },
     });
     const ausgabe = `${r.stdout}${r.stderr}`;
     expect(r.status).not.toBe(0);
+    expect(ausgabe).toContain(`Dateien nach ${join(tmp, arbeit, 'kontext')}`);
     expect(ausgabe).not.toMatch(EINMALPASSWORT);
     const db = /Datenbank (tcms_sim_[0-9a-f]{12}) auf/.exec(ausgabe)?.[1];
     expect(db, ausgabe).toBeDefined();

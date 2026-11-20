@@ -5,8 +5,8 @@
 //
 //   node scripts/pruefe-dockerfile.mjs
 //
-// Regeln: Basisimages nur über ARG mit Digest (dieselben wie die
-// kanzleikonsole; je Basis genau eine globale Deklaration vor dem ersten FROM),
+// Regeln: Basisimages nur über ARG mit Digest (je Basis genau eine globale
+// Deklaration vor dem ersten FROM),
 // keine Parser-Direktive (`# syntax=`, `# escape=`, `# check=`), kein ADD,
 // kein Heredoc, kein `latest`; `--from=` (COPY, RUN --mount) nur aus einem
 // zuvor definierten Stage, nie aus einem Image; Ziele `api` und `migrate`;
@@ -28,9 +28,9 @@ import { kontextDateien, WURZEL } from './docker-kontext.mjs';
 
 export const BASIS = {
   NODE_IMAGE:
-    'node:24-alpine3.23@sha256:0468540aa58203ff9e40c2aab3907c52644ab818af6176b1c70a026137dc92a2',
+    'node:24-alpine3.23@sha256:3946fb783fdce8a2812136ea694bc95c698c4f4096f3fd18568dc27a8ac389dc',
   POSTGRES_IMAGE:
-    'postgres:18-alpine@sha256:96d56f7f57c6aacd1fcb908bc83b345ec5f83231ee486dd66a1baadce274db88',
+    'postgres:18-alpine@sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff',
 };
 
 /** Pflichtdateien im Kontext (der Build braucht sie). */

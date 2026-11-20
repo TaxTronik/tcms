@@ -443,7 +443,7 @@ const beschreibungSicht = z
 
 const prueflastSicht = z
   .object({
-    monat: z.string().regex(/^\d{4}-\d{2}$/),
+    monat: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
     FP: z.number().int(),
     FF: z.number().int(),
     IN: z.number().int(),

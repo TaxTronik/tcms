@@ -718,6 +718,9 @@ Variable `REGISTRY`, Secrets `REGISTRY_USER` und `REGISTRY_TOKEN`.
 Dateien eines vendorten Pakets müssen normale Dateien sein (Modus 100644). Das gilt im ganzen
 Repository außer für die drei direkt gestarteten Shell-Skripte (`repo-dateimodus.test.ts`, AGENTS.md).
 
+Die Ergebnisse der technischen und fachlichen Prüfung vom 20. November 2026 stehen im
+[Prüfbericht](docs/Pruefbericht-2026-11-20.md).
+
 ## Grenzen dieses Stands
 
 - **Anmeldung:** Die Demo-Oberfläche kennt nur die Personenauswahl (nie in Produktion). Im

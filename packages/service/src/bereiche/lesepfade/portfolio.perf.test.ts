@@ -16,8 +16,9 @@
 
 import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
-import { mitTenant } from '@tcms/db';
+import { mitTenant, Prisma } from '@tcms/db';
 import { DEMO_IDS, DEMO_TENANT_ID } from '@tcms/db/demo';
+import { versionAnlegen } from '../../../../db/seeds/beschreibung';
 import { ladeArbeitskorb } from './arbeitskorb';
 import { ladePortfolio } from './portfolio';
 import { im, kanzlei } from './testhilfen';
@@ -44,7 +45,6 @@ const TABELLEN = [
   'Ereignis',
   'EreignisFolge',
   'LandStand',
-  'BeschreibungVersion',
 ];
 
 /** Feste SQL ohne Eingaben: klont das Programm von `quelle` für n = von..bis (nur Testdaten). */
@@ -101,11 +101,30 @@ describe.skipIf(!AKTIV)(`Portfolio und Arbeitskorb mit ${ANZAHL} Mandanten`, () 
     'bleibt unter 25 s je Anfrage',
     async () => {
       const vorhanden = await mitTenant(DEMO_TENANT_ID, (tx) => tx.mandant.count());
+      const versionen = await mitTenant(DEMO_TENANT_ID, (tx) =>
+        tx.beschreibungVersion.findMany({
+          where: { programm: { mandantId: DEMO_IDS.talwind } },
+          orderBy: { id: 'asc' },
+        }),
+      );
       for (let von = vorhanden + 1; von <= ANZAHL; von += 25) {
         const bis = Math.min(ANZAHL, von + 24);
         await mitTenant(
           DEMO_TENANT_ID,
-          (tx) => tx.$executeRawUnsafe(klonSql(DEMO_IDS.talwind, von, bis)),
+          async (tx) => {
+            await tx.$executeRawUnsafe(klonSql(DEMO_IDS.talwind, von, bis));
+            for (let n = von; n <= bis; n++) {
+              for (const v of versionen) {
+                await versionAnlegen(tx, {
+                  ...v,
+                  id: `${v.id}_p${n}`,
+                  programmId: `${v.programmId}_p${n}`,
+                  abschnitte: v.abschnitte ?? Prisma.JsonNull,
+                  snapshot: v.snapshot ?? Prisma.DbNull,
+                });
+              }
+            }
+          },
           {
             timeoutMs: 600_000,
           },

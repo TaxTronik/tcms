@@ -14,6 +14,7 @@ import {
 } from '@tcms/contract';
 import type { DienstKontext } from '../../kontext';
 import { ladeKontext } from '../../kern/tcms-kontext';
+import { aktualisiereWuerdigung } from '../feststellungen-ereignisse/feststellungen';
 import {
   ladeDurchfuehrung,
   ladeKontrollaufgabe,
@@ -132,6 +133,47 @@ describe.skipIf(!AKTIV)('Durchführung: Lader gegen PostgreSQL', () => {
       expect(d.rechte.gegenzeichnen.erlaubt).toBe(false);
       expect(d.historisch).toBe(false);
       expect(d.stand).toBe('2026-10-16');
+    });
+
+    it('zeigt verknüpfte Feststellungen mit der Schwere zum Stichtag', async () => {
+      const did = await f.durchfuehrung('k1');
+      const feststellung = await f.tx((tx) =>
+        tx.feststellung.create({
+          data: {
+            programmId: f.programm,
+            durchfuehrungId: did,
+            nummer: 'F-2026-0999',
+            titel: 'Verknüpfte Feststellung',
+            sachverhalt: 'Beleg zunächst ungeklärt',
+            quelle: 'KONTROLLE',
+            quelleText: 'Kontrolle',
+            klasse: 'HINWEIS',
+            schwere: 'HOCH',
+            auswirkung: 'UNKLAR',
+            erfasstVon: f.p.bt,
+            erfasstAm: new Date('2026-10-01T10:00:00Z'),
+          },
+        }),
+      );
+      await f.dienst(a.bt, (ctx) =>
+        aktualisiereWuerdigung(ctx, {
+          mandantId: f.mandant,
+          feststellungId: feststellung.id,
+          schwere: 'GERING',
+          auswirkung: 'NEIN',
+          ursache: 'Beleg eingegangen',
+        }),
+      );
+      const lesen = (stand?: string) =>
+        f.dienst(a.bt, (ctx) =>
+          ladeDurchfuehrung(ctx, { ...ziel(did), ...(stand ? { stand } : {}) }),
+        );
+      expect((await lesen('2026-10-15')).feststellungen).toEqual([
+        expect.objectContaining({ id: feststellung.id, schwere: 'HOCH' }),
+      ]);
+      expect((await lesen()).feststellungen).toEqual([
+        expect.objectContaining({ id: feststellung.id, schwere: 'GERING' }),
+      ]);
     });
 
     it('Rechte als Flags je Akteur (Vier-Augen sichtbar mit Grund)', async () => {

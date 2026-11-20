@@ -11,6 +11,14 @@ const EUR_GANZ = new Intl.NumberFormat('de-DE', {
   maximumFractionDigits: 0,
 });
 const ZAHL = new Intl.NumberFormat('de-DE');
+const DATUM_ZEIT = new Intl.DateTimeFormat('de-DE', {
+  timeZone: ZEITZONE,
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+});
 
 export function fmtEur(n: number | null | undefined): string {
   return n == null ? '—' : EUR.format(n);
@@ -42,15 +50,7 @@ export function fmtDatumKurz(d: Date | null | undefined): string {
 
 /** Zeitstempel in Europe/Berlin. */
 export function fmtDatumZeit(d: Date | null | undefined): string {
-  if (!d) return '—';
-  return new Intl.DateTimeFormat('de-DE', {
-    timeZone: ZEITZONE,
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(d);
+  return d ? DATUM_ZEIT.format(d) : '—';
 }
 
 export function fmtMonatJahr(seit: string | null | undefined): string {

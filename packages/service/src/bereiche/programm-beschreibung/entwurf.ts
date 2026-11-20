@@ -15,16 +15,18 @@ import {
   pruefeProfil,
   schlageRisikenVor,
   TEILBEREICH_VORLAGE,
+  utc,
   ZIEL_VORLAGEN,
 } from '@tcms/domain';
 import { leseProfil } from '../../kern/profil';
+import { leseKalendertag } from '../../kern/zeit';
 
 // ---------------------------------------------------------------------------
 // Startwerte
 // ---------------------------------------------------------------------------
 
 function letzterTagDesMonats(jahr: number, monat0: number): Date {
-  return new Date(Date.UTC(jahr, monat0 + 1, 0));
+  return utc(jahr, monat0 + 2, 0);
 }
 
 /** Vorschlag: Angemessenheit zum Ende des übernächsten Monats, danach sechs Monate Wirksamkeit. */
@@ -119,12 +121,6 @@ export function leseEntwurf(roh: unknown, heute: Date, gvId: string | null): Set
 // Prüfungen je Schritt (Kontrollen: siehe aufbau.ts)
 // ---------------------------------------------------------------------------
 
-function tag(iso: string): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
-  const d = new Date(`${iso}T00:00:00Z`);
-  return Number.isNaN(d.getTime()) || isoDatum(d) !== iso ? null : d;
-}
-
 /**
  * Erster Tag nach sechs vollen Monaten ab `ab` minus ein Tag (z. B. 01.01. → 30.06.,
  * 31.03. → 30.09.). Hat der Zielmonat den Tag nicht (31.08. → Februar), endet der
@@ -133,7 +129,7 @@ function tag(iso: string): Date | null {
 export function mindestEnde(ab: Date): Date {
   const j = ab.getUTCFullYear();
   const m = ab.getUTCMonth() + 6;
-  const roh = addTage(new Date(Date.UTC(j, m, ab.getUTCDate())), -1);
+  const roh = addTage(utc(j, m + 1, ab.getUTCDate()), -1);
   const monatsende = letzterTagDesMonats(j, m);
   return roh.getTime() < monatsende.getTime() ? roh : monatsende;
 }
@@ -144,9 +140,9 @@ export function pruefeSchritt1(e: SetupEntwurf, heute: Date): string[] {
     f.push(
       'Abgrenzungstext: mindestens 30 Zeichen – er erscheint in der CMS-Beschreibung (Abschnitt 0).',
     );
-  const stichtag = tag(e.zeitraum.angemessenheitStichtag);
-  const ab = tag(e.zeitraum.wirksamAb);
-  const bis = tag(e.zeitraum.wirksamBis);
+  const stichtag = leseKalendertag(e.zeitraum.angemessenheitStichtag);
+  const ab = leseKalendertag(e.zeitraum.wirksamAb);
+  const bis = leseKalendertag(e.zeitraum.wirksamBis);
   if (!stichtag) f.push('Angemessenheits-Stichtag angeben.');
   else if (stichtag.getTime() < heute.getTime())
     f.push('Der Angemessenheits-Stichtag darf nicht in der Vergangenheit liegen.');

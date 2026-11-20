@@ -19,6 +19,7 @@ const TAG_MS = 86_400_000;
 const wanduhrFormat = new Intl.DateTimeFormat('en-US', {
   timeZone: ZEITZONE,
   hourCycle: 'h23',
+  era: 'short',
   year: 'numeric',
   month: 'numeric',
   day: 'numeric',
@@ -30,10 +31,17 @@ const wanduhrFormat = new Intl.DateTimeFormat('en-US', {
 /** Berliner Wanduhrzeit eines Zeitpunkts als UTC-Millisekunden (sekundengenau). */
 function wanduhr(ms: number): number {
   const t: Partial<Record<Intl.DateTimeFormatPartTypes, number>> = {};
+  let vorZeitrechnung = false;
   for (const p of wanduhrFormat.formatToParts(new Date(ms))) {
-    if (p.type !== 'literal') t[p.type] = Number(p.value);
+    if (p.type === 'era') vorZeitrechnung = p.value === 'BC';
+    else if (p.type !== 'literal') t[p.type] = Number(p.value);
   }
-  return Date.UTC(t.year!, t.month! - 1, t.day!, t.hour!, t.minute!, t.second!);
+  const jahr = vorZeitrechnung ? 1 - t.year! : t.year!;
+  if (jahr >= 100) return Date.UTC(jahr, t.month! - 1, t.day!, t.hour!, t.minute!, t.second!);
+  // Date.UTC addiert bei Jahren von 0 bis 99 stillschweigend 1900.
+  const d = new Date(0);
+  d.setUTCFullYear(jahr, t.month! - 1, t.day!);
+  return d.setUTCHours(t.hour!, t.minute!, t.second!, 0);
 }
 
 /** Abstand der Berliner Wanduhr zu UTC in Millisekunden (+1 h bzw. +2 h). */

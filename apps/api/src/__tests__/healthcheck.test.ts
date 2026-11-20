@@ -77,6 +77,16 @@ describe('healthcheck.mjs', () => {
     ['500', json(500, { ok: false, fehler: { code: 'INTERN' } })],
     ['kein JSON', (_q, res) => res.end('ok')],
     ['Umschlag ok: false', json(200, { ok: false, daten: { datenbank: 'ok' } })],
+    ['Version fehlt', json(200, { ok: true, daten: { datenbank: 'ok' } })],
+    ['Version fehlt inhaltlich', json(200, { ok: true, daten: { version: '', datenbank: 'ok' } })],
+    [
+      'Zusatzfeld im Umschlag',
+      json(200, { ok: true, daten: { version: '1', datenbank: 'ok' }, extra: true }),
+    ],
+    [
+      'Zusatzfeld in den Daten',
+      json(200, { ok: true, daten: { version: '1', datenbank: 'ok', extra: true } }),
+    ],
     ['zu große Antwort', (_q, res) => res.end('x'.repeat(200 * 1024))],
   ];
   for (const [name, antwort] of faelle) {

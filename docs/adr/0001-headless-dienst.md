@@ -504,8 +504,8 @@ Token- und Schlüsselrotation mit Überlappung, ein Vertragstest gegen den echte
 Dienst.
 
 Produktions-Images (RT-04, Advisories in Werkzeugen; Betriebsschnittstelle
-Stufe 2). Ein `Dockerfile` mit zwei Zielen, Basisimages per Digest gepinnt
-(dieselben wie in der kanzleikonsole), ohne Parser-Direktive (`# syntax=`,
+Stufe 2). Ein `Dockerfile` mit zwei Zielen, eigene Basisimage-Digests
+für das Tax-CMS, ohne Parser-Direktive (`# syntax=`,
 `# escape=`, `# check=`). `pnpm image:pruefen` verlangt je Basisimage genau eine
 globale `ARG` mit dem gepinnten Wert und lässt `--from=` (COPY, `RUN --mount`)
 nur aus einem früheren Stage zu; die Regeln gegen Werkzeuge und Downloads in

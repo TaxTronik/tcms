@@ -29,6 +29,7 @@ import {
   pruflast,
   schlageRisikenVor,
   ueber,
+  utc,
   type BruttoErgebnis,
   type FrequenzAbleitung,
   type KatalogKontrolle,
@@ -41,6 +42,7 @@ import {
 } from '@tcms/domain';
 import type { EntwurfKontrolle, SetupEntwurf } from '@tcms/contract';
 import type { Protokoll } from '../../audit';
+import { leseKalendertag } from '../../kern/zeit';
 import {
   geplanteDurchfuehrung,
   kontrollStandDaten,
@@ -182,12 +184,6 @@ export interface AufbauPlan {
   durchfuehrungen: number;
 }
 
-function isoTag(s: string): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
-  const d = new Date(`${s}T00:00:00Z`);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
 export function appetitAusZielen(
   ziele: readonly { risikoappetit: Klasse; aktiv?: boolean }[],
 ): Klasse {
@@ -197,7 +193,7 @@ export function appetitAusZielen(
 }
 
 function monatePlus(d: Date, n: number): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, 1));
+  return utc(d.getUTCFullYear(), d.getUTCMonth() + n + 1, 1);
 }
 
 export function berechnePlan(e: SetupEntwurf, u: AufbauUmfeld): AufbauPlan {
@@ -226,9 +222,9 @@ export function berechnePlan(e: SetupEntwurf, u: AufbauUmfeld): AufbauPlan {
       .filter((x) => x.uebernehmen)
       .map((x) => [x.code, { code: x.code, gt: x.kat.gt, brutto: x.brutto.klasse }]),
   );
-  const stichtag = isoTag(e.zeitraum.angemessenheitStichtag);
-  const ab = isoTag(e.zeitraum.wirksamAb);
-  const bis = isoTag(e.zeitraum.wirksamBis);
+  const stichtag = leseKalendertag(e.zeitraum.angemessenheitStichtag);
+  const ab = leseKalendertag(e.zeitraum.wirksamAb);
+  const bis = leseKalendertag(e.zeitraum.wirksamBis);
   const zeitraum =
     stichtag && ab && bis && bis.getTime() > ab.getTime() ? { stichtag, ab, bis } : null;
   const turnus = e.zeitraum.erklaerungsTurnus as Turnus;

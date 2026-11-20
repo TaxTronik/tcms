@@ -126,15 +126,18 @@ sim_migrate() {
 
 # Legt SIM_DB an und baut sie mit tcms-migrate auf; setzt SIM_DB_URL (tcms_app).
 sim_db_anlegen() {
-  SIM_DB="tcms_sim_$(sim_zufall 6 hex)"
-  [[ $SIM_DB =~ ^tcms_sim_[0-9a-f]{12}$ ]] || return 70
+  local name
+  name="tcms_sim_$(sim_zufall 6 hex)"
+  [[ $name =~ ^tcms_sim_[0-9a-f]{12}$ ]] || return 70
   SIM_OWNER_PW=$(sim_zufall)
   SIM_APP_PW=$(sim_zufall)
   if [[ ${#SIM_OWNER_PW} -ne 43 || ${#SIM_APP_PW} -ne 43 || $SIM_OWNER_PW == "$SIM_APP_PW" ]]; then
     return 70
   fi
-  printf 'Datenbank %s auf %s:%s\n' "$SIM_DB" "$TCMS_SIM_PGHOST" "$TCMS_SIM_PGPORT"
-  sim_su_psql -c "CREATE DATABASE \"$SIM_DB\"" || return
+  printf 'Datenbank %s auf %s:%s\n' "$name" "$TCMS_SIM_PGHOST" "$TCMS_SIM_PGPORT"
+  sim_su_psql -c "CREATE DATABASE \"$name\"" || return
+  # Erst die bestätigte Anlage macht diese Datenbank zum Ziel der Bereinigung.
+  SIM_DB=$name
   sim_migrate "$SIM_OWNER_PW" "$SIM_APP_PW" || return
   SIM_DB_URL="postgresql://tcms_app:${SIM_APP_PW}@${TCMS_SIM_PGHOST}:${TCMS_SIM_PGPORT}/${SIM_DB}"
 }

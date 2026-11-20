@@ -93,7 +93,7 @@ export default async function Kontrollaufgabe({
   if (!d || !d.vorhandenZumStand) notFound();
 
   const r = d.rechte;
-  const felder = { id: d.id, stand: historisch ? (sp['stand']?.toString() ?? '') : '' };
+  const felder = { id: d.id, stand: historisch ? isoDatum(stand) : '' };
   const gzm = d.kontrolle.gegenzeichnungMandant;
   const bearbeitbar = r.bearbeiten.erlaubt;
   // Im historischen Stand gilt der Status zum Stichtag; vor Beginn keine Inhalte.

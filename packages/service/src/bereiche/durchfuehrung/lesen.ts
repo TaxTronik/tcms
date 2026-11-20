@@ -32,6 +32,11 @@ import {
 } from '@tcms/contract';
 import { addTage, fmtDatum, isoDatum, statusAm, type AnzeigeStatus } from '@tcms/domain';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
+import {
+  feststellungsStatusZumStand,
+  ladeSpaetereEintraege,
+  wuerdigungZumStand,
+} from '../../kern/rueckrechnung';
 import type { DienstKontext } from '../../kontext';
 import { beteiligteVon, gleicheId, kannVertraulichLesen } from '../../rechte';
 import { zustaendigkeitsStand } from '../../kern/zustaendigkeit';
@@ -191,7 +196,16 @@ async function gemeinsam(
   const grenze = auditGrenze(stand, heute).getTime();
   const imStand = audit.filter((e) => e.at.getTime() <= grenze);
   const letztes = (aktion: string) => imStand.find((e) => e.aktion === aktion) ?? null;
-  const bestaetigt = letztes('tcms.durchfuehrung.mandant_bestaetigt');
+  // Einreichung und Zurückweisung setzen die Mandantenbestätigung zurück.
+  // Nur eine Bestätigung aus der zum Stichtag laufenden Prüfrunde anzeigen.
+  const pruefschritt = imStand.find(
+    (e) =>
+      e.aktion === 'tcms.durchfuehrung.mandant_bestaetigt' ||
+      e.aktion === 'tcms.durchfuehrung.eingereicht' ||
+      e.aktion === 'tcms.durchfuehrung.zurueckgewiesen',
+  );
+  const bestaetigt =
+    pruefschritt?.aktion === 'tcms.durchfuehrung.mandant_bestaetigt' ? pruefschritt : null;
   const zurueck = letztes('tcms.durchfuehrung.zurueckgewiesen');
 
   // Inhalte nur, wenn die Durchführung zum Stichtag begonnen war (zuletzt
@@ -260,7 +274,7 @@ async function gemeinsam(
     durchgefuehrtVon,
     begonnenAm: isoN(historisch ? vorStand(d.begonnenAm, ende) : d.begonnenAm),
     eingereichtAm: isoN(historisch ? vorStand(d.eingereichtAm, ende) : d.eingereichtAm),
-    mandantBestaetigtVon: bestaetigt || !historisch ? d.mandantBestaetigtVon : null,
+    mandantBestaetigtVon: historisch ? (bestaetigt?.actorId ?? null) : d.mandantBestaetigtVon,
     mandantBestaetigtAm: isoN(bestaetigt?.at),
     gegengezeichnetVon:
       historisch && !vorStand(d.abgeschlossenAm, ende) ? null : d.gegengezeichnetVon,
@@ -417,14 +431,16 @@ export async function ladeDurchfuehrung(
 
   // Nacheinander: eine Transaktion, eine Verbindung.
   const feststellungenRoh = await ctx.tx.feststellung.findMany({
-    where: { durchfuehrungId: d.id },
+    where: { durchfuehrungId: d.id, erfasstAm: { lte: g.ende } },
     select: {
       id: true,
       nummer: true,
       titel: true,
       status: true,
       schwere: true,
-      erfasstAm: true,
+      auswirkung: true,
+      ursache: true,
+      geschlossenAm: true,
       vertraulich: true,
       erfasstVon: true,
       p153EntschiedenVon: true,
@@ -463,23 +479,31 @@ export async function ladeDurchfuehrung(
     anzeige: statusAm(x, stand) as AnzeigeStatus,
   });
 
-  const feststellungen = feststellungenRoh
-    .filter((f) => f.erfasstAm.getTime() <= g.ende.getTime())
-    .map((f): DurchfuehrungDetail['feststellungen'][number] => {
+  const spaetereFeststellungen = await ladeSpaetereEintraege(
+    ctx.tx,
+    [lage.programmId],
+    { historisch, auditEnde: auditGrenze(stand, heute) },
+    { typ: 'Feststellung', ids: feststellungenRoh.map((f) => f.id) },
+  );
+  const feststellungen = feststellungenRoh.map(
+    (f): DurchfuehrungDetail['feststellungen'][number] => {
+      const nachStand = spaetereFeststellungen.get(f.id) ?? [];
+      const status = feststellungsStatusZumStand(f, nachStand, g.ende);
       if (f.vertraulich && !kannVertraulichLesen(ctx.akteur, lage.mandantId, beteiligteVon(f))) {
         // Positivliste wie im dedizierten Lesepfad (Fachkonzept §13, RT-01).
-        return { maskiert: true, id: f.id, nummer: f.nummer, status: f.status, vertraulich: true };
+        return { maskiert: true, id: f.id, nummer: f.nummer, status, vertraulich: true };
       }
       return {
         maskiert: false,
         id: f.id,
         nummer: f.nummer,
         titel: f.titel,
-        status: f.status,
-        schwere: f.schwere,
+        status,
+        schwere: wuerdigungZumStand(f, nachStand).schwere,
         vertraulich: f.vertraulich,
       };
-    });
+    },
+  );
 
   const risiken = risikoLinks
     .filter((rk) => rk.risiko.entscheidung === 'UEBERNOMMEN')

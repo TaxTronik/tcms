@@ -36,7 +36,8 @@ import {
   massnahmeErledigtAm,
   massnahmenZumStand,
   p153EntschiedenAm,
-  p153OffenAm,
+  spaeterErklaerteIds,
+  wuerdigungZumStand,
 } from '../../kern/rueckrechnung';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from '../../kern/zeit';
 import type { DienstKontext } from '../../kontext';
@@ -95,6 +96,40 @@ function stichtag(ctx: DienstKontext, stand: string | undefined) {
 // Liste
 // ---------------------------------------------------------------------------
 
+type P153Stand = NonNullable<Extract<FeststellungListenEintrag, { maskiert: false }>['p153']>;
+
+/** Gemeinsame Darstellung der gültigen Entscheidung für Liste und Detail. */
+function p153ZumStand(
+  f: {
+    p153Entscheidung: Paragraph153Entscheidung | null;
+    p153Begruendung: string | null;
+    p153Frist: Date | null;
+    p153EntschiedenVon: string | null;
+    p153EntschiedenAm: Date | null;
+  },
+  ende: Date,
+  frueher?: { detail: unknown; actorId: string | null; at: Date },
+): P153Stand | null {
+  if (f.p153Entscheidung && f.p153EntschiedenAm && p153EntschiedenAm(f, ende))
+    return {
+      entscheidung: f.p153Entscheidung,
+      begruendung: f.p153Begruendung,
+      frist: isoTagOderNull(f.p153Frist),
+      von: f.p153EntschiedenVon,
+      am: isoZeit(f.p153EntschiedenAm),
+    };
+  if (!frueher || !frueher.detail || typeof frueher.detail !== 'object') return null;
+  const { entscheidung, begruendung, frist } = frueher.detail as Record<string, unknown>;
+  if (typeof entscheidung !== 'string' || !Object.hasOwn(P153_LABEL, entscheidung)) return null;
+  return {
+    entscheidung: entscheidung as Paragraph153Entscheidung,
+    begruendung: typeof begruendung === 'string' ? begruendung : null,
+    frist: typeof frist === 'string' ? frist : null,
+    von: frueher.actorId,
+    am: isoZeit(frueher.at),
+  };
+}
+
 /** Feststellungen eines Mandanten zum Stichtag, vertrauliche für Nicht-Beteiligte maskiert. */
 export async function ladeFeststellungen(
   ctx: DienstKontext,
@@ -123,6 +158,27 @@ export async function ladeFeststellungen(
     orderBy: [{ nummer: 'asc' }, { id: 'asc' }],
   });
   const personen: (string | null)[] = [];
+  // Folgeentscheidungen überschreiben die Zeile. Nur für diese historischen
+  // Fälle die jüngste belegte Entscheidung bis zum Stichtag gesammelt lesen.
+  const ueberschrieben = historisch
+    ? roh
+        .filter((f) => f.erfasstAm <= ende && f.p153EntschiedenAm && f.p153EntschiedenAm > ende)
+        .map((f) => f.id)
+    : [];
+  const fruehere = ueberschrieben.length
+    ? await ctx.tx.auditEvent.findMany({
+        where: {
+          programmId: programm.id,
+          objektTyp: 'Feststellung',
+          objektId: { in: ueberschrieben },
+          aktion: 'tcms.feststellung.p153_entschieden',
+          at: { lte: auditGrenze(stand, heute) },
+        },
+        select: { objektId: true, at: true, actorId: true, detail: true },
+        orderBy: { pos: 'asc' },
+      })
+    : [];
+  const frueherJe = new Map(fruehere.map((a) => [a.objektId, a]));
   const feststellungen: FeststellungListenEintrag[] = roh
     .filter((f) => f.erfasstAm.getTime() <= ende.getTime())
     .sort((a, b) => b.nummer.localeCompare(a.nummer))
@@ -148,13 +204,14 @@ export async function ladeFeststellungen(
           })),
         };
       }
-      const entschieden = p153EntschiedenAm(f, ende);
+      const p153 = p153ZumStand(f, ende, frueherJe.get(f.id));
+      const wuerdigung = wuerdigungZumStand(f, spaeter.get(f.id) ?? []);
       // Kennzahlen wie im Tax-CMS-Kontext über dieselben Maßnahmen wie die Zeilen.
       const kennzahlen = massnahmenZumStand(f.massnahmen, ende);
       // Maßnahmen einer (zum Stichtag) verworfenen Feststellung sind nicht mehr zu
       // erledigen und zählen nicht als offen.
       const verworfen = status === 'VERWORFEN';
-      personen.push(f.erfasstVon, entschieden ? f.p153EntschiedenVon : null);
+      personen.push(f.erfasstVon, p153?.von ?? null);
       for (const m of zeilen) personen.push(m.verantwortlich, m.erledigtVon);
       return {
         maskiert: false,
@@ -164,25 +221,17 @@ export async function ladeFeststellungen(
         quelle: f.quelle,
         quelleText: f.quelleText,
         klasse: f.klasse,
-        schwere: f.schwere,
-        auswirkung: f.auswirkung,
+        schwere: wuerdigung.schwere,
+        auswirkung: wuerdigung.auswirkung,
         status,
         vertraulich: f.vertraulich,
         erfasstVon: f.erfasstVon,
         erfasstAm: isoZeit(f.erfasstAm),
         durchfuehrungId: f.durchfuehrungId,
         ereignisId: f.ereignisId,
-        p153: entschieden
-          ? {
-              entscheidung: f.p153Entscheidung!,
-              begruendung: f.p153Begruendung,
-              frist: isoTagOderNull(f.p153Frist),
-              von: f.p153EntschiedenVon,
-              am: isoZeit(f.p153EntschiedenAm!),
-            }
-          : null,
+        p153,
         // „Weitere Klärung“ lässt die Würdigung offen (eine Regel, @tcms/domain).
-        p153Offen: p153Offen({ ...f, status }, ende),
+        p153Offen: p153Offen({ ...f, auswirkung: wuerdigung.auswirkung, status }, ende),
         // Nur auf offenen Feststellungen entscheidbar (Altbestand: geschlossen mit Antrag).
         verwerfenOffen:
           !!f.verwerfenBeantragtVon &&
@@ -366,6 +415,8 @@ export async function ladeFeststellung(
     .filter((a) => a.objektId === f.id && !bisStand(a))
     .map((a) => ({ aktion: a.aktion, objektId: a.objektId, detail: detail(a) }));
   const status = feststellungsStatusZumStand(f, nachStand, ende);
+  const wuerdigung = wuerdigungZumStand(f, nachStand);
+  const spaetereErklaerungen = spaeterErklaerteIds(nachStand);
 
   const nachweisJe = new Map<string, string>();
   for (const a of audits) {
@@ -381,12 +432,7 @@ export async function ladeFeststellung(
   const p153Frueher = p153Gilt
     ? undefined
     : audits.filter((a) => a.aktion === 'tcms.feststellung.p153_entschieden' && bisStand(a)).at(-1);
-  const p153FrueherDetail = p153Frueher ? detail(p153Frueher) : null;
-  const p153FrueherEntscheidung =
-    p153FrueherDetail && typeof p153FrueherDetail['entscheidung'] === 'string'
-      ? (p153FrueherDetail['entscheidung'] as Paragraph153Entscheidung)
-      : null;
-  const p153EntscheidungStand = p153Gilt ? f.p153Entscheidung : p153FrueherEntscheidung;
+  const p153 = p153ZumStand(f, ende, p153Frueher);
 
   const nk = f.nachkontrolle;
   const nkSichtbar = !!nk && !(nk.ausserplanmaessig && nk.createdAt.getTime() > ende.getTime());
@@ -423,9 +469,7 @@ export async function ladeFeststellung(
   const statusStand =
     historisch && status !== 'VERWORFEN'
       ? begrenzeStatus(status, {
-          p153Offen:
-            (f.auswirkung === 'JA' || f.auswirkung === 'UNKLAR') &&
-            !p153Abschliessend(p153EntscheidungStand),
+          p153Offen: wuerdigung.auswirkung !== 'NEIN' && !p153Abschliessend(p153?.entscheidung),
           massnahmen: massnahmen.length,
           offen: massnahmen.filter((m) => m.status === 'OFFEN').length,
           nachkontrolleOhneBefund: nkAnzeige === 'OHNE_BEFUND',
@@ -451,28 +495,6 @@ export async function ladeFeststellung(
           antragId: f.verwerfenAntragId,
         }
       : null;
-  const p153 = p153Gilt
-    ? {
-        entscheidung: f.p153Entscheidung!,
-        begruendung: f.p153Begruendung,
-        frist: isoTagOderNull(f.p153Frist),
-        von: f.p153EntschiedenVon,
-        am: isoZeit(f.p153EntschiedenAm!),
-      }
-    : p153Frueher && p153FrueherDetail && p153FrueherEntscheidung
-      ? {
-          entscheidung: p153FrueherEntscheidung,
-          // Begründung erst seit sie im Audit steht (frühere Einträge: null).
-          begruendung:
-            typeof p153FrueherDetail['begruendung'] === 'string'
-              ? p153FrueherDetail['begruendung']
-              : null,
-          frist: typeof p153FrueherDetail['frist'] === 'string' ? p153FrueherDetail['frist'] : null,
-          von: p153Frueher.actorId,
-          am: isoZeit(p153Frueher.at),
-        }
-      : null;
-
   return {
     maskiert: false,
     ...kopf,
@@ -484,9 +506,9 @@ export async function ladeFeststellung(
     quelle: f.quelle,
     quelleText: f.quelleText,
     klasse: f.klasse,
-    schwere: f.schwere,
-    auswirkung: f.auswirkung,
-    ursache: f.ursache,
+    schwere: wuerdigung.schwere,
+    auswirkung: wuerdigung.auswirkung,
+    ursache: wuerdigung.ursache,
     status: statusStand,
     vertraulich,
     vertraulichAktuell: f.vertraulich,
@@ -528,13 +550,15 @@ export async function ladeFeststellung(
     risiken: f.risiken
       .map((r) => ({ id: r.risiko.id, code: r.risiko.code }))
       .sort((a, b) => a.code.localeCompare(b.code)),
-    erklaerungen: f.erklaerungen.map((x) => ({
-      id: x.id,
-      steuerart: x.steuerart,
-      land: x.land,
-      zeitraum: x.zeitraum,
-      auswirkungEur: x.auswirkungEur == null ? null : Number(x.auswirkungEur),
-    })),
+    erklaerungen: f.erklaerungen
+      .filter((x) => !spaetereErklaerungen.has(x.id))
+      .map((x) => ({
+        id: x.id,
+        steuerart: x.steuerart,
+        land: x.land,
+        zeitraum: x.zeitraum,
+        auswirkungEur: x.auswirkungEur == null ? null : Number(x.auswirkungEur),
+      })),
     massnahmen: massnahmen.map((m) => ({
       ...m,
       nachweis: m.status === 'ERLEDIGT' ? (nachweisJe.get(m.id) ?? null) : null,

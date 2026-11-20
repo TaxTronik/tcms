@@ -11,7 +11,7 @@
 #   altes Volume `tcms-pg` (PostgreSQL 16) bleibt unberührt und wird nicht gelesen.
 services:
   postgres:
-    image: postgres:18-alpine@sha256:96d56f7f57c6aacd1fcb908bc83b345ec5f83231ee486dd66a1baadce274db88
+    image: postgres:18-alpine@sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff
     restart: unless-stopped
     environment:
       POSTGRES_USER: tcms

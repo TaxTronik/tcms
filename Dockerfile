@@ -14,14 +14,14 @@
 #            Rollendatei und Migrationen auf dem PostgreSQL-18-Image, ohne Node
 #            und ohne Prisma-CLI; UID/GID 70 (postgres).
 #
-# Basisimages per Digest gepinnt (dieselben wie in der kanzleikonsole). Ohne
+# Basisimages per Digest gepinnt. Ohne
 # `# syntax=`-Zeile: Das eingebaute Dockerfile-Frontend von BuildKit genügt;
 # `docker/dockerfile:<tag>` wäre zusätzlicher, nicht gepinnter Build-Code.
 # Regeln: scripts/pruefe-dockerfile.mjs (CI).
 # =============================================================================
 
-ARG NODE_IMAGE=node:24-alpine3.23@sha256:0468540aa58203ff9e40c2aab3907c52644ab818af6176b1c70a026137dc92a2
-ARG POSTGRES_IMAGE=postgres:18-alpine@sha256:96d56f7f57c6aacd1fcb908bc83b345ec5f83231ee486dd66a1baadce274db88
+ARG NODE_IMAGE=node:24-alpine3.23@sha256:3946fb783fdce8a2812136ea694bc95c698c4f4096f3fd18568dc27a8ac389dc
+ARG POSTGRES_IMAGE=postgres:18-alpine@sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff
 
 # ----- Build (nie ausgeliefert) ------------------------------------------------
 # Basis per Digest in der ARG oben gepinnt (hadolint erkennt das nicht).
@@ -118,10 +118,13 @@ ARG TCMS_VERSION=0.0.0-dev
 LABEL org.opencontainers.image.title="tcms-migrate" \
       org.opencontainers.image.description="Tax-CMS – Bootstrap, Migrationen, Prüfung (psql)" \
       org.opencontainers.image.version="${TCMS_VERSION}"
+# Der Migrationsläufer startet direkt als UID 70 und braucht keinen Benutzerwechsel.
+RUN rm -f /usr/local/bin/gosu
 COPY --from=migrate-dateien /opt/tcms /opt/tcms
 USER 70:70
 RUN set -eu; \
     test "$(id -u)" = "70"; \
+    test ! -e /usr/local/bin/gosu; \
     bash -n /opt/tcms/betrieb/migrate.sh; \
     cat /opt/tcms/betrieb/*.sql /opt/tcms/prisma/init/rollen.psql \
       /opt/tcms/prisma/migrations/*/migration.sql >/dev/null; \

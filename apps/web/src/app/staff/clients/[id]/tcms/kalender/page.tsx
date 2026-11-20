@@ -8,6 +8,7 @@ import {
   monatSchluessel,
   PARTEI_LABEL,
   pruflast,
+  utc,
   type AnzeigeStatus,
   type Pruflast,
 } from '@tcms/domain';
@@ -49,7 +50,7 @@ function punktStil(a: AnzeigeStatus): { className: string; style?: CSSProperties
 }
 
 function monatPlus(d: Date, n: number): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, 1));
+  return utc(d.getUTCFullYear(), d.getUTCMonth() + n + 1, 1);
 }
 
 function Punkt({ d, href }: { d: DurchfuehrungView; href: string }) {
@@ -105,14 +106,16 @@ export default async function Kalender({
   // ---- Zeitraum der Matrix: 12 Monate ab Wirksamkeitsbeginn bzw. Kalenderjahr ----
   const p = ctx.programm;
   const standMonat = monatPlus(ctx.stand, 0);
-  const abParam = eins(sp['ab']);
+  const abRoh = eins(sp['ab']);
+  const abParam = /^\d{4}-(0[1-9]|1[0-2])$/.test(abRoh) ? abRoh : '';
+  const jahresbeginn = utc(ctx.stand.getUTCFullYear(), 1, 1);
   let start: Date;
-  if (/^\d{4}-\d{2}$/.test(abParam)) {
+  if (abParam) {
     start = new Date(`${abParam}-01T00:00:00Z`);
   } else if (p.wirksamAb && monatPlus(p.wirksamAb, 12).getTime() > standMonat.getTime()) {
     start = monatPlus(p.wirksamAb, 0);
   } else {
-    start = new Date(Date.UTC(ctx.stand.getUTCFullYear(), 0, 1));
+    start = jahresbeginn;
   }
   const monate = Array.from({ length: 12 }, (_, i) => monatPlus(start, i));
   const schluessel = monate.map(monatSchluessel);
@@ -141,7 +144,7 @@ export default async function Kalender({
 
   const link = (over: { ab?: string; partei?: string; schluessel?: string }) => {
     const q = new URLSearchParams();
-    const ab = over.ab ?? (abParam || '');
+    const ab = over.ab ?? abParam;
     const pa = over.partei ?? partei;
     const sc = over.schluessel ?? (nurSchluessel ? '1' : '');
     if (ab) q.set('ab', ab);
@@ -208,10 +211,7 @@ export default async function Kalender({
                 Ab Wirksamkeitsbeginn
               </Link>
             ) : null}
-            <Link
-              href={link({ ab: `${ctx.stand.getUTCFullYear()}-01` })}
-              className="btn-secondary btn-tiny"
-            >
+            <Link href={link({ ab: ym(jahresbeginn) })} className="btn-secondary btn-tiny">
               Kalenderjahr {ctx.stand.getUTCFullYear()}
             </Link>
           </div>
@@ -280,7 +280,7 @@ export default async function Kalender({
                       >
                         {MON_KURZ[m.getUTCMonth()]}
                         <div className="text-11" style={{ fontWeight: 500, textTransform: 'none' }}>
-                          {String(m.getUTCFullYear()).slice(2)}
+                          {ym(m).slice(2, 4)}
                         </div>
                       </th>
                     );

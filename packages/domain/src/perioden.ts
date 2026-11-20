@@ -22,7 +22,9 @@ export const MONATE = [
 ];
 
 export function utc(jahr: number, monat1: number, tagNr: number): Date {
-  return new Date(Date.UTC(jahr, monat1 - 1, tagNr));
+  const d = new Date(0);
+  d.setUTCFullYear(jahr, monat1 - 1, tagNr);
+  return d;
 }
 
 export function addTage(d: Date, tage: number): Date {
@@ -36,7 +38,7 @@ export interface Periode {
 }
 
 function letzterTag(jahr: number, monat1: number): Date {
-  return new Date(Date.UTC(jahr, monat1, 0));
+  return utc(jahr, monat1 + 1, 0);
 }
 
 export function monatsPeriode(jahr: number, monat1: number): Periode {
@@ -81,7 +83,7 @@ export function perioden(turnus: Turnus, von: Date, bis: Date): Periode[] {
 /** Monat des Kalendertags (Europe/Berlin) als `YYYY-MM`. */
 export function monatSchluessel(d: Date): string {
   const t = kalendertagVon(d);
-  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}`;
+  return `${String(t.getUTCFullYear()).padStart(4, '0')}-${String(t.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
 export function monatLabel(d: Date): string {

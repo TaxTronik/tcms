@@ -35,6 +35,7 @@ set -euo pipefail
 umask 077
 WURZEL="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 ARBEIT="${1:?Aufruf: simuliere-image.sh <arbeitsverzeichnis>}"
+[[ $ARBEIT == /* ]] || ARBEIT="$(pwd -P)/$ARBEIT"
 VERSION="${TCMS_VERSION:-0.0.0-sim}"
 # Genau eine Datenbankwahl; alles geprüft, bevor etwas gebaut oder angelegt wird.
 SIM_MODUS=0

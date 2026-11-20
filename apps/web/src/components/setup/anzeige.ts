@@ -22,7 +22,7 @@ export const SCHRITTE = [
 function tag(iso: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
   const d = new Date(`${iso}T00:00:00Z`);
-  return Number.isNaN(d.getTime()) ? null : d;
+  return Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== iso ? null : d;
 }
 
 /** Dauer eines Zeitraums als Text, z. B. „6 Monate" oder „rund 5,5 Monate". */

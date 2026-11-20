@@ -8,6 +8,7 @@ import {
   kalendertag,
   kalendertagVon,
   monatSchluessel,
+  monatsPeriode,
   nachTag,
   tageZwischen,
   tagesbeginn,
@@ -63,6 +64,22 @@ describe('Kalendertag (Europe/Berlin) eines Zeitpunkts', () => {
 });
 
 describe('Tagesgrenzen (Europe/Berlin)', () => {
+  it.each(['0000', '0001', '0099', '0100'])(
+    'erhält das ISO-Jahr %s in Stichtagen und Perioden',
+    (jahr) => {
+      const tag = `${jahr}-02-01`;
+      const instant = z(`${tag}T12:00:00Z`);
+      expect(kalendertag(instant)).toBe(tag);
+      expect(monatSchluessel(instant)).toBe(`${jahr}-02`);
+      expect(monatsPeriode(Number(jahr), 2).von.toISOString().slice(0, 10)).toBe(tag);
+      expect(monatsPeriode(Number(jahr), 2).bis.toISOString().slice(0, 10)).toBe(
+        `${jahr}-02-${jahr === '0000' ? '29' : '28'}`,
+      );
+      expect(kalendertag(tagesbeginn(instant))).toBe(tag);
+      expect(kalendertag(tagesende(instant))).toBe(tag);
+    },
+  );
+
   it('Tagesbeginn und -ende im Winter (MEZ) und Sommer (MESZ)', () => {
     expect(tagesbeginn(utc(2026, 11, 17)).toISOString()).toBe('2026-11-16T23:00:00.000Z');
     expect(tagesende(utc(2026, 11, 17)).toISOString()).toBe('2026-11-17T22:59:59.999Z');

@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { SetupEntwurfSchema, TeilbereichSchrittSchema, ZieleSchrittSchema } from '@tcms/contract';
 import { leseEntwurf, mindestEnde, neuerEntwurf, pruefeSchritt1 } from './entwurf';
+import { berechnePlan } from './aufbau';
 
 const HEUTE = new Date('2026-10-19T00:00:00Z');
 
@@ -59,6 +60,7 @@ describe('mindestEnde: sechs Monate Wirksamkeit', () => {
   const iso = (d: Date) => d.toISOString().slice(0, 10);
 
   it.each([
+    ['0099-08-31', '0100-02-28'],
     ['2026-01-01', '2026-06-30'],
     ['2026-03-31', '2026-09-30'],
     ['2026-08-29', '2027-02-28'],
@@ -66,6 +68,24 @@ describe('mindestEnde: sechs Monate Wirksamkeit', () => {
     ['2026-12-31', '2027-06-30'],
   ])('%s → %s (unverändert)', (ab, ende) => {
     expect(iso(mindestEnde(t(ab)))).toBe(ende);
+  });
+
+  it('plant für einen unmöglichen Kalendertag im gespeicherten Entwurf keine Durchführungen', () => {
+    const e = neuerEntwurf(HEUTE, null);
+    e.zeitraum.wirksamAb = '2027-02-31';
+    const plan = berechnePlan(e, {
+      heute: HEUTE,
+      mandant: { id: 'm', name: 'Mandant', berufstraegerId: null, bearbeitungId: null },
+      kanzlei: [],
+      mandantPersonen: [],
+      mandantRollen: [],
+    });
+    expect(plan.zeitraum).toBeNull();
+    expect(plan.durchfuehrungen).toBe(0);
+    expect(plan.prueflast).toEqual([]);
+    expect(pruefeSchritt1(e, HEUTE)).toContain(
+      'Beginn und Ende des Wirksamkeitszeitraums angeben.',
+    );
   });
 
   it.each([

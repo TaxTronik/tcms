@@ -30,7 +30,9 @@ function fehler(meldung) {
 
 const paket = JSON.parse(readFileSync(join(API, 'package.json'), 'utf8'));
 const version = process.env.TCMS_VERSION || paket.version;
-if (!VERSION.test(version)) fehler('TCMS_VERSION ist keine Version der Form X.Y.Z[-vorab]');
+if (version.length > 100 || !VERSION.test(version)) {
+  fehler('TCMS_VERSION muss die Form X.Y.Z[-vorab] haben und darf höchstens 100 Zeichen umfassen');
+}
 
 const eingebaut = new Set([...builtinModules, ...builtinModules.map((m) => `node:${m}`)]);
 const externe = new Set();

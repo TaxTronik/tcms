@@ -76,7 +76,8 @@ describe('Sitzungs-Cookie', () => {
     expect(pruefeCookie(`${id}.${ablauf}.${fremdeSid}.${sig}`)).toBeNull();
     const anderesZeichen = sig.endsWith('A') ? 'B' : 'A';
     expect(pruefeCookie(`${id}.${ablauf}.${sid}.${sig.slice(0, -1)}${anderesZeichen}`)).toBeNull();
-    expect(pruefeCookie(gut, jetzt + DAUER_MS + 1)).toBeNull();
+    expect(pruefeCookie(gut, jetzt + DAUER_MS - 1)).toBe(PERSON);
+    expect(pruefeCookie(gut, jetzt + DAUER_MS)).toBeNull();
     expect(pruefeCookie(`${id}.${ablauf}.${sid}`)).toBeNull();
     expect(pruefeCookie(`${id}.abc.${sid}.${sig}`)).toBeNull();
     expect(pruefeCookie('x'.repeat(600))).toBeNull();

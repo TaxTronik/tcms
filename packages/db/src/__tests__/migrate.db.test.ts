@@ -575,8 +575,9 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
     const z = await neueDb();
     // Mit RLS und Policy, sonst bricht die Prüfung (Schritt 3) ab.
     const inhalt =
-      'CREATE TABLE "einmal" (x int);\nALTER TABLE "einmal" ENABLE ROW LEVEL SECURITY;\n' +
-      'ALTER TABLE "einmal" FORCE ROW LEVEL SECURITY;\nCREATE POLICY p ON "einmal" USING (true);\n';
+      'CREATE TABLE "einmal" (tenant_id uuid);\nALTER TABLE "einmal" ENABLE ROW LEVEL SECURITY;\n' +
+      'ALTER TABLE "einmal" FORCE ROW LEVEL SECURITY;\nCREATE POLICY tcms_tenant ON "einmal" ' +
+      'USING (tenant_id = tcms_aktueller_tenant()) WITH CHECK (tenant_id = tcms_aktueller_tenant());\n';
     const m = mitMigration('29990101000000_einmal', inhalt);
     const ordner = mkdtempSync(join(tmpdir(), 'tcms-psql-lesen-'));
     const echt = (await starte('sh', ['-c', 'command -v psql'], {})).stdout.trim();
@@ -691,6 +692,15 @@ describe.skipIf(!AKTIV || !SUPER)('tcms-migrate (packages/db/betrieb/migrate.sh)
     } finally {
       await abfrage(SUPER!, 'REVOKE tcms_owner FROM tcms_app').catch(() => undefined);
     }
+  });
+
+  it('Prüfung erkennt eine abweichende Lesebedingung trotz vorhandener Tenant-Policy', async () => {
+    const z = await neueDb();
+    expect((await migriere(z)).code).toBe(0);
+    await abfrage(z.superUrl, 'ALTER POLICY tcms_tenant ON "Mandant" USING (false)');
+    const p = await psqlSuper(z, ['-f', PRUEFUNG]);
+    expect(p.code).toBe(3);
+    expect(p.stderr).toContain('Tabelle "Mandant" ohne genau die erwartete Policy tcms_tenant');
   });
 
   it('Prüfung erkennt reine Spaltenrechte und CONNECT für PUBLIC (Befunde 78, 126)', async () => {

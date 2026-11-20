@@ -7,16 +7,20 @@
 // Kalendertag (`@tcms/domain`, kalender.ts).
 // =============================================================================
 
+import { StandSchema } from '@tcms/contract';
 import { tagesende } from '@tcms/domain';
 import type { Uhr } from '../kontext';
 
 export { tagesende };
 
-const TAG = /^\d{4}-\d{2}-\d{2}$/;
-
 /** Kalendertag `YYYY-MM-DD` als Date (UTC-Mitternacht). */
 export function tagAlsDatum(iso: string): Date {
   return new Date(`${iso}T00:00:00Z`);
+}
+
+/** Unvollständige Eingaben und unmögliche Tage wie 31. Februar ergeben keinen Kalendertag. */
+export function leseKalendertag(iso: string | undefined): Date | null {
+  return iso && StandSchema.safeParse(iso).success ? tagAlsDatum(iso) : null;
 }
 
 /** „Heute" der Uhr als Date (UTC-Mitternacht des Kalendertags). */
@@ -44,11 +48,7 @@ export function leseStand(
   param: string | readonly string[] | null | undefined,
   heute: Date,
 ): { stand: Date; historisch: boolean } {
-  const v = typeof param === 'string' ? param : param?.[0];
-  if (v && TAG.test(v)) {
-    const d = tagAlsDatum(v);
-    if (!Number.isNaN(d.getTime()) && d.getTime() < heute.getTime())
-      return { stand: d, historisch: true };
-  }
+  const d = leseKalendertag(typeof param === 'string' ? param : param?.[0]);
+  if (d && d.getTime() < heute.getTime()) return { stand: d, historisch: true };
   return { stand: heute, historisch: false };
 }

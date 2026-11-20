@@ -16,6 +16,7 @@ import {
   brutto as berechneBrutto,
   katalogKontrolle,
   katalogRisiko,
+  kalendertagVon,
   KATALOG_KONTROLLEN,
   leeresProfil,
   leiteFrequenzAb,
@@ -37,6 +38,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { haengeAuditAn } from '../src/audit';
 import { speichereDatei } from '../src/storage';
 import { TENANT_EINSTELLUNG } from '../src/tenant';
+import { versionAnlegen } from './beschreibung';
 import { DEMO_IDS, DEMO_MANDANTEN, DEMO_PERSONEN, DEMO_TENANT_ID, type DemoPerson } from './demo';
 
 if (process.env['NODE_ENV'] === 'production') {
@@ -46,6 +48,17 @@ if (process.env['NODE_ENV'] === 'production') {
 const OWNER_URL = process.env['DATABASE_OWNER_URL'];
 if (!OWNER_URL) throw new Error('[seed] DATABASE_OWNER_URL fehlt. Siehe .env.example.');
 
+const demoTag = process.env['TCMS_DEMO_TODAY'];
+const HEUTE = demoTag ? new Date(`${demoTag}T00:00:00Z`) : kalendertagVon(new Date());
+if (
+  demoTag &&
+  (!Number.isFinite(HEUTE.getTime()) || HEUTE.toISOString().slice(0, 10) !== demoTag)
+) {
+  throw new Error(
+    '[seed] TCMS_DEMO_TODAY muss ein gültiger Kalendertag im Format YYYY-MM-DD sein.',
+  );
+}
+
 // Jede Verbindung des Seeds startet im Demo-Tenant (RLS ist auch für den
 // Eigentümer erzwungen); die Laufzeit setzt den Tenant dagegen je Transaktion.
 const prisma = new PrismaClient({
@@ -54,12 +67,6 @@ const prisma = new PrismaClient({
     options: `-c ${TENANT_EINSTELLUNG}=${DEMO_TENANT_ID}`,
   }),
 });
-
-const HEUTE = process.env['TCMS_DEMO_TODAY']
-  ? new Date(`${process.env['TCMS_DEMO_TODAY']}T00:00:00Z`)
-  : new Date(
-      Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()),
-    );
 
 const zeit = (d: Date, stunde: number, minute = 0) =>
   new Date(d.getTime() + (stunde * 60 + minute) * 60_000);
@@ -83,55 +90,6 @@ const person = (id: string): P => {
   if (!p) throw new Error(`[seed] Demo-Person fehlt: ${id}`);
   return { id: p.id, name: p.name };
 };
-
-/**
- * CMS-Beschreibung wie im Dienst anlegen: Neue Zeilen entstehen nur als
- * Entwurf (Trigger `BeschreibungVersion_neu`, Hinweis H4 aus RT4); der
- * Zielstand entsteht über die Übergänge Kanzlei-Review → beim Mandanten
- * (eingefroren) → freigegeben → abgelöst, die auch der Dienst nimmt.
- */
-async function versionAnlegen(
-  d: Omit<Prisma.BeschreibungVersionUncheckedCreateInput, 'status'> & {
-    status: 'ENTWURF' | 'KANZLEI_REVIEW' | 'BEIM_MANDANTEN' | 'FREIGEGEBEN' | 'ABGELOEST';
-  },
-): Promise<{ id: string }> {
-  const {
-    status,
-    reviewAngefordertVon,
-    reviewAngefordertAm,
-    reviewVon,
-    reviewAm,
-    freigabeAngefordertAm,
-    snapshot,
-    snapshotSha256,
-    freigegebenVon,
-    freigegebenAm,
-    ...basis
-  } = d;
-  const v = await prisma.beschreibungVersion.create({
-    data: { ...basis, status: 'ENTWURF' },
-    select: { id: true },
-  });
-  const weiter = (data: Prisma.BeschreibungVersionUncheckedUpdateInput) =>
-    prisma.beschreibungVersion.update({ where: { id: v.id }, data });
-  if (status === 'ENTWURF') return v;
-  const review = { reviewAngefordertVon, reviewAngefordertAm, reviewVon, reviewAm };
-  if (status === 'KANZLEI_REVIEW') {
-    await weiter({ status, ...review });
-    return v;
-  }
-  await weiter({
-    status: 'BEIM_MANDANTEN',
-    ...review,
-    freigabeAngefordertAm,
-    snapshot,
-    snapshotSha256,
-  });
-  if (status === 'BEIM_MANDANTEN') return v;
-  await weiter({ status: 'FREIGEGEBEN', freigegebenVon, freigegebenAm });
-  if (status === 'ABGELOEST') await weiter({ status: 'ABGELOEST' });
-  return v;
-}
 
 async function audit(
   actor: P | null,
@@ -1360,7 +1318,7 @@ async function main() {
     };
   };
   const abs = abschnitte(talwind.name) as unknown as Prisma.InputJsonValue;
-  await versionAnlegen({
+  await versionAnlegen(prisma, {
     programmId: tw.programmId,
     nummer: '1.0',
     status: 'ABGELOEST',
@@ -1373,7 +1331,7 @@ async function main() {
     freigegebenAm: utc(2026, 3, 12),
     ...snap('1.0', abschnitte(talwind.name)),
   });
-  const v11 = await versionAnlegen({
+  const v11 = await versionAnlegen(prisma, {
     programmId: tw.programmId,
     nummer: '1.1',
     status: 'FREIGEGEBEN',
@@ -1398,7 +1356,7 @@ async function main() {
     zeit(utc(2026, 6, 30), 11, 12),
     { nummer: '1.1', bestaetigung: 'E-Mail-Code' },
   );
-  const v12 = await versionAnlegen({
+  const v12 = await versionAnlegen(prisma, {
     programmId: tw.programmId,
     nummer: '1.2',
     status: 'BEIM_MANDANTEN',
@@ -1413,7 +1371,7 @@ async function main() {
     // Beim Mandanten liegt nur eingefrorener Inhalt (Freigabe prüft den SHA-256).
     ...snap('1.2', abschnitte(talwind.name)),
   });
-  await versionAnlegen({
+  await versionAnlegen(prisma, {
     programmId: tw.programmId,
     nummer: '1.3',
     status: 'ENTWURF',
@@ -1487,7 +1445,7 @@ async function main() {
     durchfuehrungenBis: null,
   });
   // Ein Risiko mit Brutto hoch ohne zweite Kontrolle bleibt über Appetit (Design).
-  await versionAnlegen({
+  await versionAnlegen(prisma, {
     programmId: ss.programmId,
     nummer: '1.0',
     status: 'KANZLEI_REVIEW',
@@ -1634,7 +1592,7 @@ async function main() {
     wirksamBis: utc(2025, 12, 31),
     durchfuehrungenBis: utc(2026, 12, 31),
   });
-  await versionAnlegen({
+  await versionAnlegen(prisma, {
     programmId: px.programmId,
     nummer: '1.0',
     status: 'FREIGEGEBEN',

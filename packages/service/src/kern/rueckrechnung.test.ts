@@ -5,6 +5,8 @@ import {
   folgeZumStand,
   massnahmenZumStand,
   p153OffenAm,
+  p153EntscheidungZumStand,
+  wuerdigungZumStand,
   type SpaeterEintrag,
 } from './rueckrechnung';
 
@@ -18,6 +20,27 @@ const e = (aktion: string, detail: Record<string, unknown> = {}): SpaeterEintrag
 });
 
 describe('Rückrechnung zum Stichtag (rein)', () => {
+  it('nimmt die Würdigung vor der ersten späteren Änderung und erhält Folgeentscheidungen', () => {
+    const alt = { schwere: 'HOCH' as const, auswirkung: 'UNKLAR' as const, ursache: null };
+    const neu = { schwere: 'GERING' as const, auswirkung: 'NEIN' as const, ursache: 'Neue Belege' };
+    const audit = [
+      e('tcms.feststellung.wuerdigung', { vorher: alt }),
+      e('tcms.feststellung.wuerdigung', { vorher: neu }),
+    ];
+    expect(wuerdigungZumStand(neu, audit)).toEqual(alt);
+    expect(wuerdigungZumStand(neu, [])).toEqual(neu);
+    const f = { p153Entscheidung: 'KEINE_PFLICHT' as const, p153EntschiedenAm: danach };
+    expect(
+      p153EntscheidungZumStand(
+        f,
+        [e('tcms.feststellung.p153_entschieden', { vorher: 'WEITERE_KLAERUNG' })],
+        ende,
+      ),
+    ).toBe('WEITERE_KLAERUNG');
+    expect(p153EntscheidungZumStand(f, [], ende)).toBeNull();
+    expect(p153EntscheidungZumStand(f, [], danach)).toBe('KEINE_PFLICHT');
+  });
+
   it('Maßnahmen: später angelegte fehlen, später erledigte sind offen, Frist der offenen', () => {
     const m = (createdAt: Date, frist: string, erledigtAm: Date | null = null) => ({
       createdAt,

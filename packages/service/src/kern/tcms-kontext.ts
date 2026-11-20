@@ -77,7 +77,8 @@ import {
   KEINE_SPAETEREN,
   ladeSpaetereEintraege,
   massnahmenZumStand,
-  p153EntschiedenAm,
+  p153EntscheidungZumStand,
+  wuerdigungZumStand,
   type SpaetereEintraege,
 } from './rueckrechnung';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from './zeit';
@@ -1147,9 +1148,11 @@ function berechne(
     })
     .map((f) => {
       // Stand zum Stichtag (kern/rueckrechnung.ts, wie Liste und Detail der Feststellungen).
-      const p153Entschieden = p153EntschiedenAm(f, ende);
+      const spaetere = nachStand(f.id);
+      const wuerdigung = wuerdigungZumStand(f, spaetere);
+      const p153Entscheidung = p153EntscheidungZumStand(f, spaetere, ende);
       const massnahmen = massnahmenZumStand(f.massnahmen, ende);
-      const statusAmStand = feststellungsStatusZumStand(f, nachStand(f.id), ende);
+      const statusAmStand = feststellungsStatusZumStand(f, spaetere, ende);
       // Maßnahmen einer zum Stichtag verworfenen Feststellung sind nicht mehr zu erledigen.
       const verworfen = statusAmStand === 'VERWORFEN';
       return {
@@ -1161,14 +1164,17 @@ function berechne(
         quelle: f.quelle,
         quelleText: f.quelleText,
         klasse: f.klasse,
-        schwere: f.schwere,
-        auswirkung: f.auswirkung,
+        schwere: wuerdigung.schwere,
+        auswirkung: wuerdigung.auswirkung,
         status: statusAmStand,
         vertraulich: f.vertraulich,
         beteiligte: beteiligteVon(f),
-        p153Entscheidung: p153Entschieden ? f.p153Entscheidung : null,
+        p153Entscheidung,
         // „Weitere Klärung“ lässt die Würdigung offen (eine Regel, @tcms/domain).
-        p153Offen: p153Offen({ ...f, status: statusAmStand }, ende),
+        p153Offen: p153Offen(
+          { ...f, auswirkung: wuerdigung.auswirkung, status: statusAmStand },
+          ende,
+        ),
         massnahmenOffen: verworfen ? 0 : massnahmen.offen.length,
         massnahmen: massnahmen.bestand.length,
         aeltesteFrist: verworfen ? null : massnahmen.aeltesteFrist,
