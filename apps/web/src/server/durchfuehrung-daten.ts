@@ -2,7 +2,7 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { DF_MIN_BEGRUENDUNG, DienstFehler, type PersonAkteur } from '@tcms/contract';
 import { leseDatei } from '@tcms/db/demo-ablage';
-import type { AnzeigeStatus, Klasse } from '@tcms/domain';
+import type { AnzeigeStatus, Kennzahl, Klasse, Werte, WertEintrag } from '@tcms/domain';
 import {
   bestaetigeDurchfuehrung as dienstBestaetige,
   entferneNachweis as dienstEntferneNachweis,
@@ -18,12 +18,7 @@ import {
   type DienstPorts,
   type NachweisVerweis,
 } from '@tcms/service';
-import {
-  MAX_DATEI_BYTES,
-  parseDezimal,
-  type KennzahlDef,
-  type Werte,
-} from '@/components/durchfuehrung/werte';
+import { MAX_DATEI_BYTES, parseDezimal } from '@/components/durchfuehrung/werte';
 import { aktualisiereMandant } from './aktion';
 import { DEMO_PORTS, demoAblage, demoPersonen, zustaendigkeit } from './demo';
 import type { Ergebnis } from './ergebnis';
@@ -169,7 +164,7 @@ export interface DurchfuehrungDetail {
   /** Merkmal des gespeicherten Inhalts (gesehener Stand beim Speichern und Einreichen). */
   inhalt: string;
   schritte: SchrittZeile[];
-  kennzahlen: KennzahlDef[];
+  kennzahlen: Kennzahl[];
   werte: Werte;
   ergebnis: 'OHNE_BEFUND' | 'MIT_BEFUND' | null;
   ergebnisKommentar: string | null;
@@ -245,7 +240,7 @@ function alsDetail(d: DienstDetail | DienstAufgabe): DurchfuehrungDetail {
   const personen = personenVerzeichnis();
   const z = zustaendigkeit(d.mandantId);
   const kanzlei = 'verlauf' in d ? d : null;
-  const werte: Werte = {};
+  const werte: Record<string, WertEintrag> = {};
   for (const w of d.werte)
     werte[w.key] = { wert: w.wert, bemerkung: w.bemerkung, erklaert: w.erklaert };
   const kurz = (x: { id: string; periodeLabel: string; anzeige: AnzeigeStatus }) => ({ ...x });

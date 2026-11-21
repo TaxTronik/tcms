@@ -35,6 +35,7 @@ import { statusAm } from '@tcms/domain';
 import { kanonisch, sha256 } from '@tcms/domain/audit';
 import { heuteDatum } from '../../kern/zeit';
 import { zustaendigkeitAus, zustaendigkeitsStand } from '../../kern/zustaendigkeit';
+import { pruefeEingabe as pruefeVertrag, type Schema } from '../../kern/eingabe';
 import type { DienstKontext } from '../../kontext';
 import { kannLesen, type KontaktRolle, type KontrollZustaendigkeit } from '../../rechte';
 import { halteRollenFest, ladeKontaktRollen } from '../../rollen';
@@ -92,15 +93,6 @@ export interface Lage {
   rechte: HandlungsRechte;
 }
 
-interface Pruefbar<T> {
-  safeParse(v: unknown):
-    | { success: true; data: T }
-    | {
-        success: false;
-        error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] };
-      };
-}
-
 /**
  * Merkmal eines Entfallen-Antrags (SHA-256 über antragstellende Person und
  * Begründung): Die Freigabe gilt nur dem gesehenen Antrag (TS-05). Ohne
@@ -116,15 +108,9 @@ export function antragMerkmal(d: {
   );
 }
 
-/** Prüft die Eingabe mit dem Contract-Schema; Feldfehler als `UNGUELTIG`. */
-export function pruefeEingabe<T>(schema: Pruefbar<T>, eingabe: unknown): T {
-  const p = schema.safeParse(eingabe);
-  if (p.success) return p.data;
-  const felder: Record<string, string[]> = {};
-  for (const i of p.error.issues) {
-    (felder[i.path.map(String).join('.') || 'eingabe'] ??= []).push(i.message);
-  }
-  throw new DienstFehler('UNGUELTIG', 'Eingabe ungültig.', felder);
+/** Bei einer Durchführung erhält das Formular die Fehler aller Schritte und Kennzahlen. */
+export function pruefeEingabe<T>(schema: Schema<T>, eingabe: unknown): T {
+  return pruefeVertrag(schema, eingabe, Infinity);
 }
 
 /**

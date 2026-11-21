@@ -18,40 +18,13 @@ import { auswirkungBeimAnlegen, kannLesen, type Auswirkung } from '../../rechte'
 // Meldungen (für Nutzer; ohne interne Details)
 // ---------------------------------------------------------------------------
 
-export const EINGABE_UNGUELTIG = 'Eingabe ungültig.';
+export { EINGABE_UNGUELTIG, pruefeEingabe as pruefe } from '../../kern/eingabe';
 export const KEIN_RECHT = 'Dieser Schritt ist zuständigen Personen vorbehalten.';
 export const NUR_BERUFSTRAEGER = 'Dieser Schritt ist Berufsträger:innen vorbehalten.';
 export const VERTRAULICH = 'Diese Feststellung ist vertraulich und nur für Beteiligte zugänglich.';
 export const KEIN_PROGRAMM = 'Für diesen Mandanten ist noch kein Tax-CMS eingerichtet.';
 export const ZWEITE_PERSON = 'Die Bestätigung muss durch eine zweite Person erfolgen.';
 export const GEAENDERT = 'Der Stand hat sich zwischenzeitlich geändert. Bitte neu laden.';
-
-// ---------------------------------------------------------------------------
-// Eingabe
-// ---------------------------------------------------------------------------
-
-interface Pruefbar<T> {
-  safeParse(eingabe: unknown):
-    | { success: true; data: T }
-    | {
-        success: false;
-        error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] };
-      };
-}
-
-/**
- * Prüft eine Eingabe mit dem Contract-Schema (auch ohne HTTP, Demo).
- * Feldfehler als `UNGUELTIG` mit `felder`, wie der Dienst bei zod-Fehlern.
- */
-export function pruefe<T>(schema: Pruefbar<T>, eingabe: unknown): T {
-  const p = schema.safeParse(eingabe);
-  if (p.success) return p.data;
-  const felder: Record<string, string[]> = {};
-  for (const i of p.error.issues.slice(0, 50)) {
-    (felder[i.path.map(String).join('.') || 'eingabe'] ??= []).push(i.message);
-  }
-  throw new DienstFehler('UNGUELTIG', EINGABE_UNGUELTIG, felder);
-}
 
 // ---------------------------------------------------------------------------
 // Änderung mit Protokoll; Unique-Verletzung und Schreibkonflikt → KONFLIKT

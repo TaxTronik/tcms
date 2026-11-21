@@ -56,3 +56,36 @@ Der PostgreSQL-Treiber `pg` 8 meldete im Lastlauf eine Abkündigung für überla
 ## Einordnung für die Integration
 
 Die kanzleikonsole führt eigene Kopien von Vertrag und Fachbibliothek. Ihre lokalen Manifeste verweisen auf `2cafc99` und bestehen die eigene Integritätsprüfung. Für die Übernahme der strengeren Datumsschemas und der Kalenderkorrekturen müssen diese Kopien mit dem vorgesehenen Synchronisierungswerkzeug aktualisiert werden. Der Testlauf arbeitete mit Demodaten. Die rechtliche und fachliche Freigabe der Kataloginhalte liegt außerhalb der technischen Prüfung.
+
+## Nachprüfung vom 21. November 2026 zur gemeinsamen Fachlogik
+
+Ausgangsstand war `40f5b6c7`. Die Erfassung und die Einreichprüfung von
+Kontrolldurchführungen nutzen jetzt dieselbe Berechnung in `@tcms/domain`.
+Das Paket liefert auch die Texte zur Mindestfrequenz für Demo und
+Kanzleikonsole. Fünf Servicebereiche gruppieren Fehler des Vertragsschemas
+über eine gemeinsame Funktion. Für die spätere Übernahme der neuen
+Domain-Exporte in die Kanzleikonsole ist der Commit dieses Nachtrags über
+deren Synchronisierungswerkzeug einzuspielen.
+
+- [x] Für 3.000 Kombinationen aus erfassten und fehlenden Werten, Toleranzen,
+      Erläuterungskennzeichen und Texten lieferten Editor und Einreichprüfung
+      dieselben Beträge und Toleranzlagen. Die vollständigen Ergebnisse
+      einschließlich der Einreichmängel hatten vor und nach der Umstellung
+      denselben SHA-256-Wert. [Kennzahlen](../packages/domain/src/kennzahlen.ts) ·
+      [Grenzwerttests](../packages/domain/src/__tests__/kennzahlen.test.ts)
+- [x] Alle 48 Kombinationen aus Governance-Typ, Bruttoklasse und
+      Erklärungsturnus ergaben dieselben Matrix- und Mindestfrequenztexte
+      wie die Demo auf dem Ausgangsstand. [Matrixtests](../packages/domain/src/__tests__/frequenz.test.ts)
+- [x] Bei 51 Feldmeldungen lieferte die Durchführung weiter alle 51,
+      Feststellungen, Lesepfade, Programm und Risiken jeweils die ersten 50
+      in Eingabereihenfolge. [Prüfung der fünf Einstiege](../packages/service/src/__tests__/eingabe.test.ts)
+- [x] Linux-Installation mit festgeschriebener Lockdatei, Lieferkettenprüfung,
+      Formatierung, Typprüfung, Lint, Image-Guard und beide Produktionsbuilds
+      bestanden. Ohne Datenbank bestanden 1.114 Tests (973 bedingt übersprungen).
+      Mit PostgreSQL 18.7 bestanden auf derselben frisch migrierten und geseedeten
+      Datenbank zweimal je 2.062 Tests. Je 25 Fälle erfordern eigene Schalter für
+      Migration, Lastprüfung oder Simulation und blieben in diesen Läufen offen.
+      Der erste Versuch auf dem Docker-Datenträger überschritt Testzeitgrenzen.
+      `pg_stat_activity` zeigte mehr als neun Sekunden Wartezeit beim Schreiben
+      des Transaktionsprotokolls und Erweitern von Datendateien. Beide Wiederholungen
+      liefen mit zwei Vitest-Workern und Datenbankdateien auf `tmpfs`.

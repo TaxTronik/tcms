@@ -1,18 +1,11 @@
 'use client';
 
+import type { Kennzahl, Werte, WertEintrag } from '@tcms/domain';
 import { useMemo, useState, type ReactNode } from 'react';
 import { fmtEur } from '@tcms/domain';
 import { Icon } from '../icon';
 import { ToleranzSkala } from '../ui/visual';
-import {
-  alsEingabe,
-  LAGE_BADGE,
-  LAGE_TEXT,
-  parseDezimal,
-  werteZeilen,
-  type KennzahlDef,
-  type Werte,
-} from './werte';
+import { alsEingabe, LAGE_BADGE, LAGE_TEXT, parseDezimal, werteZeilen } from './werte';
 
 // =============================================================================
 // Hauptspalte einer Kontrolldurchführung: Schritte, Toleranz, Werte, Ergebnis.
@@ -51,7 +44,7 @@ export function DurchfuehrungEditor({
   bearbeitbar: boolean;
   sperrGrund?: string | null;
   schritte: EditorSchritt[];
-  kennzahlen: KennzahlDef[];
+  kennzahlen: Kennzahl[];
   werte: Werte;
   toleranzEur: number | null;
   periodeKurz: string;
@@ -79,7 +72,7 @@ export function DurchfuehrungEditor({
   const [wahl, setWahl] = useState(ergebnis);
 
   const live: Werte = useMemo(() => {
-    const out: Werte = {};
+    const out: Record<string, WertEintrag> = {};
     for (const k of kennzahlen) {
       const p = k.differenzAus ? null : parseDezimal(eingaben[k.key] ?? '');
       out[k.key] = {

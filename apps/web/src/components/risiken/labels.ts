@@ -1,16 +1,6 @@
 // Labels und reine Helfer für Risikoinventar (S4) und Risikodetail (S5).
 // Ohne I/O, damit Server- und Client-Komponenten sie gleichermaßen nutzen.
 
-import {
-  frequenzLabel,
-  KLASSE_LABEL,
-  MATRIX_ZEILEN,
-  matrixFrequenz,
-  type GovernanceTyp,
-  type Klasse,
-  type Turnus,
-} from '@tcms/domain';
-
 export type RisikoFreigabe = 'IDENTIFIZIERT' | 'BEWERTET' | 'ZUR_FREIGABE' | 'FREIGEGEBEN';
 
 export const RISIKO_FREIGABE_SCHRITTE: readonly RisikoFreigabe[] = [
@@ -85,32 +75,6 @@ export const RISIKO_AUDIT_LABEL: Record<string, string> = {
   'tcms.risiko.uebernommen': 'Risiko übernommen',
   'tcms.risiko.abgelehnt': 'Vorschlag abgelehnt',
 };
-
-/** Profilfragen (P1–P12), auf die sich die Anwendbarkeit eines Katalogrisikos stützt. */
-export function profilFragenAus(anwendbarWenn: string | undefined): string[] {
-  if (!anwendbarWenn) return [];
-  return [...new Set([...anwendbarWenn.matchAll(/P(\d{1,2})/g)].map((m) => `p${m[1]}`))];
-}
-
-/** Text der Matrixzelle GT × Bruttoklasse (Fachkonzept Abschnitt 6). */
-export function matrixZelle(gt: GovernanceTyp, brutto: Klasse): string {
-  const z = MATRIX_ZEILEN.find((m) => m.gt === gt);
-  if (!z) return '—';
-  return brutto === 'KRITISCH' || brutto === 'HOCH'
-    ? z.hoch
-    : brutto === 'MITTEL'
-      ? z.mittel
-      : z.gering;
-}
-
-/** „FF · kritisch → monatlich + jede Auslösung" – abgeleitete Mindestfrequenz eines Risikos. */
-export function mindestfrequenzText(gt: GovernanceTyp, brutto: Klasse, turnus: Turnus): string {
-  const f = matrixFrequenz(gt, brutto, turnus);
-  const zelle = matrixZelle(gt, brutto);
-  // „jede Periode" hängt vom Erklärungsturnus ab – dann den konkreten Turnus nennen.
-  const konkret = zelle.includes('Periode') ? ` (${frequenzLabel(f)})` : '';
-  return `${gt} · ${KLASSE_LABEL[brutto]} → ${zelle}${konkret}`;
-}
 
 /** „StB Dr. Anna Roth" → „Dr. Roth", „Leon Brandt" → „L. Brandt". */
 export function kurzName(name: string | null | undefined): string {

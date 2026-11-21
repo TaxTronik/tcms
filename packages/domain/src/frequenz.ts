@@ -8,7 +8,7 @@
 // und Matrix.
 // =============================================================================
 
-import type { GovernanceTyp, Klasse } from './types';
+import { KLASSE_LABEL, type GovernanceTyp, type Klasse } from './types';
 
 export type Turnus = 'KEIN' | 'JAEHRLICH' | 'QUARTALSWEISE' | 'MONATLICH';
 
@@ -112,6 +112,26 @@ export const MATRIX_ZEILEN: ReadonlyArray<{
     gering: 'bei Ereignis',
   },
 ];
+
+/** Text der Matrixzelle GT × Bruttoklasse (Fachkonzept Abschnitt 6). */
+export function matrixZelle(gt: GovernanceTyp, brutto: Klasse): string {
+  const z = MATRIX_ZEILEN.find((m) => m.gt === gt);
+  if (!z) return '—';
+  return brutto === 'KRITISCH' || brutto === 'HOCH'
+    ? z.hoch
+    : brutto === 'MITTEL'
+      ? z.mittel
+      : z.gering;
+}
+
+/** „FF · kritisch → monatlich + jede Auslösung" – abgeleitete Mindestfrequenz eines Risikos. */
+export function mindestfrequenzText(gt: GovernanceTyp, brutto: Klasse, turnus: Turnus): string {
+  const f = matrixFrequenz(gt, brutto, turnus);
+  const zelle = matrixZelle(gt, brutto);
+  // „jede Periode" hängt vom Erklärungsturnus ab – dann den konkreten Turnus nennen.
+  const konkret = zelle.includes('Periode') ? ` (${frequenzLabel(f)})` : '';
+  return `${gt} · ${KLASSE_LABEL[brutto]} → ${zelle}${konkret}`;
+}
 
 export interface RisikoFuerFrequenz {
   code: string;

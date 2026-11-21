@@ -6,29 +6,10 @@
 
 import { DienstFehler, nichtBerechtigt, type Akteur, type MandantBezug } from '@tcms/contract';
 
-/**
- * Strukturelle Sicht auf ein zod-Schema aus `@tcms/contract` (der Service
- * hängt nicht selbst von zod ab).
- */
-export interface Schema<T> {
-  safeParse(wert: unknown):
-    | { success: true; data: T }
-    | {
-        success: false;
-        error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] };
-      };
-}
+import type { Schema } from '../../kern/eingabe';
 
-/** Prüft eine Eingabe mit dem Vertragsschema; Feldfehler als `UNGUELTIG`. */
-export function pruefeEingabe<T>(schema: Schema<T>, eingabe: unknown): T {
-  const p = schema.safeParse(eingabe);
-  if (p.success) return p.data;
-  const felder: Record<string, string[]> = {};
-  for (const i of p.error.issues.slice(0, 50)) {
-    (felder[i.path.map(String).join('.') || 'eingabe'] ??= []).push(i.message);
-  }
-  throw new DienstFehler('UNGUELTIG', 'Eingabe ungültig.', felder);
-}
+export { pruefeEingabe } from '../../kern/eingabe';
+export type { Schema } from '../../kern/eingabe';
 
 /** Interner Fehler: die eigene Antwort verletzt den Vertrag (nie als 400 an den Aufrufer). */
 export class VertragsFehler extends Error {

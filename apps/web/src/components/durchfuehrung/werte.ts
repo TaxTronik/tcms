@@ -1,61 +1,4 @@
-// =============================================================================
-// Reine Helfer für Kennzahlen und Toleranzen einer Kontrolldurchführung.
-// Ohne I/O, damit Server (Prüfung beim Einreichen) und Client (Live-Anzeige
-// der Differenz) dieselbe Rechnung verwenden.
-// =============================================================================
-
-export interface KennzahlDef {
-  key: string;
-  label: string;
-  /** Sollwert in Euro (z. B. 0 für Clearingkonten); null = kein Soll. */
-  sollEur: number | null;
-  /** Differenzkennzahl aus zwei erfassten Werten (a − b). */
-  differenzAus?: [string, string];
-}
-
-export interface WertEintrag {
-  wert: number | null;
-  bemerkung: string;
-  erklaert: boolean;
-}
-
-export type Werte = Record<string, WertEintrag>;
-
-/** Lage einer Abweichung zur Toleranz der Kontrolle. */
-export type Toleranzlage = 'OK' | 'ERKLAERT' | 'AUSSERHALB';
-
-export interface WertZeile {
-  def: KennzahlDef;
-  /** Erfasster Wert bzw. berechnete Differenz. */
-  wert: number | null;
-  /** Abweichung gegen Soll bzw. Differenz; null = keine Toleranzprüfung. */
-  abweichung: number | null;
-  lage: Toleranzlage | null;
-  bemerkung: string;
-  erklaert: boolean;
-  berechnet: boolean;
-}
-
-export function leererEintrag(): WertEintrag {
-  return { wert: null, bemerkung: '', erklaert: false };
-}
-
-/** Liest die gespeicherten Werte robust (fehlende Schlüssel → leer). */
-export function normalisiereWerte(roh: unknown): Werte {
-  const out: Werte = {};
-  if (!roh || typeof roh !== 'object') return out;
-  for (const [k, v] of Object.entries(roh as Record<string, unknown>)) {
-    if (!v || typeof v !== 'object') continue;
-    const e = v as Record<string, unknown>;
-    out[k] = {
-      wert:
-        typeof e['wert'] === 'number' && Number.isFinite(e['wert']) ? (e['wert'] as number) : null,
-      bemerkung: typeof e['bemerkung'] === 'string' ? (e['bemerkung'] as string) : '',
-      erklaert: e['erklaert'] === true,
-    };
-  }
-  return out;
-}
+import { toleranzLagen, type Kennzahl, type Toleranzlage, type Werte } from '@tcms/domain';
 
 /** Mit Dezimalkomma: Ziffern bzw. Tausendergruppen mit Punkt, genau ein Komma. */
 const MIT_KOMMA = /^-?(\d{1,3}(\.\d{3})+|\d+),\d+$/;
@@ -92,58 +35,17 @@ export function alsEingabe(n: number | null | undefined): string {
   return n.toFixed(2).replace('.', ',');
 }
 
-function lage(
-  abweichung: number | null,
-  toleranz: number | null,
-  eintrag: WertEintrag,
-): Toleranzlage | null {
-  if (abweichung == null) return null;
-  const grenze = toleranz ?? 0;
-  if (Math.abs(abweichung) <= grenze + 0.004) return 'OK';
-  return eintrag.erklaert && eintrag.bemerkung.trim().length > 0 ? 'ERKLAERT' : 'AUSSERHALB';
-}
-
-/** Zeilen der Werte-Tabelle inkl. berechneter Differenzen und Toleranzlage. */
+/** Ergänzt die Anzeige um die beim Messwert erfasste Erläuterung. */
 export function werteZeilen(
-  defs: readonly KennzahlDef[],
+  kennzahlen: readonly Kennzahl[],
   werte: Werte,
   toleranzEur: number | null,
-): WertZeile[] {
-  return defs.map((def) => {
-    const e = werte[def.key] ?? leererEintrag();
-    if (def.differenzAus) {
-      const a = werte[def.differenzAus[0]]?.wert ?? null;
-      const b = werte[def.differenzAus[1]]?.wert ?? null;
-      const diff = a != null && b != null ? Math.round((a - b) * 100) / 100 : null;
-      return {
-        def,
-        wert: diff,
-        abweichung: diff,
-        lage: lage(diff, toleranzEur, e),
-        bemerkung: e.bemerkung,
-        erklaert: e.erklaert,
-        berechnet: true,
-      };
-    }
-    const abw =
-      def.sollEur != null && e.wert != null ? Math.round((e.wert - def.sollEur) * 100) / 100 : null;
-    return {
-      def,
-      wert: e.wert,
-      abweichung: abw,
-      lage: lage(abw, toleranzEur, e),
-      bemerkung: e.bemerkung,
-      erklaert: e.erklaert,
-      berechnet: false,
-    };
-  });
-}
-
-/** Bezeichnungen erfasster Kennzahlen ohne Wert. */
-export function fehlendeWerte(defs: readonly KennzahlDef[], werte: Werte): string[] {
-  return defs
-    .filter((d) => !d.differenzAus && (werte[d.key]?.wert ?? null) == null)
-    .map((d) => d.label);
+) {
+  return toleranzLagen(kennzahlen, werte, toleranzEur).map((zeile) => ({
+    ...zeile,
+    bemerkung: werte[zeile.def.key]?.bemerkung ?? '',
+    erklaert: werte[zeile.def.key]?.erklaert ?? false,
+  }));
 }
 
 export const LAGE_TEXT: Record<Toleranzlage, string> = {

@@ -66,6 +66,7 @@ import {
   type RisikoGruppe,
   type SchwellenErgebnis,
   type Turnus,
+  type Kennzahl,
 } from '@tcms/domain';
 import type { DienstKontext } from '../kontext';
 import { beteiligteVon, kannLesen, kannVertraulichLesen, type MandantRolle } from '../rechte';
@@ -81,6 +82,7 @@ import {
   wuerdigungZumStand,
   type SpaetereEintraege,
 } from './rueckrechnung';
+import { pruefeEingabe as pruefeVertrag } from './eingabe';
 import { auditGrenze, heuteDatum, leseStand, tagesende } from './zeit';
 import { gueltigerKontrollStand, zustaendigkeitsStand } from './zustaendigkeit';
 
@@ -138,12 +140,7 @@ export interface Schritt {
   hinweis: string;
 }
 
-export interface KennzahlDef {
-  key: string;
-  label: string;
-  sollEur: number | null;
-  differenzAus?: [string, string];
-}
+export type KennzahlDef = Kennzahl;
 
 export interface KontrolleView {
   id: string;
@@ -492,13 +489,8 @@ function monatePlus(d: Date, n: number): Date {
 
 /** Prüft die Eingabe; Feldfehler als `UNGUELTIG` (wie der Dienst bei zod-Fehlern). */
 function pruefeEingabe(eingabe: unknown): { mandantId: string; stand: string | undefined } {
-  const p = KontextEingabeSchema.safeParse(eingabe);
-  if (!p.success) {
-    const felder: Record<string, string[]> = {};
-    for (const i of p.error.issues) (felder[i.path.join('.') || 'eingabe'] ??= []).push(i.message);
-    throw new DienstFehler('UNGUELTIG', 'Eingabe ungültig.', felder);
-  }
-  return { mandantId: p.data.mandantId.toLowerCase(), stand: p.data.stand };
+  const { mandantId, stand } = pruefeVertrag(KontextEingabeSchema, eingabe, Infinity);
+  return { mandantId: mandantId.toLowerCase(), stand };
 }
 
 /**

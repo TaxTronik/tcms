@@ -50,26 +50,7 @@ export const KEIN_RECHT = 'Dieser Schritt ist zuständigen Personen vorbehalten.
 export const ZWEITE_PERSON =
   'Die Entscheidung trifft eine zweite Person – nicht die beantragende bzw. einreichende Person.';
 
-/** Strukturelle Sicht auf ein zod-Schema (der Dienst hängt nicht direkt von zod ab). */
-interface Schema<T> {
-  safeParse(
-    wert: unknown,
-  ):
-    | { success: true; data: T }
-    | { success: false; error: { issues: readonly { path: PropertyKey[]; message: string }[] } };
-}
-
-/** Prüft die Eingabe mit dem Contract-Schema; Feldfehler als `UNGUELTIG`. */
-export function pruefeEingabe<T>(schema: Schema<T>, eingabe: unknown): T {
-  const p = schema.safeParse(eingabe);
-  if (p.success) return p.data;
-  const felder: Record<string, string[]> = {};
-  for (const i of p.error.issues.slice(0, 50)) {
-    const pfad = i.path.map(String).join('.') || 'eingabe';
-    (felder[pfad] ??= []).push(i.message);
-  }
-  throw new DienstFehler('UNGUELTIG', 'Eingabe ungültig.', felder);
-}
+export { pruefeEingabe } from '../../kern/eingabe';
 
 /** Kanonische Personen- bzw. Mandanten-ID (UUID in Kleinbuchstaben). */
 export function kanonisch(id: string): string {

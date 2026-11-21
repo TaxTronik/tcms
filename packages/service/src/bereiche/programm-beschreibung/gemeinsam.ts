@@ -21,26 +21,7 @@ import { ladeKontaktRollen } from '../../rollen';
 
 export const KEIN_RECHT = 'Dieser Schritt ist zuständigen Personen vorbehalten.';
 
-interface SchemaFehler {
-  issues: readonly { path: readonly PropertyKey[]; message: string }[];
-}
-
-/** Strukturelle Sicht auf ein zod-Schema (der Service hängt nicht direkt von zod ab). */
-export interface Schema<T> {
-  safeParse(eingabe: unknown): { success: true; data: T } | { success: false; error: SchemaFehler };
-}
-
-/** Prüft die Eingabe mit dem Vertragsschema; Feldfehler als `UNGUELTIG` (wie der Dienst). */
-export function pruefeEingabe<T>(schema: Schema<T>, eingabe: unknown): T {
-  const p = schema.safeParse(eingabe);
-  if (p.success) return p.data;
-  const felder: Record<string, string[]> = Object.create(null);
-  for (const i of p.error.issues.slice(0, 50)) {
-    const pfad = i.path.map(String).join('.') || 'eingabe';
-    (felder[pfad] ??= []).push(i.message);
-  }
-  throw new DienstFehler('UNGUELTIG', 'Eingabe ungültig.', { ...felder });
-}
+export { pruefeEingabe, type Schema } from '../../kern/eingabe';
 
 /** Fachliche Prüffehler (z. B. unvollständiger Schritt) als `UNGUELTIG` mit Feldern. */
 export function fachlichUngueltig(meldung: string, feld: string, fehler: string[]): never {

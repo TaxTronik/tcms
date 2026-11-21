@@ -8,7 +8,8 @@ import {
   rechteFlags,
   type RechteLage,
 } from './rechte';
-import { pruefeEinreichung, leseWerte, toleranzLagen, type KennzahlDef } from './werte';
+import { toleranzLagen, type Kennzahl } from '@tcms/domain';
+import { pruefeEinreichung, leseWerte } from './werte';
 
 const T = '7a1e0000-0000-4000-8000-00000000d3e0';
 const M = 'a1000000-0000-4000-8000-000000004711';
@@ -402,7 +403,7 @@ describe('darfPortalLesen', () => {
 });
 
 describe('Einreichprüfung', () => {
-  const defs: KennzahlDef[] = [
+  const defs: Kennzahl[] = [
     { key: 'a', label: 'A', sollEur: null },
     { key: 'b', label: 'B', sollEur: null },
     { key: 'd', label: 'Differenz', sollEur: 0, differenzAus: ['a', 'b'] },

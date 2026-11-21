@@ -14,6 +14,7 @@
 //     Audit-Ereignis (`mitAudit`, Aktionsnamen wie bisher).
 // =============================================================================
 
+import type { WertEintrag } from '@tcms/domain';
 import {
   DF_MAX_NACHWEIS_VERWEISE,
   DF_MAX_NACHWEISE,
@@ -64,7 +65,6 @@ import {
   leseSchrittDefs,
   leseWerte,
   pruefeEinreichung,
-  type WertEintrag,
 } from './werte';
 
 const GEAENDERT = 'Der Status hat sich zwischenzeitlich geändert. Bitte neu laden.';

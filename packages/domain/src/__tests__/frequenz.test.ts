@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { anlassQuellen, frequenzLabel, leiteFrequenzAb, matrixFrequenz, strengere } from '../index';
+import {
+  anlassQuellen,
+  frequenzLabel,
+  leiteFrequenzAb,
+  matrixFrequenz,
+  matrixZelle,
+  mindestfrequenzText,
+  strengere,
+} from '../index';
+
+describe('Anzeige der Häufigkeitsmatrix', () => {
+  it('nennt für „jede Periode“ den Turnus des Mandanten', () => {
+    expect(matrixZelle('FP', 'HOCH')).toBe('jede Periode');
+    expect(mindestfrequenzText('FP', 'HOCH', 'QUARTALSWEISE')).toBe(
+      'FP · hoch → jede Periode (quartalsweise)',
+    );
+  });
+
+  it('zeigt anlassbezogene und jährliche Startwerte unabhängig vom Erklärungsturnus', () => {
+    expect(mindestfrequenzText('FF', 'KRITISCH', 'JAEHRLICH')).toBe(
+      'FF · kritisch → monatlich + jede Auslösung',
+    );
+    expect(matrixZelle('IN', 'GERING')).toBe('bei Ereignis');
+    expect(matrixZelle('IN', 'MITTEL')).toBe('jährliche Bestätigung + bei Ereignis');
+    expect(mindestfrequenzText('FP', 'GERING', 'MONATLICH')).toBe('FP · gering → jährlich');
+  });
+});
 
 describe('Häufigkeitsmatrix GT × Bruttoklasse', () => {
   it('FP: jede Periode / quartalsweise / jährlich', () => {
